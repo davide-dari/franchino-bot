@@ -115,22 +115,24 @@ Lo script `./start.sh`:
 
 ## 💬 Comandi Slash & Vocali Principali
 
-### Comandi Slash Chat (`/`)
+### Comandi Slash Chat (`/`) e Testuali (`!`)
+- `/partita [squadra o evento]`: Cerca partite o eventi sportivi live (Calcio, NBA, F1, MotoGP, Tennis) su MadPlay77 e restituisce il link per guardare lo streaming! (Alias: `!partita`, `/sport`, `!sport`).
+- `/outlands [argomento]`: Cerca build, dungeon, boss o meccaniche su wiki.uooutlands.com e ottieni la guida tradotta in italiano! (Alias: `!outlands`, `/wiki`, `!wiki`, `!uo`).
 - `/play [query o link]`: Riproduce un brano o playlist da YouTube/Spotify.
 - `/hub_stats`: Mostra le statistiche dell'Hub Centrale (interazioni salvate, utenti unici, intent).
 - `/hub_recent`: Mostra lo storico delle richieste vocali/testuali archiviate.
 - `/favola_live [tema]`: Chiede a Gemma 2 di improvvisare una favola notturna con voce da Vocalist.
-- `/outlands [argomento]`: Cerca ed espone una guida dettagliata di Ultima Online Outlands.
 - `/volume [1-100]`: Regola il volume di riproduzione.
 - `/skip` / `/stop` / `/pause` / `/resume` / `/queue`: Controlli player musicale.
 
 ### Comandi Vocali (Microfono Discord)
 Pronuncia il wake word **"Franchino"** seguito dal comando:
-- *"Franchino metti Gigi D'Agostino"*
+- *"Franchino cerca la partita del Milan"* (oppure *"Franchino dove fanno vedere la Formula 1?"*)
+- *"Franchino spiegami come funziona la wiki di outlands per il tamer"*
+- *"Franchino metti Gigi D'Agostino"* (oppure *"Franchino metti un pezzo afro"*)
 - *"Franchino stop"* (interrompe istantaneamente qualsiasi suono e discorso)
 - *"Franchino raccontami una favola"*
 - *"Franchino chi canta?"*
-- *"Franchino spiegami come funziona la wiki di outlands per il tamer"*
 - *"Franchino alza il volume"* / *"Franchino salta traccia"*
 
 ---

@@ -50,9 +50,10 @@ Regole di Risposta:
 1. Devi comprendere l'intenzione dell'utente.
 2. Rispondi SEMPRE in formato JSON valido con questa struttura:
 {
-  "intent": "play_music" | "wiki_guide" | "live_fable" | "song_info" | "chat",
+  "intent": "play_music" | "wiki_guide" | "sports_match" | "live_fable" | "song_info" | "chat",
   "music_query": "stringa ottimizzata per ricerca YouTube" (solo se intent è play_music, altrimenti null),
   "wiki_topic": "argomento outlands" (solo se intent è wiki_guide, altrimenti null),
+  "sport_query": "squadra o evento sportivo" (solo se intent è sports_match, altrimenti null),
   "voice_reply": "breve frase parlata da leggere col microfono (massimo 20-30 parole, calda e stile vocalist)",
   "chat_reply": "risposta testuale completa e amichevole per la chat"
 }
@@ -226,6 +227,16 @@ class FranchinoBrain:
                 "intent": "live_fable",
                 "voice_reply": "Magia... Chiudi gli occhi e vola con me nelle favole della notte...",
                 "chat_reply": "✨ *\"Magia... C'era una volta nel bosco incantato...\"*",
+            }
+
+        # Streaming Sport / Partita (MadPlay77)
+        if any(w in t_low for w in ("partita", "streaming", "formula 1", "motogp", "f1", "nba", "chi gioca", "partite live")):
+            clean_q = re.sub(r"^(?:franchino|cerca|dove\s+(?:fanno\s+vedere|posso\s+vedere)|streaming\s+di|partita\s+(?:del|della|di)?)\s*", "", t_low).strip()
+            return {
+                "intent": "sports_match",
+                "sport_query": clean_q or t_low,
+                "voice_reply": f"Magia ragazzi! Cerco subito la partita per {clean_q} su MadPlay77!",
+                "chat_reply": f"⚽ Cerco lo streaming sportivo per: **{clean_q}**...",
             }
 
         # Musica

@@ -919,6 +919,83 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
                 asyncio.create_task(self.player.speak_tts("Non c'è musica attiva al momento ragazzi!"))
             return
 
+        # 0B-sexies. Ricerca Partita / Streaming Live Sport (MadPlay77)
+        # Esempi: "Franchino cerca la partita del Milan", "Franchino dove fanno vedere la Juventus", "Franchino streaming NBA"
+        sports_match = re.search(
+            r"(?:cerca\s+(?:la\s+)?partita|dove\s+(?:fanno\s+vedere|posso\s+vedere|vedere|trasmettono)|streaming\s+(?:della\s+)?partita|trova\s+(?:la\s+)?partita|partita\s+(?:del|della|di|dei)|streaming\s+di|guarda\s+(?:la\s+)?partita)\s+(.+)",
+            cmd_lower
+        )
+        if not sports_match and any(w in cmd_lower for w in ("partita", "streaming", "formula 1", "motogp", "f1", "nba", "chi gioca", "partite live")):
+            sports_kw_match = re.search(r"(?:partita|streaming|evento|sport)\s+(?:del|della|di|per)?\s*(.+)", cmd_lower)
+            if sports_kw_match:
+                sports_match = sports_kw_match
+
+        if sports_match:
+            sport_query = sports_match.group(1).strip(" ,.!?:;-")
+            from sports_scraper import sports_scraper
+            from central_hub import hub
+            import discord
+
+            res = await sports_scraper.search_event(sport_query)
+            if res.get("found"):
+                match = res["best_match"]
+                embed = discord.Embed(
+                    title=f"🏆 {match['title']}",
+                    description="Diretta streaming live disponibile su **MadPlay77**!",
+                    color=discord.Color.green(),
+                )
+                embed.add_field(name="⚽ Disciplina", value=match['sport_name'], inline=True)
+                embed.add_field(name="⏰ Orario / Stato", value=f"`{match['time']}`", inline=True)
+                embed.add_field(name="🔗 Link Streaming", value=f"[Guarda la Partita in Diretta]({match['url']})", inline=False)
+                embed.set_footer(text="Franchino Sports • MadPlay77 Live")
+
+                view = discord.ui.View()
+                view.add_item(discord.ui.Button(label="Guarda lo Streaming", url=match['url'], style=discord.ButtonStyle.link, emoji="📺"))
+                view.add_item(discord.ui.Button(label="Tutti gli Eventi Live", url=match['portal_url'], style=discord.ButtonStyle.link, emoji="🌐"))
+
+                await self._notify_channel(
+                    message=f"🎙️⚽ **Franchino Sports ({user.display_name}):**\n> *\"Magia ragazzi! Ho trovato **{match['title']}** in programma alle **{match['time']}**! Vi ho messo il link in chat!\"*",
+                    embed=embed,
+                    view=view
+                )
+                voice_msg = f"Magia ragazzi! Ho trovato {match['title']}! Vi ho inviato il link dello streaming in chat, andate a vederla!"
+                asyncio.create_task(self.player.speak_tts(voice_msg, wait=False, interrupt_music=True))
+
+                asyncio.create_task(
+                    hub.archive_interaction(
+                        user_id=str(user.id),
+                        user_name=user.display_name,
+                        raw_query=f"voce_partita {sport_query}",
+                        intent="sports_stream",
+                        ai_response=f"Partita: {match['title']}",
+                        voice_summary=voice_msg,
+                        metadata={"url": match['url']}
+                    )
+                )
+                return
+            else:
+                embed = discord.Embed(
+                    title="⚠️ Nessuna Partita Trovata",
+                    description=res.get("message", f"Nessun evento sportivo trovato per *\"{sport_query}\"*."),
+                    color=discord.Color.orange(),
+                )
+                featured = res.get("featured", [])
+                if featured:
+                    lines = [f"• **{f['title']}** ({f['sport_name']}) - `{f['time']}` → [Streaming]({f['url']})" for f in featured]
+                    embed.add_field(name="🔥 Eventi Principali Attivi Adesso:", value="\n".join(lines), inline=False)
+
+                view = discord.ui.View()
+                view.add_item(discord.ui.Button(label="Apri Palinsesto MadPlay77", url="https://web01.madplay77.ru/it", style=discord.ButtonStyle.link, emoji="🌐"))
+
+                await self._notify_channel(
+                    message=f"🎙️ **Franchino ({user.display_name})**: Non ho trovato eventi attivi per *\"{sport_query}\"* in questo momento, ecco le partite live adesso:",
+                    embed=embed,
+                    view=view
+                )
+                voice_fail = f"Non ho trovato partite per {sport_query} al momento ragazzi, vi ho mostrato gli eventi attivi in chat!"
+                asyncio.create_task(self.player.speak_tts(voice_fail, wait=False, interrupt_music=True))
+                return
+
         # 0C. Comando MANDA MESSAGGIO PRIVATO A <PERSONA NELLA STANZA>
         # Esempio: "Franchino manda messaggio ad Ema", "Franchino scrivi a Luca", "Franchino manda un messaggio a Marco"
         dm_match = re.match(
@@ -1320,19 +1397,31 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
             await self.player.disconnect()
             return
 
-    async def _notify_channel(self, message: Optional[str] = None, embed: Optional[discord.Embed] = None):
+    async def _notify_channel(
+        self,
+        message: Optional[str] = None,
+        embed: Optional[discord.Embed] = None,
+        view: Optional[discord.ui.View] = None,
+    ):
         from player import resolve_preferred_text_channel
 
         vc = self.player.voice_client or self.player.guild.voice_client
         fallback = self.player.text_channel or (vc.channel if vc and vc.channel else None)
         target_ch = resolve_preferred_text_channel(self.player.guild, fallback)
         if target_ch:
+            kwargs = {}
+            if message:
+                kwargs["content"] = message
+            if embed:
+                kwargs["embed"] = embed
+            if view:
+                kwargs["view"] = view
             try:
-                await target_ch.send(content=message, embed=embed)
+                await target_ch.send(**kwargs)
             except Exception:
                 if fallback and fallback != target_ch:
                     try:
-                        await fallback.send(content=message, embed=embed)
+                        await fallback.send(**kwargs)
                     except Exception:
                         pass
 

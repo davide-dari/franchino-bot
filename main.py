@@ -694,14 +694,10 @@ async def help_cmd(ctx: commands.Context):
         )
 
 
-@bot.hybrid_command(
-    name="wiki",
-    aliases=["outlands", "uo"],
-    description="Cerca qualsiasi cosa su wiki.uooutlands.com, la traduce in italiano, risponde a voce e manda il link in DM!"
-)
-async def wiki_cmd(ctx: commands.Context, *, domanda: str):
+async def _handle_outlands_query(ctx: commands.Context, domanda: str):
     await ctx.defer()
     from outlands_wiki import query_outlands_wiki
+    from central_hub import hub
     res = await query_outlands_wiki(domanda)
     if not res:
         await ctx.send(f"⚠️ Non ho trovato nulla su `wiki.uooutlands.com` per: **{domanda}**")
@@ -712,6 +708,20 @@ async def wiki_cmd(ctx: commands.Context, *, domanda: str):
     sec_url = res["section_url"]
     voice_answer = res["voice_answer"]
     wiki_embed = res["embed"]
+
+    # Archiviazione nell'Hub Centrale
+    asyncio.create_task(
+        hub.archive_interaction(
+            user_id=str(ctx.author.id),
+            user_name=ctx.author.display_name,
+            raw_query=f"outlands {domanda}",
+            intent="wiki_guide",
+            ai_response=f"Sezione: {title} - {sec_title}",
+            voice_summary=voice_answer,
+            channel_name=ctx.channel.name if hasattr(ctx.channel, 'name') else None,
+            metadata={"url": sec_url}
+        )
+    )
 
     sent_dm = False
     try:
@@ -728,7 +738,7 @@ async def wiki_cmd(ctx: commands.Context, *, domanda: str):
 
     dm_note = " *(ti ho mandato il link diretto anche in messaggio privato! 📬)*" if sent_dm else ""
     await ctx.send(
-        content=f"📖 **{ctx.author.display_name}**, ecco la sezione [**{title} → {sec_title}**]({sec_url}) tradotta in italiano{dm_note}:",
+        content=f"📖 **{ctx.author.display_name}**, ecco la guida da [**wiki.uooutlands.com** ({title} → {sec_title})]({sec_url}) tradotta in italiano{dm_note}:",
         embed=wiki_embed,
     )
     player = player_manager.get_player(ctx.guild)
@@ -739,6 +749,100 @@ async def wiki_cmd(ctx: commands.Context, *, domanda: str):
             interrupt_music=True,
             keep_paused_after=False,
         )
+
+
+@bot.hybrid_command(
+    name="outlands",
+    aliases=["uo", "outland"],
+    description="Cerca build, dungeon, boss o meccaniche su wiki.uooutlands.com e ottieni la guida in italiano!"
+)
+async def outlands_cmd(ctx: commands.Context, *, domanda: str):
+    await _handle_outlands_query(ctx, domanda)
+
+
+@bot.hybrid_command(
+    name="wiki",
+    description="Alias per cercare informazioni sulla wiki di Ultima Online Outlands"
+)
+async def wiki_cmd(ctx: commands.Context, *, domanda: str):
+    await _handle_outlands_query(ctx, domanda)
+
+
+@bot.hybrid_command(
+    name="partita",
+    aliases=["sport", "streaming", "match", "partita_live"],
+    description="Cerca una partita o evento sportivo in diretta su MadPlay77 e ottieni il link streaming!"
+)
+async def partita_cmd(ctx: commands.Context, *, squadra_o_evento: str):
+    await ctx.defer()
+    from sports_scraper import sports_scraper
+    from central_hub import hub
+
+    res = await sports_scraper.search_event(squadra_o_evento)
+
+    if res.get("found"):
+        match = res["best_match"]
+        embed = discord.Embed(
+            title=f"🏆 {match['title']}",
+            description=f"Diretta streaming live disponibile su **MadPlay77**!",
+            color=discord.Color.green(),
+        )
+        embed.add_field(name="⚽ Disciplina", value=match['sport_name'], inline=True)
+        embed.add_field(name="⏰ Orario / Stato", value=f"`{match['time']}`", inline=True)
+        embed.add_field(name="🔗 Link Streaming", value=f"[Guarda la Partita in Diretta]({match['url']})", inline=False)
+        embed.set_footer(text="Franchino Sports • MadPlay77 Live")
+
+        view = discord.ui.View()
+        view.add_item(discord.ui.Button(label="Guarda lo Streaming", url=match['url'], style=discord.ButtonStyle.link, emoji="📺"))
+        view.add_item(discord.ui.Button(label="Tutti gli Eventi Live", url=match['portal_url'], style=discord.ButtonStyle.link, emoji="🌐"))
+
+        await ctx.send(
+            content=f"🎙️ **Franchino**: *\"Magia ragazzi! Ho trovato **{match['title']}** ({match['sport_name']}) in programma alle **{match['time']}**! Vi lascio il link per vederla!\"*",
+            embed=embed,
+            view=view
+        )
+
+        asyncio.create_task(
+            hub.archive_interaction(
+                user_id=str(ctx.author.id),
+                user_name=ctx.author.display_name,
+                raw_query=f"partita {squadra_o_evento}",
+                intent="sports_stream",
+                ai_response=f"Partita: {match['title']} - {match['url']}",
+                voice_summary=f"Trovata partita {match['title']}",
+                channel_name=ctx.channel.name if hasattr(ctx.channel, 'name') else None,
+                metadata={"url": match['url']}
+            )
+        )
+
+        player = player_manager.get_player(ctx.guild)
+        if player.voice_client and player.voice_client.is_connected():
+            voice_msg = f"Magia ragazzi! Ho trovato {match['title']}! Vi ho lasciato il link dello streaming in chat, andate a vederla!"
+            await player.speak_tts(voice_msg, wait=False, interrupt_music=True)
+    else:
+        embed = discord.Embed(
+            title="⚠️ Nessuna Partita Trovata",
+            description=res.get("message", "Nessun evento sportivo trovato per questa ricerca."),
+            color=discord.Color.orange(),
+        )
+        featured = res.get("featured", [])
+        if featured:
+            lines = []
+            for f in featured:
+                lines.append(f"• **{f['title']}** ({f['sport_name']}) - `{f['time']}` → [Streaming]({f['url']})")
+            embed.add_field(name="🔥 Eventi Principali Trasferiti Ora:", value="\n".join(lines), inline=False)
+
+        view = discord.ui.View()
+        view.add_item(discord.ui.Button(label="Apri Palinsesto MadPlay77", url="https://web01.madplay77.ru/it", style=discord.ButtonStyle.link, emoji="🌐"))
+        await ctx.send(embed=embed, view=view)
+
+        player = player_manager.get_player(ctx.guild)
+        if player.voice_client and player.voice_client.is_connected():
+            await player.speak_tts(
+                f"Non ho trovato partite per {squadra_o_evento} in questo momento ragazzi, vi ho mostrato gli eventi attivi in chat!",
+                wait=False,
+                interrupt_music=True
+            )
 
 
 # ==========================================
