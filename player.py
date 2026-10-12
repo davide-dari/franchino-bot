@@ -1,0 +1,1231 @@
+import asyncio
+import collections
+import json
+import logging
+import os
+import random
+import time
+from typing import Optional, List, Dict, Tuple
+import discord
+from discord.ext import commands
+
+from config import (
+    COMMAND_PREFIX,
+    DEFAULT_VOLUME,
+    INACTIVITY_TIMEOUT,
+    COLOR_FRANCHINO,
+    COLOR_INFO,
+    FRANCHINO_QUOTES
+)
+from sources import SongInfo, SourceManager, format_duration
+from views import FranchinoControlsView, QueuePaginationView
+
+logger = logging.getLogger("Franchino.Player")
+
+FFMPEG_OPTIONS = {
+    "before_options": "-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5",
+    "options": "-vn"
+}
+
+# ==============================================================================
+# 12 Effetti Audio Musicali DJ in Tempo Reale (FFmpeg Audio Filters)
+# ==============================================================================
+DJ_EFFECTS: Dict[str, Dict[str, str]] = {
+    "off": {
+        "label": "Normale (Originale)",
+        "emoji": "🎧",
+        "filter": "",
+    },
+    "bassboost": {
+        "label": "Bass Boost (Club)",
+        "emoji": "🔊",
+        "filter": "bass=g=12:f=110:w=0.6",
+    },
+    "megabass": {
+        "label": "Mega Sub-Bass (Estremo)",
+        "emoji": "💣",
+        "filter": "bass=g=18:f=95:w=0.7,dynaudnorm",
+    },
+    "nightcore": {
+        "label": "Nightcore (Dance/Rave)",
+        "emoji": "⚡",
+        "filter": "asetrate=48000*1.20,aresample=48000,bass=g=4",
+    },
+    "slowed": {
+        "label": "Slowed + Reverb",
+        "emoji": "🌙",
+        "filter": "asetrate=48000*0.86,aresample=48000,aecho=0.8:0.88:60:0.4",
+    },
+    "8d": {
+        "label": "8D Audio Surround",
+        "emoji": "🌀",
+        "filter": "apulsator=hz=0.125",
+    },
+    "reverb": {
+        "label": "Eco / Riverbero Arena",
+        "emoji": "🏛️",
+        "filter": "aecho=0.8:0.88:90|180:0.35|0.25",
+    },
+    "karaoke": {
+        "label": "Karaoke (Attenua Voce)",
+        "emoji": "🎤",
+        "filter": "stereotools=mlev=0.03",
+    },
+    "vaporwave": {
+        "label": "Vaporwave Lo-Fi",
+        "emoji": "🌴",
+        "filter": "asetrate=48000*0.80,aresample=48000,lowpass=f=3800",
+    },
+    "chipmunk": {
+        "label": "Voce Scoiattolo (Chipmunk)",
+        "emoji": "🐿️",
+        "filter": "asetrate=48000*1.38,aresample=48000,atempo=0.78",
+    },
+    "demon": {
+        "label": "Voce Profonda (Dark/Demon)",
+        "emoji": "👹",
+        "filter": "asetrate=48000*0.72,aresample=48000,atempo=1.25",
+    },
+    "vintage": {
+        "label": "Radio Vintage / Vinile",
+        "emoji": "📻",
+        "filter": "highpass=f=420,lowpass=f=3200,aecho=0.7:0.7:25:0.25",
+    },
+}
+
+FAVORITES_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "favorites.json")
+
+
+def _load_all_favorites() -> Dict[str, List[dict]]:
+    try:
+        if os.path.isfile(FAVORITES_FILE):
+            with open(FAVORITES_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+    except Exception as e:
+        logger.debug(f"Errore lettura favorites.json: {e}")
+    return {}
+
+
+def _save_all_favorites(data: Dict[str, List[dict]]) -> None:
+    try:
+        os.makedirs(os.path.dirname(FAVORITES_FILE), exist_ok=True)
+        with open(FAVORITES_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logger.warning(f"Errore salvataggio favorites.json: {e}")
+
+
+def resolve_preferred_text_channel(guild: discord.Guild, fallback_channel=None):
+    """
+    Cerca prima un canale testuale chiamato 'musica' (es. #musica, #🎵-musica) nel server Discord.
+    Se non esiste, usa la chat da cui è partito il comando o la chat del canale vocale.
+    """
+    if guild and guild.me:
+        # 1. Cerca corrispondenza esatta 'musica'
+        for ch in guild.text_channels:
+            clean_name = ch.name.lower().strip()
+            if clean_name == "musica" and ch.permissions_for(guild.me).send_messages:
+                return ch
+
+        # 2. Cerca un canale testuale che contenga la parola 'musica' (es. 🎵-musica, chat-musica)
+        for ch in guild.text_channels:
+            clean_name = ch.name.lower()
+            if "musica" in clean_name and ch.permissions_for(guild.me).send_messages:
+                return ch
+
+    # 3. Altrimenti usa il canale dove è partito (chat testuale o chat del canale vocale)
+    if fallback_channel is not None:
+        if not guild or not guild.me or fallback_channel.permissions_for(guild.me).send_messages:
+            return fallback_channel
+
+    # 4. Ultimo fallback: system_channel o primo canale testuale scrivibile
+    if guild and guild.me:
+        if guild.system_channel and guild.system_channel.permissions_for(guild.me).send_messages:
+            return guild.system_channel
+        for ch in guild.text_channels:
+            if ch.permissions_for(guild.me).send_messages:
+                return ch
+
+    return fallback_channel
+
+
+def build_commands_embed() -> discord.Embed:
+    """Costruisce l'embed completo con tutti i comandi vocali, testuali, effetti DJ, Soundboard e pulsanti di Franchino."""
+    embed = discord.Embed(
+        title="🎧 Franchino DJ — Guida a tutti i Comandi & Effetti Audio",
+        description=(
+            "Puoi controllare Franchino **con la voce** (parlando nel canale vocale), "
+            "**con i pulsanti e menu interattivi** o **scrivendo in chat**!\n"
+            "*(Tutte le notifiche vengono inviate automaticamente nel canale `#musica` se presente)*"
+        ),
+        color=COLOR_FRANCHINO
+    )
+
+    embed.add_field(
+        name="🎙️ Comandi Vocali Principali (dì nel microfono...)",
+        value=(
+            "• **\"Franchino metti `<titolo e artista>`\"** — Cerca e avvia subito la canzone\n"
+            "• **\"Franchino aggiungi `<titolo>`\"** — Aggiunge il brano in coda\n"
+            "• **\"Franchino manda messaggio a `<nome>`\"** — Ti chiede *\"Cosa scrivo nel messaggio?\"* e manda il DM all'amico nella stanza!\n"
+            "• **\"Franchino salta\"** / **\"pausa\"** / **\"riprendi\"** / **\"stop\"** — Controlla la riproduzione\n"
+            "• **\"Franchino alza\"** / **\"abbassa\"** / **\"volume a 50\"** / **\"a palla\"** — Regola il volume\n"
+            "• **\"Franchino salva\"** / **\"metti i preferiti\"** — Salva o avvia i ❤️ Preferiti del server\n"
+            "• **\"Franchino attiva radio\"** / **\"riavviati\"** / **\"comandi\"** / **\"esci\"**"
+        ),
+        inline=False
+    )
+
+    embed.add_field(
+        name="🎛️ 12 Effetti Audio DJ Live sulla Musica (Vocali, Menu o `/effetto`)",
+        value=(
+            "Dì **\"Franchino `<effetto>`\"** mentre suona una canzone per trasformarla in tempo reale:\n"
+            "🔊 `bass boost` • 💣 `mega bass` • ⚡ `nightcore` • 🌙 `slowed` • 🌀 `8d` • 🏛️ `eco` (`reverb`)\n"
+            "🎤 `karaoke` • 🌴 `vaporwave` • 🐿️ `voce scoiattolo` (`chipmunk`) • 👹 `voce profonda` (`demon`) • 📻 `radio vintage` • 🎧 `normale`"
+        ),
+        inline=False
+    )
+
+    embed.add_field(
+        name="📯 12 Effetti Sonori Soundboard Istantanei (Vocali, Menu o `/suono`)",
+        value=(
+            "Dì **\"Franchino `<suono>`\"** per sparare un effetto sonoro in stanza:\n"
+            "📯 `trombetta` (`airhorn`) • 🚨 `sirena` • 💣 `drop` • 🥁 `rullo di tamburi` (`battuta`) • 👏 `applausi` • 🎺 `fail` (`figura di merda`)\n"
+            "🏆 `vittoria` • 🔫 `laser` • 🤬 `censura` (`beep`) • ⚽ `fischio` (`arbitro`) • 😂 `risata` • 👎 `buuu` (`errore`)"
+        ),
+        inline=False
+    )
+
+    embed.add_field(
+        name="🛡️ Comandi da Admin & Moderatore Discord (Vocali & Slash)",
+        value=(
+            "• **\"Franchino sposta `<nome>` in `<stanza>`\"** (o *\"porta qui `<nome>`\"*, *\"sposta tutti in `<stanza>`\"*)\n"
+            "• **\"Franchino caccia `<nome>` dalla stanza\"** (disconnette dalla vocale)\n"
+            "• **\"Franchino muta `<nome>`\"** / **\"smuta `<nome>`\"** / **\"muta tutti\"** / **\"smuta tutti\"**\n"
+            "• **\"Franchino togli l'audio a `<nome>`\"** / **\"ridai l'audio a `<nome>`\"** (Deafen cuffie)\n"
+            "• **\"Franchino dai il ruolo `<ruolo>` a `<nome>`\"** / **\"togli il ruolo `<ruolo>` a `<nome>`\"** / **\"crea il ruolo `<nome>`\"**\n"
+            "• **\"Franchino cambia soprannome a `<nome>` in `<nuovo nome>`\"** / **\"resetta soprannome a `<nome>`\"**\n"
+            "• **\"Franchino metti in timeout `<nome>` per 5 minuti\"** / **\"libera `<nome>`\"**\n"
+            "• **\"Franchino pulisci la chat\"** (o *\"cancella 20 messaggi\"*) • **\"crea stanza vocale `<nome>`\"** • **\"chiudi/apri la stanza\"**\n"
+            "• **\"Franchino espelli `<nome>` dal server\"** / **\"banna `<nome>`\"** / **\"sbanna `<nome>`\"**"
+        ),
+        inline=False
+    )
+
+    embed.add_field(
+        name="📖 Enciclopedia Vocale UO Outlands (wiki.uooutlands.com in Italiano!)",
+        value=(
+            "Fai qualsiasi domanda a voce su **Ultima Online Outlands** e Franchino cercherà sulla Wiki ufficiale, "
+            "tradurrà tutto in italiano e **ti risponderà a voce** (+ scheda completa in chat):\n"
+            "• **\"Franchino cos'è il Mastery Chain?\"** • **\"Franchino spiegami gli Aspect\"**\n"
+            "• **\"Franchino come si allena Animal Taming?\"** • **\"Franchino dove si trova Aegis Keep?\"**\n"
+            "• **\"Franchino parlami di Necromancy\"** • Oppure usa il comando `/wiki <domanda>` (`/outlands`)"
+        ),
+        inline=False
+    )
+
+    embed.add_field(
+        name="💬 Comandi Slash & Chat",
+        value=(
+            f"`/play <brano>` • `/pause` • `/resume` • `/skip` • `/stop` • `/queue` • `/volume <1-100>`\n"
+            f"`/wiki <domanda>` (`/outlands`) • `/effetto <filtro>` • `/suono <effetto>` • `/radio` • `/salva` • `/preferiti` • `/riavvia` • `/comandi`\n"
+            f"**Admin:** `/sposta` • `/spostatutti` • `/scollega` • `/muta` • `/smuta` • `/ruolo` • `/soprannome` • `/timeout` • `/pulisci` • `/kick` • `/ban`"
+        ),
+        inline=False
+    )
+
+    embed.set_footer(
+        text="Franchino DJ, UO Outlands Wiki & Server Admin • Sempre in ascolto 24/7! ✨",
+        icon_url="https://cdn-icons-png.flaticon.com/512/3845/3845868.png"
+    )
+    return embed
+
+
+class GuildPlayer:
+    """Gestisce la riproduzione musicale, la coda, gli effetti DJ, la radio e i preferiti per un server Discord."""
+
+    def __init__(self, bot: commands.Bot, guild: discord.Guild, source_manager: SourceManager):
+        self.bot = bot
+        self.guild = guild
+        self.source_manager = source_manager
+
+        self.queue: collections.deque[SongInfo] = collections.deque()
+        self.current: Optional[SongInfo] = None
+        self.last_played_song: Optional[SongInfo] = None
+        self.history_urls: set[str] = set()
+
+        self.loop_mode: str = "off"       # "off", "song", "queue"
+        self.autoplay: bool = False       # Modalità Radio Infinita
+        self.audio_effect: str = "off"    # "off", "bassboost", "nightcore", "slowed", "8d"
+        self.vocalist_mode: bool = True   # Voce maschile profonda con eco da Console Vocalist (Franchino)
+        self.volume: float = DEFAULT_VOLUME
+
+        self.voice_client: Optional[discord.VoiceClient] = None
+        self.text_channel: Optional[discord.TextChannel] = None
+        self.now_playing_message: Optional[discord.Message] = None
+
+        self.play_lock = asyncio.Lock()
+        self._connect_lock = asyncio.Lock()
+        self.inactivity_task: Optional[asyncio.Task] = None
+        self._manual_stop = False
+        self._restarting = False
+        self._playing_tts = False
+        self._track_start_monotonic: float = 0.0
+        self._interrupted_song: Optional[SongInfo] = None
+        self._interrupted_elapsed: int = 0
+        self._tts_done_event: Optional[asyncio.Event] = None
+
+        # Stato Auto-Ducking (abbassamento automatico volume musica mentre qualcuno parla)
+        self._is_ducked: bool = False
+        self._duck_restore_task: Optional[asyncio.Task] = None
+
+    @property
+    def is_active(self) -> bool:
+        return (self.is_playing() or self.is_paused()) and not self._playing_tts
+
+    @property
+    def is_busy(self) -> bool:
+        """Indica se Franchino sta suonando, parlando in TTS, riproducendo un effetto o ha elementi in coda."""
+        return (
+            self.is_playing()
+            or self.is_paused()
+            or self._playing_tts
+            or bool(self.queue)
+            or bool(self.current)
+            or bool(self._interrupted_song)
+        )
+
+    def is_playing(self) -> bool:
+        return bool(self.voice_client and self.voice_client.is_playing())
+
+    def is_paused(self) -> bool:
+        return bool(self.voice_client and self.voice_client.is_paused())
+
+    # ==========================================================================
+    # Auto-Ducking (Abbassa il volume della musica quando qualcuno parla)
+    # ==========================================================================
+    def trigger_auto_duck(self):
+        """Abbassa temporaneamente il volume della musica quando un utente inizia a parlare nel canale."""
+        if not self.is_playing() or self._playing_tts:
+            return
+        if self.voice_client and self.voice_client.source and hasattr(self.voice_client.source, "volume"):
+            duck_vol = min(self.volume, 0.16)
+            if not self._is_ducked and self.volume > 0.20:
+                self._is_ducked = True
+                self.voice_client.source.volume = duck_vol
+            # Pianifica il ripristino automatico dopo 2.6s se non arrivano altri pacchetti voce
+            if self._duck_restore_task and not self._duck_restore_task.done():
+                self._duck_restore_task.cancel()
+            self._duck_restore_task = self.bot.loop.create_task(self._auto_restore_duck_after(2.6))
+
+    async def _auto_restore_duck_after(self, delay: float):
+        try:
+            await asyncio.sleep(delay)
+            self.restore_duck_volume()
+        except asyncio.CancelledError:
+            pass
+
+    def restore_duck_volume(self):
+        """Ripristina il volume originale della musica appena l'utente finisce di parlare."""
+        if self._duck_restore_task and not self._duck_restore_task.done():
+            self._duck_restore_task.cancel()
+        self._duck_restore_task = None
+        if self._is_ducked:
+            self._is_ducked = False
+            if self.voice_client and self.voice_client.source and hasattr(self.voice_client.source, "volume"):
+                self.voice_client.source.volume = self.volume
+
+    # ==========================================================================
+    # Voce del Vero Franchino il Vocalist (100% Gratuita: Neural Male TTS + Console Club DSP)
+    # ==========================================================================
+    async def speak_tts(
+        self,
+        text: str,
+        wait: bool = False,
+        interrupt_music: bool = False,
+        keep_paused_after: bool = False,
+        dramatic_fable: bool = False,
+    ):
+        """
+        Fa parlare Franchino nel canale vocale emulando gratuitamente la voce di Franchino il Vocalist:
+        - Usa gratuitamente la voce neurale maschile italiana profonda (`it-IT-DiegoNeural` via `edge-tts`, zero API key)
+          con pitch ribassato e cadenza ipnotica da vocalist notturno.
+        - Applica in FFmpeg la catena DSP da Console Club (calore sui medio-bassi + eco/delay da discoteca).
+        """
+        if not self.voice_client or not self.voice_client.is_connected():
+            return
+        if (self.is_playing() or self.is_paused()) and not interrupt_music and not self._playing_tts:
+            return
+
+        cache_dir = "/tmp/franchino_cache"
+        os.makedirs(cache_dir, exist_ok=True)
+        import hashlib
+        cache_hash = hashlib.md5(f"{text.strip().lower()}_{dramatic_fable}".encode("utf-8")).hexdigest()
+        tts_file = os.path.join(cache_dir, f"tts_{cache_hash}.mp3")
+        used_gtts_fallback = False
+        generated_ok = os.path.isfile(tts_file) and os.path.getsize(tts_file) > 100
+
+        # 1. Se non è già in cache, genera la voce tramite Microsoft Edge Neural TTS
+        if not generated_ok:
+            try:
+                import edge_tts
+                pitch_val = "-14Hz" if dramatic_fable else "-10Hz"
+                rate_val = "-12%" if dramatic_fable else "-5%"
+                communicate = edge_tts.Communicate(
+                    text=text,
+                    voice="it-IT-DiegoNeural",
+                    pitch=pitch_val,
+                    rate=rate_val,
+                )
+                await communicate.save(tts_file)
+                generated_ok = os.path.isfile(tts_file) and os.path.getsize(tts_file) > 100
+            except Exception as e:
+                logger.debug(f"Fallback da edge-tts a gTTS ({e})")
+
+        # 2. Fallback d'emergenza a gTTS (con pitch shift maschile in FFmpeg)
+        if not generated_ok:
+            def _generate_gtts(phrase: str) -> bool:
+                try:
+                    from gtts import gTTS
+                    tts = gTTS(text=phrase, lang="it", slow=False)
+                    tts.save(tts_file)
+                    return True
+                except Exception as e:
+                    logger.debug(f"Errore generazione gTTS: {e}")
+                    return False
+
+            generated_ok = await asyncio.to_thread(_generate_gtts, text)
+            used_gtts_fallback = True
+
+        if not generated_ok or not os.path.isfile(tts_file):
+            return
+
+        if not self.voice_client or not self.voice_client.is_connected():
+            return
+
+        # Se c'è musica in corso e vogliamo che Franchino parli chiaramente
+        if (self.is_playing() or self.is_paused()) and not self._playing_tts:
+            if not interrupt_music:
+                return
+            if self.current and self.current.stream_url and self._interrupted_song is None:
+                self._interrupted_song = self.current
+                self._interrupted_elapsed = max(0, int(time.monotonic() - self._track_start_monotonic))
+            self._playing_tts = True
+            if hasattr(self.voice_client, "stop_playing"):
+                self.voice_client.stop_playing()
+            else:
+                self.voice_client.stop()
+            await asyncio.sleep(0.08)
+
+        done_ev = asyncio.Event()
+        self._tts_done_event = done_ev
+        self._playing_tts = True
+
+        def _after_tts(err):
+            self._playing_tts = False
+            self.bot.loop.call_soon_threadsafe(done_ev.set)
+
+        try:
+            # Catena DSP "Franchino il Vocalist":
+            # - Presenza calda sui bassi (150Hz) e graffio microfonico sui medio-alti (2700Hz)
+            # - Eco/Delay da console da discoteca se self.vocalist_mode è attivo
+            filters = []
+            if used_gtts_fallback:
+                filters.append("asetrate=24000*0.78,aresample=48000,atempo=1.22")
+            filters.append("equalizer=f=150:t=q:w=1.1:g=5,equalizer=f=2700:t=q:w=1.4:g=3")
+            if getattr(self, "vocalist_mode", True):
+                if dramatic_fable:
+                    filters.append("aecho=0.8:0.88:160|320:0.32|0.18")
+                else:
+                    filters.append("aecho=0.8:0.86:135|270:0.20|0.09")
+            filters.append("volume=1.8")
+            af_chain = ",".join(filters)
+
+            source = discord.FFmpegPCMAudio(tts_file, options=f'-vn -af "{af_chain}"')
+            transformed = discord.PCMVolumeTransformer(source, volume=min(1.0, self.volume + 0.35))
+            self.voice_client.play(transformed, after=_after_tts)
+            if wait or (self._interrupted_song and not keep_paused_after):
+                await asyncio.wait_for(done_ev.wait(), timeout=55.0)
+        except asyncio.CancelledError:
+            self._playing_tts = False
+            raise
+        except Exception as e:
+            self._playing_tts = False
+            logger.debug(f"Errore riproduzione TTS: {e}")
+        finally:
+            self._playing_tts = False
+
+        if self._interrupted_song and not keep_paused_after and not self._manual_stop:
+            await self.resume_interrupted_song()
+
+    async def resume_interrupted_song(self):
+        """Riprende il brano musicale esattamente dal secondo in cui Franchino lo aveva sospeso per parlare."""
+        song = self._interrupted_song
+        elapsed = self._interrupted_elapsed
+        self._interrupted_song = None
+        self._interrupted_elapsed = 0
+
+        if not song or not song.stream_url or not self.voice_client or not self.voice_client.is_connected():
+            return
+        if self.is_playing():
+            return
+
+        try:
+            self.current = song
+            transformed_source = self._build_ffmpeg_audio_source(song.stream_url, seek_seconds=elapsed)
+
+            def after_playback(error):
+                if error:
+                    logger.error(f"Errore durante la riproduzione: {error}")
+                if self._playing_tts:
+                    return
+                coro = self.play_next()
+                fut = asyncio.run_coroutine_threadsafe(coro, self.bot.loop)
+                try:
+                    fut.result()
+                except Exception as e:
+                    logger.error(f"Errore nella callback after: {e}")
+
+            self._track_start_monotonic = time.monotonic() - elapsed
+            self.voice_client.play(transformed_source, after=after_playback)
+        except Exception as e:
+            logger.debug(f"Errore ripresa brano interrotto: {e}")
+
+    # ==========================================================================
+    # Effetti DJ in Tempo Reale (FFmpeg Filter Hot-Swap)
+    # ==========================================================================
+    def _build_ffmpeg_audio_source(self, stream_url: str, seek_seconds: int = 0) -> discord.PCMVolumeTransformer:
+        """Crea la sorgente FFmpeg applicando l'effetto DJ attivo e l'eventuale seek in secondi."""
+        effect_info = DJ_EFFECTS.get(self.audio_effect, DJ_EFFECTS["off"])
+        af_filter = effect_info["filter"]
+
+        before_parts = []
+        if stream_url.startswith("http://") or stream_url.startswith("https://"):
+            before_parts.append("-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5")
+        if seek_seconds > 0:
+            before_parts.append(f"-ss {seek_seconds}")
+
+        before_opts = " ".join(before_parts) if before_parts else None
+        opts = f'-vn -af "{af_filter}"' if af_filter else "-vn"
+
+        if before_opts:
+            audio_source = discord.FFmpegPCMAudio(stream_url, before_options=before_opts, options=opts)
+        else:
+            audio_source = discord.FFmpegPCMAudio(stream_url, options=opts)
+
+        return discord.PCMVolumeTransformer(audio_source, volume=self.volume)
+
+    async def set_effect(self, effect_key: str) -> str:
+        """Imposta un filtro audio DJ e lo applica in tempo reale al brano in corso senza interromperlo."""
+        if effect_key not in DJ_EFFECTS:
+            effect_key = "off"
+        self.audio_effect = effect_key
+        effect_meta = DJ_EFFECTS[effect_key]
+
+        # Se c'è una canzone in riproduzione, applica subito il filtro al secondo corrente!
+        if self.is_playing() and self.current and self.current.stream_url and self.voice_client:
+            try:
+                elapsed = max(0, int(time.monotonic() - self._track_start_monotonic))
+                old_source = self.voice_client.source
+                new_source = self._build_ffmpeg_audio_source(self.current.stream_url, seek_seconds=elapsed)
+                self.voice_client.source = new_source
+                self._track_start_monotonic = time.monotonic() - elapsed
+                if old_source:
+                    try:
+                        old_source.cleanup()
+                    except Exception:
+                        pass
+            except Exception as e:
+                logger.warning(f"Errore applicazione effetto DJ live: {e}")
+
+        return f"{effect_meta['emoji']} {effect_meta['label']}"
+
+    async def play_sound_effect(self, sfx_key: str) -> str:
+        """
+        Riproduce un effetto sonoro della Soundboard DJ (Trombetta, Sirena, Drop, Rullo di Tamburi, Applausi, ecc.).
+        Se una canzone sta suonando, la mette un istante in pausa al secondo esatto, spara l'effetto sonoro
+        e riprende subito la canzone da dove si era fermata!
+        """
+        from sound_effects import SOUNDBOARD_EFFECTS, ensure_sfx_file
+
+        if sfx_key not in SOUNDBOARD_EFFECTS:
+            sfx_key = "airhorn"
+        meta = SOUNDBOARD_EFFECTS[sfx_key]
+        label = f"{meta['emoji']} {meta['label']}"
+
+        if not self.voice_client or not self.voice_client.is_connected():
+            return label
+
+        try:
+            wav_path = await asyncio.to_thread(ensure_sfx_file, sfx_key)
+        except Exception as e:
+            logger.error(f"Errore generazione effetto sonoro {sfx_key}: {e}")
+            return label
+
+        # Se c'è una canzone in riproduzione, salva il punto esatto e interrompila temporaneamente
+        if self.is_playing() and not self._playing_tts:
+            if self.current and self.current.stream_url and self._interrupted_song is None:
+                self._interrupted_song = self.current
+                self._interrupted_elapsed = max(0, int(time.monotonic() - self._track_start_monotonic))
+            self._playing_tts = True
+            if hasattr(self.voice_client, "stop_playing"):
+                self.voice_client.stop_playing()
+            else:
+                self.voice_client.stop()
+            await asyncio.sleep(0.06)
+
+        done_ev = asyncio.Event()
+        self._tts_done_event = done_ev
+        self._playing_tts = True
+
+        def _after_sfx(err):
+            self._playing_tts = False
+            self.bot.loop.call_soon_threadsafe(done_ev.set)
+
+        try:
+            source = discord.FFmpegPCMAudio(wav_path, options='-vn -af "volume=1.5"')
+            transformed = discord.PCMVolumeTransformer(source, volume=min(1.0, self.volume + 0.30))
+            self.voice_client.play(transformed, after=_after_sfx)
+            await asyncio.wait_for(done_ev.wait(), timeout=5.0)
+        except asyncio.CancelledError:
+            self._playing_tts = False
+            raise
+        except Exception as e:
+            self._playing_tts = False
+            logger.debug(f"Errore riproduzione SFX {sfx_key}: {e}")
+        finally:
+            self._playing_tts = False
+
+        if self._interrupted_song and not self._manual_stop:
+            await self.resume_interrupted_song()
+
+        return label
+
+    # ==========================================================================
+    # Playlist "Preferiti del Server" (Salvataggio & Riproduzione)
+    # ==========================================================================
+    def get_favorites(self) -> List[dict]:
+        all_favs = _load_all_favorites()
+        return all_favs.get(str(self.guild.id), [])
+
+    def save_current_to_favorites(self, user=None) -> Tuple[bool, Optional[SongInfo], int]:
+        """Salva il brano attualmente in riproduzione nei Preferiti del server."""
+        song = self.current or self.last_played_song
+        if not song:
+            return False, None, len(self.get_favorites())
+
+        all_favs = _load_all_favorites()
+        guild_key = str(self.guild.id)
+        fav_list = all_favs.get(guild_key, [])
+
+        url = song.webpage_url or song.spotify_url or ""
+        for item in fav_list:
+            if (url and item.get("webpage_url") == url) or item.get("title", "").lower() == song.title.lower():
+                return False, song, len(fav_list)
+
+        fav_list.append({
+            "title": song.title,
+            "webpage_url": url,
+            "duration": song.duration,
+            "thumbnail": song.thumbnail,
+            "uploader": song.uploader,
+            "saved_by": getattr(user, "display_name", "Amico"),
+        })
+        all_favs[guild_key] = fav_list
+        _save_all_favorites(all_favs)
+        return True, song, len(fav_list)
+
+    def load_favorites_as_songs(self, requester=None) -> List[SongInfo]:
+        """Converte i Preferiti del server in oggetti SongInfo pronti da riprodurre."""
+        fav_list = self.get_favorites()
+        songs: List[SongInfo] = []
+        for item in fav_list:
+            songs.append(
+                SongInfo(
+                    title=item.get("title", "Brano Preferito"),
+                    webpage_url=item.get("webpage_url", ""),
+                    duration=int(item.get("duration") or 0),
+                    thumbnail=item.get("thumbnail"),
+                    uploader=item.get("uploader"),
+                    requester=requester,
+                    source_type="youtube",
+                )
+            )
+        return songs
+
+    # ==========================================================================
+    # Connessione Vocale & Watchdog Multi-Utente
+    # ==========================================================================
+    async def _cleanup_stale_voice_client(self):
+        """Pulisce eventuali sessioni vocali zombie rimaste registrate in discord.py."""
+        for vc in (self.voice_client, self.guild.voice_client):
+            if vc is not None:
+                try:
+                    if hasattr(vc, "stop_listening"):
+                        vc.stop_listening()
+                except Exception:
+                    pass
+                try:
+                    vc.stop()
+                except Exception:
+                    pass
+                try:
+                    await vc.disconnect(force=True)
+                except Exception:
+                    pass
+        try:
+            if hasattr(self.guild, "_state") and hasattr(self.guild._state, "_remove_voice_client"):
+                self.guild._state._remove_voice_client(self.guild.id)
+        except Exception:
+            pass
+        self.voice_client = None
+
+    async def connect(self, channel: discord.VoiceChannel, text_channel: Optional[discord.TextChannel] = None) -> discord.VoiceClient:
+        """Connette Franchino al canale vocale specificato e attiva l'ascolto dei comandi vocali."""
+        async with self._connect_lock:
+            self.text_channel = resolve_preferred_text_channel(self.guild, text_channel or self.text_channel or channel)
+
+            # Sincronizza eventuale voice_client già attivo sul server
+            if (not self.voice_client or not self.voice_client.is_connected()) and self.guild.voice_client:
+                if self.guild.voice_client.is_connected():
+                    self.voice_client = self.guild.voice_client
+                else:
+                    await self._cleanup_stale_voice_client()
+
+            if not self.voice_client or not self.voice_client.is_connected():
+                if self.guild.voice_client is not None:
+                    await self._cleanup_stale_voice_client()
+                try:
+                    import voice_commands  # noqa: F401
+                    from discord.ext import voice_recv
+                    self.voice_client = await channel.connect(
+                        cls=voice_recv.VoiceRecvClient,
+                        reconnect=True,
+                        timeout=20.0,
+                        self_deaf=False,
+                    )
+                except Exception as e:
+                    logger.warning(f"Errore primo tentativo connessione vocale ({e}), pulizia e riprova...")
+                    await self._cleanup_stale_voice_client()
+                    await asyncio.sleep(0.5)
+                    try:
+                        from discord.ext import voice_recv
+                        self.voice_client = await channel.connect(
+                            cls=voice_recv.VoiceRecvClient,
+                            reconnect=True,
+                            timeout=20.0,
+                            self_deaf=False,
+                        )
+                    except Exception as e2:
+                        logger.warning(f"Fallback a VoiceClient standard ({e2})")
+                        await self._cleanup_stale_voice_client()
+                        self.voice_client = await channel.connect(reconnect=True, timeout=20.0, self_deaf=False)
+            elif self.voice_client.channel != channel:
+                await self.voice_client.move_to(channel)
+
+            self._ensure_voice_listening()
+            self._reset_inactivity_timer()
+            return self.voice_client
+
+    def _ensure_voice_listening(self):
+        """Avvia il sink di riconoscimento vocale se non è già in ascolto e mantiene attivo il watchdog."""
+        if not self.voice_client or not self.voice_client.is_connected():
+            if self.guild.voice_client and self.guild.voice_client.is_connected():
+                self.voice_client = self.guild.voice_client
+            else:
+                return
+        try:
+            if hasattr(self.voice_client, "is_listening") and not self.voice_client.is_listening():
+                from voice_commands import FranchinoVoiceSink
+                self.voice_client.listen(FranchinoVoiceSink(self))
+                logger.info(f"🎙️ Ascolto vocale 'Franchino...' attivo nel server {self.guild.name}")
+        except Exception as e:
+            logger.warning(f"Impossibile avviare l'ascolto vocale: {e}")
+
+        if not hasattr(self, "_watchdog_task") or self._watchdog_task is None or self._watchdog_task.done():
+            self._watchdog_task = self.bot.loop.create_task(self._voice_listener_watchdog())
+
+    async def _voice_listener_watchdog(self):
+        """
+        Watchdog continuo 24/7: controlla ogni 2 secondi che Franchino sia connesso e sempre in ascolto.
+        Se Discord resetta il WebSocket vocale o il router audio si ferma, lo riattiva istantaneamente
+        senza mai andare in pausa!
+        """
+        try:
+            while True:
+                await asyncio.sleep(2.0)
+                if self._restarting:
+                    continue
+
+                if (not self.voice_client or not self.voice_client.is_connected()) and self.guild.voice_client:
+                    if self.guild.voice_client.is_connected():
+                        self.voice_client = self.guild.voice_client
+
+                # Se la connessione è caduta ma c'è qualcuno in un canale vocale, riconnettiti automaticamente!
+                if not self.voice_client or not self.voice_client.is_connected():
+                    for vc_ch in self.guild.voice_channels:
+                        human_ids = [
+                            uid for uid in vc_ch.voice_states.keys()
+                            if uid != self.bot.user.id and not (self.guild.get_member(uid) and self.guild.get_member(uid).bot)
+                        ]
+                        if not human_ids:
+                            human_ids = [m.id for m in vc_ch.members if not m.bot]
+                        if human_ids:
+                            try:
+                                logger.info(f"🔄 Riconnessione automatica 24/7 al canale '{vc_ch.name}'...")
+                                await self.connect(vc_ch, self.text_channel or vc_ch)
+                            except Exception as e:
+                                logger.debug(f"Tentativo di riconnessione fallito: {e}")
+                            break
+                    continue
+
+                conn = getattr(self.voice_client, "_connection", None)
+                if conn and getattr(conn, "_runner", None) and conn._runner.done():
+                    logger.warning("🔄 Voice WebSocket poller terminato: riavvio immediato per ascoltare tutti...")
+                    conn._runner = self.bot.loop.create_task(
+                        conn._poll_voice_ws(True), name="Voice websocket poller"
+                    )
+
+                reader = getattr(self.voice_client, "_reader", None)
+                router_dead = bool(
+                    reader
+                    and hasattr(reader, "packet_router")
+                    and not reader.packet_router.is_alive()
+                )
+                not_listening = hasattr(self.voice_client, "is_listening") and not self.voice_client.is_listening()
+                if not_listening or router_dead:
+                    logger.info("🔄 Riattivazione automatica del listener vocale di Franchino (sempre in ascolto)...")
+                    from voice_commands import FranchinoVoiceSink
+                    try:
+                        if hasattr(self.voice_client, "stop_listening"):
+                            self.voice_client.stop_listening()
+                    except Exception:
+                        pass
+                    try:
+                        self.voice_client.listen(FranchinoVoiceSink(self))
+                    except Exception as e:
+                        logger.debug(f"Errore riattivazione listener: {e}")
+        except asyncio.CancelledError:
+            pass
+
+    async def restart_console(self, target_channel: Optional[discord.VoiceChannel] = None) -> Optional[discord.VoiceClient]:
+        """Riavvia i lock, ferma l'audio bloccato e riavvia il ricevitore microfono senza uscire dalla stanza."""
+        self._restarting = True
+        try:
+            channel = target_channel
+            if not channel and self.voice_client and self.voice_client.channel:
+                channel = self.voice_client.channel
+            if not channel and self.guild.voice_client and self.guild.voice_client.channel:
+                channel = self.guild.voice_client.channel
+            if not channel:
+                for vc_ch in self.guild.voice_channels:
+                    human_ids = [uid for uid in vc_ch.voice_states.keys() if uid != self.bot.user.id]
+                    if human_ids:
+                        channel = vc_ch
+                        break
+
+            self.play_lock = asyncio.Lock()
+            self.queue.clear()
+            self.current = None
+            self.loop_mode = "off"
+            self.audio_effect = "off"
+            self._is_ducked = False
+            self._playing_tts = False
+            self._interrupted_song = None
+
+            vc = self.voice_client or self.guild.voice_client
+            if vc and vc.is_connected():
+                self.voice_client = vc
+                try:
+                    if hasattr(vc, "stop_playing"):
+                        vc.stop_playing()
+                    else:
+                        vc.stop()
+                except Exception:
+                    pass
+                try:
+                    if hasattr(vc, "stop_listening"):
+                        vc.stop_listening()
+                except Exception:
+                    pass
+                await asyncio.sleep(0.15)
+                if channel and vc.channel != channel:
+                    try:
+                        await vc.move_to(channel)
+                    except Exception:
+                        pass
+                try:
+                    from voice_commands import FranchinoVoiceSink
+                    vc.listen(FranchinoVoiceSink(self))
+                except Exception:
+                    pass
+                self._ensure_voice_listening()
+                return vc
+
+            if hasattr(self, "_watchdog_task") and self._watchdog_task:
+                self._watchdog_task.cancel()
+                self._watchdog_task = None
+
+            await self._cleanup_stale_voice_client()
+            await asyncio.sleep(0.5)
+
+            if channel:
+                return await self.connect(channel, self.text_channel or channel)
+            return None
+        finally:
+            self._restarting = False
+
+    async def disconnect(self):
+        """Disconnette Franchino dal canale vocale e pulisce lo stato."""
+        async with self._connect_lock:
+            self._cancel_inactivity_timer()
+            if hasattr(self, "_watchdog_task") and self._watchdog_task:
+                self._watchdog_task.cancel()
+                self._watchdog_task = None
+            self.queue.clear()
+            self.current = None
+
+            if self.now_playing_message:
+                try:
+                    await self.now_playing_message.edit(view=None)
+                except Exception:
+                    pass
+                self.now_playing_message = None
+
+            await self._cleanup_stale_voice_client()
+
+    def pause(self):
+        if self.is_playing():
+            self.voice_client.pause()
+
+    def resume(self):
+        if self.is_paused():
+            self.voice_client.resume()
+
+    def skip(self):
+        """Salta il brano corrente forzando l'interruzione senza fermare il microfono."""
+        if self.voice_client and (self.voice_client.is_playing() or self.voice_client.is_paused()):
+            if self.loop_mode == "song":
+                self.loop_mode = "off"
+            if hasattr(self.voice_client, "stop_playing"):
+                self.voice_client.stop_playing()
+            else:
+                self.voice_client.stop()
+
+    def stop(self):
+        """
+        Ferma IMMEDIATAMENTE qualsiasi attività audio di Franchino:
+        - Interrompe la musica o brani in corso (e svuota la coda)
+        - Interrompe all'istante la voce di Franchino se sta parlando (TTS, favole, spiegazioni wiki, annunci)
+        - Interrompe gli effetti sonori della soundboard (trombetta, sirene, ecc.)
+        - Azzera qualsiasi brano sospeso che avrebbe dovuto riprendere dopo il parlato
+        - Spegne autoplay e radio
+        - Mantiene il microfono aperto e pronto in ascolto per i prossimi comandi vocali.
+        """
+        self._manual_stop = True
+        self.queue.clear()
+        self.current = None
+        self.autoplay = False
+        self.loop_mode = "off"
+        self._interrupted_song = None
+        self._interrupted_elapsed = 0
+        self._playing_tts = False
+
+        # Risveglia ed esce istantaneamente da qualsiasi await su speak_tts o play_sound_effect
+        if getattr(self, "_tts_done_event", None) is not None:
+            self._tts_done_event.set()
+
+        # Ferma l'output audio reale su Discord (musica, voce o effetti)
+        if self.voice_client and (self.voice_client.is_playing() or self.voice_client.is_paused()):
+            try:
+                if hasattr(self.voice_client, "stop_playing"):
+                    self.voice_client.stop_playing()
+                else:
+                    self.voice_client.stop()
+            except Exception as e:
+                logger.debug(f"Errore stop voice_client: {e}")
+
+        self.restore_duck_volume()
+        self._ensure_voice_listening()
+        self._reset_inactivity_timer()
+
+    def shuffle(self):
+        """Mescola casualmente i brani presenti in coda."""
+        temp = list(self.queue)
+        random.shuffle(temp)
+        self.queue = collections.deque(temp)
+
+    def set_volume(self, volume: float):
+        """Imposta il volume (0.01 - 1.0)."""
+        self.volume = max(0.01, min(1.0, volume))
+        self._is_ducked = False
+        if self.voice_client and self.voice_client.source:
+            if hasattr(self.voice_client.source, "volume"):
+                self.voice_client.source.volume = self.volume
+
+    def remove(self, index: int) -> Optional[SongInfo]:
+        """Rimuove un brano dalla coda per indice (1-based)."""
+        if 1 <= index <= len(self.queue):
+            temp = list(self.queue)
+            removed = temp.pop(index - 1)
+            self.queue = collections.deque(temp)
+            return removed
+        return None
+
+    def clear_queue(self) -> int:
+        """Svuota i brani in attesa mantenendo la riproduzione del brano corrente."""
+        count = len(self.queue)
+        self.queue.clear()
+        return count
+
+    async def add_songs(self, songs: List[SongInfo], text_channel: Optional[discord.TextChannel] = None):
+        """Aggiunge una o più tracce alla coda e avvia la riproduzione se non già attiva."""
+        self._manual_stop = False
+        self.text_channel = resolve_preferred_text_channel(self.guild, text_channel or self.text_channel)
+
+        self._cancel_inactivity_timer()
+
+        for song in songs:
+            self.queue.append(song)
+
+        if not self.is_active:
+            await self.play_next()
+        else:
+            asyncio.create_task(self._prefetch_next_song())
+
+    async def play_now(
+        self,
+        songs: List[SongInfo],
+        text_channel: Optional[discord.TextChannel] = None,
+        voice_announce: Optional[str] = None,
+    ):
+        """Avvia immediatamente il brano richiesto (usato dai comandi vocali 'Franchino metti...')."""
+        self._manual_stop = False
+        self.text_channel = resolve_preferred_text_channel(self.guild, text_channel or self.text_channel)
+
+        self._cancel_inactivity_timer()
+
+        for song in reversed(songs):
+            self.queue.appendleft(song)
+
+        if self.is_active:
+            self.skip()
+        else:
+            await self.play_next()
+
+        if voice_announce and songs:
+            asyncio.create_task(self.speak_tts(voice_announce, wait=False))
+
+    async def _prefetch_next_song(self):
+        """Pre-scarica in background il prossimo brano in coda per evitare attese al cambio traccia."""
+        if not self.queue:
+            return
+        next_in_queue = self.queue[0]
+        if next_in_queue.stream_url:
+            return
+        try:
+            await self.source_manager.ensure_stream_url(next_in_queue)
+            logger.info(f"Pre-caricato in cache il prossimo brano: {next_in_queue.title}")
+        except Exception as e:
+            logger.debug(f"Pre-caricamento non riuscito per {next_in_queue.title}: {e}")
+
+    async def play_next(self):
+        """Prepara e riproduce la traccia successiva nella coda (o un brano correlato se AutoPlay Radio è attivo)."""
+        async with self.play_lock:
+            if (not self.voice_client or not self.voice_client.is_connected()) and self.guild.voice_client:
+                self.voice_client = self.guild.voice_client
+
+            if not self.voice_client or not self.voice_client.is_connected():
+                logger.warning("Voice client non connesso in play_next.")
+                self._reset_inactivity_timer()
+                return
+
+            self._ensure_voice_listening()
+
+            next_song: Optional[SongInfo] = None
+
+            if self.loop_mode == "song" and self.current:
+                next_song = self.current
+            elif self.loop_mode == "queue" and self.current:
+                self.queue.append(self.current)
+                if self.queue:
+                    next_song = self.queue.popleft()
+            elif self.queue:
+                next_song = self.queue.popleft()
+
+            # Modalità AutoPlay / Radio Infinita quando la coda termina
+            if not next_song and self.autoplay and self.last_played_song:
+                related = await self.source_manager.resolve_related_song(self.last_played_song, self.history_urls)
+                if related:
+                    next_song = related
+                    if self.text_channel:
+                        try:
+                            await self.text_channel.send(
+                                f"📻 **AutoPlay Radio di Franchino**: proseguo la serata con **{related.title}**! ✨"
+                            )
+                        except Exception:
+                            pass
+
+            if not next_song:
+                self.current = None
+                self._reset_inactivity_timer()
+                if self.now_playing_message:
+                    try:
+                        await self.now_playing_message.edit(view=None)
+                    except Exception:
+                        pass
+                return
+
+            self.current = next_song
+            self.last_played_song = next_song
+            if next_song.webpage_url:
+                self.history_urls.add(next_song.webpage_url)
+                if len(self.history_urls) > 50:
+                    self.history_urls.clear()
+
+            self._cancel_inactivity_timer()
+
+            try:
+                stream_url = await self.source_manager.ensure_stream_url(next_song)
+                transformed_source = self._build_ffmpeg_audio_source(stream_url, seek_seconds=0)
+
+                def after_playback(error):
+                    if error:
+                        logger.error(f"Errore durante la riproduzione: {error}")
+                    if self._manual_stop or self._playing_tts:
+                        return
+                    coro = self.play_next()
+                    fut = asyncio.run_coroutine_threadsafe(coro, self.bot.loop)
+                    try:
+                        fut.result()
+                    except Exception as e:
+                        logger.error(f"Errore nella callback after: {e}")
+
+                self._track_start_monotonic = time.monotonic()
+                self.voice_client.play(transformed_source, after=after_playback)
+
+                await self._send_now_playing_message(next_song)
+
+                if self.queue:
+                    asyncio.create_task(self._prefetch_next_song())
+
+            except Exception as e:
+                logger.error(f"Errore riproduzione brano '{next_song.title}': {e}", exc_info=True)
+                if self.text_channel:
+                    try:
+                        await self.text_channel.send(
+                            f"⚠️ Franchino non è riuscito a riprodurre **{next_song.title}**: `{e}`. Salto al prossimo brano!"
+                        )
+                    except Exception:
+                        pass
+                asyncio.create_task(self.play_next())
+
+    async def _send_now_playing_message(self, song: SongInfo):
+        """Invia un messaggio ricco con i controlli chat interattivi nel canale #musica (o nella chat di avvio)."""
+        self.text_channel = resolve_preferred_text_channel(
+            self.guild,
+            self.text_channel or (self.voice_client.channel if self.voice_client else None)
+        )
+        if not self.text_channel:
+            return
+
+        if self.now_playing_message:
+            try:
+                await self.now_playing_message.edit(view=None)
+            except Exception:
+                pass
+
+        quote = random.choice(FRANCHINO_QUOTES)
+        embed = song.create_embed(title_prefix=f"🎧 Franchino in console: {quote}")
+
+        queue_info = f"{len(self.queue)} brani in attesa" if self.queue else ("AutoPlay Radio 📻" if self.autoplay else "Nessun altro brano")
+        loop_status = "Traccia 🔂" if self.loop_mode == "song" else ("Coda 🔁" if self.loop_mode == "queue" else "Disattivo ➡️")
+        effect_meta = DJ_EFFECTS.get(self.audio_effect, DJ_EFFECTS["off"])
+
+        embed.add_field(name="📜 Coda", value=f"`{queue_info}`", inline=True)
+        embed.add_field(name="🔁 Loop", value=f"`{loop_status}`", inline=True)
+        embed.add_field(name="🔊 Volume", value=f"`{int(self.volume * 100)}%`", inline=True)
+        embed.add_field(name="🎛️ Effetto DJ", value=f"`{effect_meta['emoji']} {effect_meta['label']}`", inline=True)
+        embed.add_field(name="📻 Radio AutoPlay", value=f"`{'Attiva ✅' if self.autoplay else 'Spenta ❌'}`", inline=True)
+        embed.add_field(name="❤️ Preferiti Server", value=f"`{len(self.get_favorites())} salvati`", inline=True)
+
+        view = FranchinoControlsView(self)
+        try:
+            self.now_playing_message = await self.text_channel.send(embed=embed, view=view)
+        except Exception as e:
+            logger.warning(f"Impossibile inviare messaggio Now Playing: {e}")
+
+    def _reset_inactivity_timer(self):
+        """Disabilitato: Franchino non va MAI in pausa per inattività e resta sempre in ascolto nel canale!"""
+        self._cancel_inactivity_timer()
+        self._ensure_voice_listening()
+
+    def _cancel_inactivity_timer(self):
+        """Cancella eventuali timer."""
+        if self.inactivity_task and not self.inactivity_task.done():
+            self.inactivity_task.cancel()
+        self.inactivity_task = None
+
+    async def _inactivity_countdown(self):
+        """Franchino rimane sempre connesso e in ascolto 24/7."""
+        return
+
+    def create_queue_embed(self, page: int = 1) -> discord.Embed:
+        """Genera un embed formattato con l'elenco dei brani in coda e paginazione."""
+        items_per_page = 10
+        total_items = len(self.queue)
+        total_pages = max(1, (total_items + items_per_page - 1) // items_per_page)
+        page = max(1, min(page, total_pages))
+
+        embed = discord.Embed(
+            title="📜 Coda musicale di Franchino",
+            color=COLOR_INFO
+        )
+
+        if self.current:
+            embed.add_field(
+                name="▶️ Attualmente in riproduzione",
+                value=f"**[{self.current.title}]({self.current.webpage_url or self.current.spotify_url})**\n⏱️ `{self.current.duration_str}` | Richiesto da: {self.current.requester_mention}",
+                inline=False
+            )
+
+        if not self.queue:
+            embed.description = "La coda è attualmente vuota! Usa `/play` o dì *\"Franchino metti...\"* per aggiungere nuova musica."
+        else:
+            start_idx = (page - 1) * items_per_page
+            end_idx = min(start_idx + items_per_page, total_items)
+            queue_list = list(self.queue)
+
+            lines = []
+            for i in range(start_idx, end_idx):
+                song = queue_list[i]
+                lines.append(f"`{i + 1}.` **[{song.title}]({song.webpage_url or song.spotify_url})** (`{song.duration_str}`) - {song.requester_mention}")
+
+            embed.description = "\n".join(lines)
+
+            total_seconds = sum(s.duration for s in self.queue)
+            embed.set_footer(
+                text=f"Pagina {page}/{total_pages} • {total_items} brani in attesa • Durata totale: {format_duration(total_seconds)}"
+            )
+
+        return embed
+
+
+class PlayerManager:
+    """Mantiene e gestisce i player musicali attivi per ciascun server (Guild)."""
+
+    def __init__(self, bot: commands.Bot, source_manager: SourceManager):
+        self.bot = bot
+        self.source_manager = source_manager
+        self.players: Dict[int, GuildPlayer] = {}
+
+    def get_player(self, guild: discord.Guild) -> GuildPlayer:
+        """Ottiene o crea il player dedicato per un server."""
+        if guild.id not in self.players:
+            self.players[guild.id] = GuildPlayer(self.bot, guild, self.source_manager)
+        return self.players[guild.id]
+
+    async def remove_player(self, guild_id: int):
+        """Rimuove e disconnette il player di un server."""
+        if guild_id in self.players:
+            await self.players[guild_id].disconnect()
+            del self.players[guild_id]

@@ -1,0 +1,97 @@
+services:
+  # ========================================================
+  # 1. Central Knowledge Hub DB (PostgreSQL 16)
+  # Hub centrale condiviso tra Franchino e tutti i progetti futuri
+  # ========================================================
+  central-hub-db:
+    image: postgres:16-alpine
+    container_name: central-hub-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: franchino_admin
+      POSTGRES_PASSWORD: franchino_secure_pass
+      POSTGRES_DB: franchino_hub
+    ports:
+      # Espone la porta solo su localhost dell'host: nessun rischio sicurezza esterno,
+      # ma qualsiasi altro container o script sul server può connettersi a localhost:5432!
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U franchino_admin -d franchino_hub"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256M
+        reservations:
+          cpus: "0.1"
+          memory: 64M
+
+  # ========================================================
+  # 2. Local AI Brain: Ollama con Google Gemma 2 2B Instruct
+  # 100% Free, Zero API esterne, inferenza locale ultra-veloce ARM64
+  # ========================================================
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:11434:11434"
+    volumes:
+      - ./data/ollama:/root/.ollama
+    environment:
+      - OLLAMA_KEEP_ALIVE=24h
+      - OLLAMA_NUM_PARALLEL=1
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 3072M
+        reservations:
+          cpus: "0.5"
+          memory: 1024M
+
+  # ========================================================
+  # 3. Franchino Bot (Discord Voice & Music Player & AI Vocalist)
+  # ========================================================
+  franchino-bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: franchino-bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - DB_HOST=central-hub-db
+      - DB_PORT=5432
+      - DB_USER=franchino_admin
+      - DB_PASS=franchino_secure_pass
+      - DB_NAME=franchino_hub
+      - OLLAMA_HOST=http://ollama:11434
+      - OLLAMA_MODEL=gemma2:2b
+    depends_on:
+      central-hub-db:
+        condition: service_healthy
+      ollama:
+        condition: service_started
+    volumes:
+      - ./data:/app/data
+      - ./cookies.txt:/app/cookies.txt:ro
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          cpus: "1.5"
+          memory: 1536M
+        reservations:
+          cpus: "0.2"
+          memory: 256M
