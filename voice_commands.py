@@ -3,6 +3,7 @@ import audioop
 import collections
 import difflib
 import logging
+import random
 import re
 import time
 from typing import Dict, Optional, TYPE_CHECKING
@@ -758,14 +759,31 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
                 command_part = f"{pending_prefix} {text}".strip() if pending_prefix else text.strip()
                 logger.info(f"🔗 Continuazione comando vocale per {user.display_name}: '{command_part}'")
 
+        # Se non è stata detta la wake word esplicita, controlla se è una domanda diretta di presenza/ascolto nel canale vocale:
+        if command_part is None:
+            liveness_direct = (
+                "ci senti", "ci sentite", "mi senti", "mi sentite",
+                "ci sei", "ci siete", "sei vivo", "sei sveglio",
+                "batti un colpo", "mi ascolti", "ci ascolti", "rispondi"
+            )
+            clean_l = re.sub(r"[^\w\s]", " ", lower_text).strip()
+            if any(k in clean_l for k in liveness_direct):
+                command_part = clean_l
+
         if command_part is None:
             return
 
         cmd_lower = command_part.lower().strip()
 
-        # Se l'utente ha detto solo "Franchino" o "Franchino metti" (e sta per dire il titolo dopo una pausa):
+        # Se l'utente ha detto solo "Franchino" (per testare la presenza o prima del comando):
         if not cmd_lower:
             self._pending_wake[uid] = (now, "")
+            await self._notify_channel(
+                f"🎙️✨ **{user.display_name}** ha chiamato Franchino in console! *(Microfono aperto, chiedimi un brano o una domanda!)*"
+            )
+            asyncio.create_task(
+                self.player.speak_tts("Magia! Dimmi tutto, sono qui in console!", wait=False, interrupt_music=False)
+            )
             return
         if cmd_lower in ("metti", "mette", "mettimi", "riproduci", "suona", "suonami", "play", "fammi sentire", "fammi ascoltare", "avvia", "cerca", "cercami", "fai partire"):
             self._pending_wake[uid] = (now, "metti")
@@ -791,6 +809,59 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
 
         requester_arg = user if isinstance(user, (discord.Member, discord.User)) else None
         logger.info(f"✨ Comando vocale rilevato da {user.display_name}: '{command_part}'")
+
+        # 0. Comando LIVENESS / PRESENZA VOCALE ("ci senti?", "ci sei?", "sei vivo?", "mi senti?", "rispondi", "batti un colpo")
+        liveness_triggers = (
+            "ci senti", "ci sentite", "mi senti", "mi sentite", "puoi sentirmi", "puoi sentirci",
+            "ci sei", "ci siete", "ci sei o ci fai", "ci sei ancora", "sei li", "sei lì", "sei qui",
+            "sei vivo", "sei ancora vivo", "sei sveglio", "ti sei svegliato", "stai dormendo",
+            "rispondi", "rispondimi", "batti un colpo", "fatti sentire", "di qualcosa", "dì qualcosa",
+            "mi ascolti", "ci ascolti", "tutto bene franchino", "tutto bene", "come va",
+            "test voce", "test microfono", "prova microfono", "prova voce", "prova audio", "funzioni"
+        )
+        is_music_prefix = cmd_lower.startswith((
+            "metti ", "riproduci ", "suona ", "play ", "cerca ",
+            "fammi sentire ", "fai partire ", "aggiungi ", "accoda "
+        ))
+        is_liveness_cmd = not is_music_prefix and (
+            any(w in cmd_lower for w in liveness_triggers)
+            or bool(re.search(r"\b(?:ci\s+senti|mi\s+senti|ci\s+sei|ci\s+siete|sei\s+vivo|sei\s+sveglio|batti\s+un\s+colpo|rispondi|fatti\s+sentire|mi\s+ascolti|ci\s+ascolti)\b", cmd_lower))
+        )
+        if is_liveness_cmd:
+            from config import FRANCHINO_LIVENESS_QUOTES
+            chosen_phrase = random.choice(FRANCHINO_LIVENESS_QUOTES)
+            ping_ms = round(self.player.bot.latency * 1000)
+            embed = discord.Embed(
+                title="🎙️✨ Franchino è Online e vi sente!",
+                description=(
+                    f"> *\"{chosen_phrase}\"*\n\n"
+                    f"🎧 **Console Vocale:** Sempre in Ascolto 24/7 ✅\n"
+                    f"📶 **Latenza:** `{ping_ms}ms`\n"
+                    f"🔊 **Volume Console:** `{int(self.player.volume * 100)}%`"
+                ),
+                color=0xFF6F00,
+            )
+            embed.set_footer(text="Franchino Vocalist • Microfono Sempre Aperto ✨")
+            await self._notify_channel(
+                message=f"🎙️ **{user.display_name}** ha detto: *\"Franchino {command_part}\"*",
+                embed=embed,
+            )
+            asyncio.create_task(
+                self.player.speak_tts(chosen_phrase, wait=False, interrupt_music=True, dramatic_fable=True)
+            )
+            from central_hub import hub
+            asyncio.create_task(
+                hub.archive_interaction(
+                    user_id=str(getattr(user, "id", 0)),
+                    user_name=user.display_name,
+                    raw_query=f"voce_liveness {command_part}",
+                    intent="liveness_check",
+                    ai_response=chosen_phrase,
+                    voice_summary=chosen_phrase,
+                    channel_name=self.player.text_channel.name if self.player.text_channel else None,
+                )
+            )
+            return
 
         # 0A. Comando RIAVVIATI / SBLOCCATI / RESET (solo comando diretto, non "come si sblocca un aspect"!)
         if cmd_lower in (

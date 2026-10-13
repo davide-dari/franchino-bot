@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import random
 import sys
 from typing import Optional, Literal
 import discord
@@ -12,7 +13,8 @@ from config import (
     COLOR_SUCCESS,
     COLOR_ERROR,
     COLOR_INFO,
-    DEFAULT_VOLUME
+    DEFAULT_VOLUME,
+    FRANCHINO_LIVENESS_QUOTES
 )
 from sources import SourceManager
 from player import PlayerManager, resolve_preferred_text_channel, build_commands_embed
@@ -264,6 +266,25 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
             await player.disconnect()
 
 
+@bot.event
+async def on_message(message: discord.Message):
+    """Intercetta messaggi diretti a Franchino in chat e gestisce comandi con prefisso."""
+    if message.author.bot:
+        return
+
+    content_lower = message.content.lower().strip()
+    # Se l'utente scrive in chat una domanda di presenza diretta a Franchino:
+    # es: "franchino ci sei?", "franchino ci senti?", "franchino sei vivo?", "ci sei franchino?"
+    if any(w in content_lower for w in ("franchino", "frankino")) and any(
+        q in content_lower for q in ("ci sei", "ci senti", "sei vivo", "mi senti", "ci siete", "rispondi", "batti un colpo", "sei sveglio")
+    ):
+        ctx = await bot.get_context(message)
+        await cisei_cmd(ctx)
+        return
+
+    await bot.process_commands(message)
+
+
 # ==========================================
 # FUNZIONI HELPER
 # ==========================================
@@ -298,6 +319,70 @@ async def ensure_voice_connection(ctx: commands.Context) -> Optional[discord.Voi
 # ==========================================
 # COMANDI HYBRID (SLASH + PREFISSATI)
 # ==========================================
+
+@bot.hybrid_command(
+    name="cisei",
+    aliases=["cisenti", "ping", "testvoce", "test_voce", "seivivo", "sei_vivo", "franchinocisei"],
+    description="Verifica se Franchino è online, in ascolto e se il microfono e l'audio funzionano"
+)
+async def cisei_cmd(ctx: commands.Context):
+    """
+    Verifica se Franchino risponde, mostra la latenza ping e riproduce un test vocale immediato in console.
+    """
+    await ctx.defer()
+    player = player_manager.get_player(ctx.guild)
+    bot_vc = ctx.guild.voice_client or player.voice_client
+
+    # Se l'utente è in un canale vocale e Franchino non è ancora connesso, collegalo subito!
+    if (not bot_vc or not bot_vc.is_connected()) and ctx.author.voice and ctx.author.voice.channel:
+        try:
+            bot_vc = await player.connect(ctx.author.voice.channel, ctx.channel)
+        except Exception as e:
+            logger.debug(f"Auto-connect su /cisei fallito: {e}")
+
+    ping_ms = round(bot.latency * 1000)
+    chosen_quote = random.choice(FRANCHINO_LIVENESS_QUOTES)
+
+    embed = discord.Embed(
+        title="🎙️✨ Franchino è in Console e vi sente!",
+        description=f"> *\"{chosen_quote}\"*",
+        color=COLOR_FRANCHINO
+    )
+    embed.add_field(name="📶 Latenza Ping", value=f"`{ping_ms} ms`", inline=True)
+    embed.add_field(name="🔊 Volume Console", value=f"`{int(player.volume * 100)}%`", inline=True)
+
+    if bot_vc and bot_vc.is_connected() and bot_vc.channel:
+        voice_status = f"✅ Connesso a **#{bot_vc.channel.name}**\n🎧 Ascolto comandi vocali: **Attivo 24/7**"
+        embed.add_field(name="🎙️ Canale Vocale", value=voice_status, inline=False)
+        
+        # Riproduce subito la voce parlata di Franchino nel canale vocale per testare l'audio!
+        asyncio.create_task(
+            player.speak_tts(chosen_quote, wait=False, interrupt_music=True, dramatic_fable=True)
+        )
+        embed.add_field(name="🗣️ Test Audio Vocale", value="🔊 Franchino sta rispondendo a voce adesso nel tuo canale!", inline=False)
+    else:
+        embed.add_field(
+            name="🎙️ Canale Vocale",
+            value="⚠️ Non sono connesso a una stanza vocale.\nEntra in un canale vocale e scrivi `/cisei` o `/play` per farmi entrare!",
+            inline=False
+        )
+
+    embed.set_footer(text="Franchino Vocalist • Sempre in ascolto 24/7! ✨")
+    await ctx.send(embed=embed)
+
+    from central_hub import hub
+    asyncio.create_task(
+        hub.archive_interaction(
+            user_id=str(ctx.author.id),
+            user_name=ctx.author.display_name,
+            raw_query="cisei",
+            intent="liveness_check",
+            ai_response=chosen_quote,
+            voice_summary=chosen_quote,
+            channel_name=ctx.channel.name if hasattr(ctx.channel, "name") else None,
+        )
+    )
+
 
 @bot.hybrid_command(
     name="play",

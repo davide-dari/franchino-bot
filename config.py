@@ -47,3 +47,12 @@ FRANCHINO_QUOTES = [
     "Magia pura in console! ✨",
     "Alza il volume e lasciati trasportare! 🔊",
 ]
+
+FRANCHINO_LIVENESS_QUOTES = [
+    "Magia pura! Sono qui in console con voi ragazzi! Il microfono della notte è sempre acceso... Chiudi gli occhi e vola!",
+    "Sempre vivo e sempre presente in console! Siamo tutti figli della musica! Magia!",
+    "Vi sento forte e chiaro ragazzi! Il volume è alto, la cassa batte e siamo pronti a decollare!",
+    "Vedo la luce all'orizzonte! Ci sono, ci sono! In diretta dalla console per farvi viaggiare nel tempo e nello spazio! Magia!",
+    "Eccomi qua ragazzi! Franchino è sempre sveglio, sempre sul pezzo! Chiedetemi una traccia e vi porto sulle nuvole!",
+    "Ci sono ragazzi! Questo è il popolo della notte, alzate le mani al cielo e lasciatevi trasportare! Magia!",
+]

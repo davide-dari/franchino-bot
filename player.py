@@ -164,6 +164,7 @@ def build_commands_embed() -> discord.Embed:
     embed.add_field(
         name="🎙️ Comandi Vocali Principali (dì nel microfono...)",
         value=(
+            "• **\"Franchino ci senti?\"** / **\"ci sei?\"** / **\"sei vivo?\"** — Verifica l'ascolto e la presenza in console!\n"
             "• **\"Franchino metti `<titolo e artista>`\"** — Cerca e avvia subito la canzone\n"
             "• **\"Franchino aggiungi `<titolo>`\"** — Aggiunge il brano in coda\n"
             "• **\"Franchino manda messaggio a `<nome>`\"** — Ti chiede *\"Cosa scrivo nel messaggio?\"* e manda il DM all'amico nella stanza!\n"
@@ -226,8 +227,8 @@ def build_commands_embed() -> discord.Embed:
     embed.add_field(
         name="💬 Comandi Slash & Chat",
         value=(
-            f"`/play <brano>` • `/pause` • `/resume` • `/skip` • `/stop` • `/queue` • `/volume <1-100>`\n"
-            f"`/wiki <domanda>` (`/outlands`) • `/effetto <filtro>` • `/suono <effetto>` • `/radio` • `/salva` • `/preferiti` • `/riavvia` • `/comandi`\n"
+            f"`/cisei` (`/ping`, `/cisenti`, `/seivivo`) • `/play <brano>` • `/pause` • `/resume` • `/skip` • `/stop` • `/queue` • `/volume <1-100>`\n"
+            f"`/partita <squadra>` • `/wiki <domanda>` (`/outlands`) • `/effetto <filtro>` • `/suono <effetto>` • `/radio` • `/salva` • `/preferiti` • `/riavvia` • `/comandi`\n"
             f"**Admin:** `/sposta` • `/spostatutti` • `/scollega` • `/muta` • `/smuta` • `/ruolo` • `/soprannome` • `/timeout` • `/pulisci` • `/kick` • `/ban`"
         ),
         inline=False
