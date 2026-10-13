@@ -79,7 +79,14 @@ DOMAIN_CORPUS: Dict[str, List[str]] = {
         "drago", "stat", "stats", "dexxer", "codex", "slayer", "pvm", "pvp", "parry",
         "aegis", "ossuary", "nusero", "sanctuary", "mausoleum", "pulma", "corpserun",
         "prevalia", "andaria", "cambria", "terramir", "shelter", "newb", "spiegami", "funziona",
-        "mastery", "chain", "link", "taming", "dexxer", "bard", "tamer"
+        "mastery", "chain", "link", "taming", "dexxer", "bard", "tamer",
+        "cavernam", "darkmire", "petram", "undermountain", "kraul", "souls", "tidal", "tomb", "inferno",
+        "bloodwolf", "balron", "lich", "wyrm", "daemon", "hellhound", "corpse", "worm",
+        "gazer", "harpy", "mongbat", "elemental", "skeleton", "zombie", "orc", "troll", "ogre",
+        "hydra", "chimera", "kraken", "serpent", "spider", "ettin", "gargoyle", "golem",
+        "wraith", "mummy", "wisp", "steed", "yeti", "zorn", "guar", "kith", "garou", "dryad",
+        "magery", "fishing", "pesca", "mining", "lockpicking", "scassinare", "tamare", "curare",
+        "meditare", "swords", "archery", "chivalry", "necromancy", "spiritspeak"
     ],
     "sports_match": [
         "partita", "partite", "match", "incontri", "gare", "sfide", "stasera", "oggi",
@@ -87,7 +94,7 @@ DOMAIN_CORPUS: Dict[str, List[str]] = {
         "serie a", "serie b", "champions", "champions league", "premier", "premier league",
         "la liga", "bundesliga", "nba", "eurolega", "euroleague", "tennis", "formula 1",
         "f1", "motogp", "gp", "gran premio", "ferrari", "leclerc", "milan", "inter", "juve",
-        "juventus", "roma", "napoli", "lazio", "prossima gara", "motori"
+        "juventus", "roma", "napoli", "lazio", "prossima gara", "motori", "corre", "corrono", "corsa", "circuito", "formula1"
     ],
     "dj_control": [
         "stop", "stoppa", "ferma", "fermati", "pausa", "riprendi", "salta", "skip",
@@ -111,13 +118,16 @@ DOMAIN_CORPUS: Dict[str, List[str]] = {
     ],
     "liveness_check": [
         "ci senti", "mi senti", "ci sei", "ci siete", "sei vivo", "sei sveglio",
-        "batti un colpo", "rispondi", "fatti sentire", "test microfono", "prova audio", "funzioni",
+        "batti un colpo", "rispondi", "fatti sentire", "test microfono", "prova audio", "funzioni", "funziona",
         "senti", "sentite", "ascolti", "colpo", "vivo", "sveglio"
     ],
     "play_music": [
         "metti", "suona", "play", "riproduci", "fammi sentire", "canzone", "canzoni",
         "brano", "musica", "traccia", "cantante", "artista", "album", "disco",
-        "remix", "playlist", "ascolta", "fai partire", "youtube", "spotify"
+        "remix", "playlist", "ascolta", "fai partire", "youtube", "spotify",
+        "queen", "vasco", "eminem", "albachiara", "rock", "pop", "rap", "jazz",
+        "techno", "dance", "house", "trap", "blues", "metal", "reggaeton", "classica",
+        "chitarra", "pianoforte", "basso", "batteria", "audio", "volume", "sound", "beat"
     ],
     "chat": [
         "ciao", "buongiorno", "buonasera", "buonanotte", "come stai", "tutto bene",
@@ -125,6 +135,8 @@ DOMAIN_CORPUS: Dict[str, List[str]] = {
         "giornata pesante", "triste", "parlami", "racconta", "fratello", "amico"
     ],
 }
+
+DOMAIN_CORPUS_SETS: Dict[str, set] = {it: set(words) for it, words in DOMAIN_CORPUS.items()}
 
 # Imperative / action verbs syntactical regexes
 ACTION_SYNTAX_PATTERNS = {
@@ -152,15 +164,20 @@ ACTION_SYNTAX_PATTERNS = {
         re.IGNORECASE,
     ),
     "wiki_guide": re.compile(
-        r"^(?:cos[\x27\’]?\s*[eè]|cosa\s+[eè]|wiki|guida|spiegami|come\s+funziona|dove\s+si\s+trova|cosa\s+serve|a\s+cosa\s+serve|come\s+si\s+fa|stats\s+di|info\s+su)\b",
+        r"^(?:cos[\x27\’]?\s*[eè]|cosa\s+[eè]|cosa\s+fa|cosa\s+fanno|wiki|guida|spiegami|come\s+funziona|dove\s+si\s+trova|dove\s+trovo|dov[\x27\’]?\s*[eè]|cosa\s+serve|a\s+cosa\s+serve|a\s+che\s+serve|come\s+si\s+fa|stats\s+di|info\s+su|parlami\s+di|dimmi\s+di|scheda\s+di|cerco\s+(?:un\s+|il\s+)?|ho\s+trovato\s+(?:un\s+|il\s+)?|spawn\s+di|loot\s+di)\b",
         re.IGNORECASE,
     ),
     "sports_match": re.compile(
-        r"^(?:chi\s+gioca|quando\s+gioca|dove\s+vedere|orari\s+del|prossima\s+gara|palinsesto|partite|match|streaming\s+di|cerca\s+la\s+partita)\b",
+        r"^(?:chi\s+gioca|quando\s+gioca|quando\s+corre|a\s+che\s+ora\s+corre|a\s+che\s+ora\s+gioca|orari\s+(?:della|del)|orari|dove\s+vedere|prossima\s+gara|palinsesto|partite|match|streaming\s+di|cerca\s+la\s+partita)\b",
         re.IGNORECASE,
     ),
     "dj_control": re.compile(
-        r"^(?:stop(?!\s+(?:timer|sveglia|il\s+timer|la\s+sveglia))|stoppa|ferma(?!\s+(?:il\s+timer|la\s+sveglia|timer|sveglia))|pausa|riprendi|salta|skip|volume|alza|abbassa|riavvia|riavviati|reset|bassi|boost|/boost|togli\s+il\s+boost|attiva\s+il\s+boost)\b",
+        r"^(?:stop(?!\s+(?:timer|sveglia|il\s+timer|la\s+sveglia))|stoppa|ferma(?!\s+(?:il\s+timer|la\s+sveglia|timer|sveglia))|pausa|riprendi|salta|skip|volume|alza|abbassa|riavvia|riavviati|reset|bassi|boost|/boost|togli\s+il\s+boost|attiva\s+il\s+boost|"
+        r"metti\s+(?:in\s+)?(?:pausa|stop|loop|ripetizione|shuffle|muto|mute)|"
+        r"metti\s+(?:il\s+)?volume|"
+        r"(?:metti|attiva|imposta|applica|pompa)\s+(?:il\s+|l[\x27\']|un\s+)?(?:bass\s*boost|megabass|bassi|boost|riverbero|reverb|eco|nightcore|slowed|8d|karaoke|vaporwave)|"
+        r"(?:togli|disattiva|leva|rimuovi|senza|no)\s+(?:il\s+|l[\x27\']|i\s+)?(?:boost|bass\s*boost|effetti|filtri|riverbero|eco)|"
+        r"loop|shuffle|mescola|mischia)\b",
         re.IGNORECASE,
     ),
     "admin_control": re.compile(
@@ -176,11 +193,13 @@ ACTION_SYNTAX_PATTERNS = {
         re.IGNORECASE,
     ),
     "liveness_check": re.compile(
-        r"^(?:ci\s+senti|mi\s+senti|ci\s+sei|ci\s+siete|sei\s+vivo|sei\s+sveglio|batti\s+un\s+colpo|rispondi|fatti\s+sentire|funzioni|test\s+microfono)\b",
+        r"^(?:ci\s+senti|mi\s+senti|ci\s+sei|ci\s+siete|sei\s+vivo|sei\s+sveglio|batti\s+un\s+colpo|rispondi|fatti\s+sentire|funzioni|funziona|test\s+microfono)\b",
         re.IGNORECASE,
     ),
     "play_music": re.compile(
-        r"^(?:metti|suona|play|riproduci|fammi\s+sentire|fammi\s+ascoltare|fai\s+partire|cerca\s+(?:la\s+canzone|il\s+brano))\b",
+        r"^(?:metti(?!\s+(?:in\s+)?(?:pausa|stop|loop|ripetizione|shuffle|muto|mute)(?:\b|$)|(?:\s+(?:il\s+)?volume)|(?:\s+(?:un\s+|il\s+)?timer)|(?:\s+(?:una\s+|la\s+)?sveglia)|(?:\s+(?:il\s+|l[\x27\']|un\s+)?(?:boost|bass|effetto)))|"
+        r"suona(?!\s+(?:la\s+)?sveglia)|play|riproduci|fammi\s+sentire|fammi\s+ascoltare|fai\s+partire|ascolta|"
+        r"cerca\s+(?:la\s+canzone|il\s+brano|la\s+musica)|canzone\s+di|brano\s+di|traccia\s+di)\b",
         re.IGNORECASE,
     ),
     "chat": re.compile(
@@ -384,6 +403,7 @@ class JackIntelligenceFormula:
     def calculate_phonetic(self, query_tokens: List[str], intent: str) -> float:
         """Calcola sigma_jaro confrontando foneticamente i token della query con le parole chiave dell'intento."""
         target_words = DOMAIN_CORPUS.get(intent, [])
+        target_set = DOMAIN_CORPUS_SETS.get(intent, set())
         if not query_tokens or not target_words:
             return 0.0
 
@@ -391,6 +411,8 @@ class JackIntelligenceFormula:
         for q_tok in query_tokens:
             if len(q_tok) < 3:
                 continue
+            if q_tok in target_set:
+                return 1.0
             for t_word in target_words:
                 sim = jaro_winkler_distance(q_tok, t_word)
                 if sim > max_jaro:
@@ -400,14 +422,56 @@ class JackIntelligenceFormula:
 
         return max_jaro
 
-    def calculate_syntax(self, query_command: str, intent: str) -> float:
+    def calculate_syntax(
+        self,
+        query_command: str,
+        intent: str,
+        is_uo_entity: Optional[bool] = None,
+        is_razor: Optional[bool] = None,
+    ) -> float:
         """Calcola alpha_syntax determinando la congruenza della struttura grammaticale/imperativa."""
+        cmd_strip = query_command.strip()
         pattern = ACTION_SYNTAX_PATTERNS.get(intent)
-        if not pattern:
-            return 0.0
-        return 1.0 if pattern.search(query_command.strip()) else 0.0
+        if pattern and pattern.search(cmd_strip):
+            return 1.0
 
-    def calculate_noise(self, text: str, intent: str) -> float:
+        # Riconoscimento entità Outlands per wiki_guide (se non è richiesta esplicita di macro/script)
+        if intent == "wiki_guide":
+            try:
+                if is_razor is None:
+                    from razor_scripts import is_script_question
+                    is_razor, _ = is_script_question(cmd_strip)
+                if not is_razor:
+                    if is_uo_entity is None:
+                        from outlands_wiki import is_outlands_entity
+                        is_uo_entity, _, _ = is_outlands_entity(cmd_strip)
+                    if is_uo_entity:
+                        return 1.0
+            except Exception:
+                pass
+
+        # Riconoscimento comandi musicali impliciti
+        if intent == "play_music":
+            try:
+                if is_uo_entity is None:
+                    from outlands_wiki import is_outlands_entity
+                    is_uo_entity, _, _ = is_outlands_entity(cmd_strip)
+                c_low = cmd_strip.lower()
+                has_explicit_uo = any(w in c_low for w in ("guida", "wiki", "dungeon", "aspect", "build", "template", "macro", "script", "outlands"))
+                if not is_uo_entity or not has_explicit_uo:
+                    if any(w in c_low for w in ("canzone", "canzoni", "musica", "brano", "traccia", "album", "disco", "artista")):
+                        return 1.0
+            except Exception:
+                pass
+
+        return 0.0
+
+    def calculate_noise(
+        self,
+        text: str,
+        intent: str,
+        is_uo_entity: Optional[bool] = None,
+    ) -> float:
         """Calcola la penalità lambda_noise per prevenire falsi positivi o conflitti di dominio."""
         t_low = text.lower().strip()
         penalty = 0.0
@@ -416,34 +480,114 @@ class JackIntelligenceFormula:
         if CONFLICT_PATTERNS["third_person_chatter"].search(t_low):
             penalty += 0.40
 
-        # Conflitti incrociati di dominio
-        has_sport_words = any(w in t_low for w in ("partita", "partite", "match", "serie a", "champions", "milan", "inter", "juve", "f1", "motogp"))
+        # Riconoscimento entità Outlands
+        if is_uo_entity is None:
+            try:
+                from outlands_wiki import is_outlands_entity
+                is_uo_entity, _, _ = is_outlands_entity(text)
+            except Exception:
+                is_uo_entity = False
+
+        is_formula_one = bool(re.search(r"\bformula\s*(?:1|uno)\b|\bf1\b", t_low))
+        has_sport_words = is_formula_one or any(
+            w in t_low for w in (
+                "chi gioca", "quando gioca", "a che ora gioca", "gioca", "giocano",
+                "partita", "partite", "match", "serie a", "serie b", "champions",
+                "milan", "inter", "juve", "f1", "motogp", "gran premio", "gara",
+                "motori", "palinsesto", "eurolega", "euroleague", "nba", "basket", "calcio", "tennis"
+            )
+        )
         has_script_words = any(w in t_low for w in ("script", "scripts", "razor", "razorscript", "macro"))
-        has_wiki_words = any(w in t_low for w in ("aspect", "tier", "dungeon", "ossuary", "aegis", "build", "bestiario"))
-        has_jack_words = any(w in t_low for w in ("jack", "matematico", "formula", "super matematico"))
+        has_wiki_words = is_uo_entity or any(w in t_low for w in ("aspect", "tier", "dungeon", "ossuary", "aegis", "build", "bestiario", "drake", "bloodwolf", "balron", "lich", "taming", "pet", "mastery"))
+        has_jack_words = (
+            any(w in t_low for w in ("jack", "matematico", "super matematico"))
+            or ("formula" in t_low and not is_formula_one)
+        )
+
+        is_audio_boost = any(w in t_low for w in ("bass", "bassi", "bassboost", "megabass", "subbass", "audio", "volume", "suono", "cassa", "casse", "equalizzatore", "filtro", "filtri", "effetto", "effetti"))
+        is_dj_command = bool(ACTION_SYNTAX_PATTERNS["dj_control"].search(t_low)) or any(
+            w in t_low for w in ("in pausa", "metti pausa", "metti stop", "metti muto", "in loop", "in shuffle", "metti il volume", "alza il volume", "abbassa il volume", "bass boost", "togli il boost", "senza boost")
+        )
+
+        is_explicit_music = (
+            any(t_low.startswith(p) for p in ("metti ", "suona ", "riproduci ", "play ", "fammi sentire ", "fammi ascoltare ", "fai partire ", "ascolta "))
+            or any(w in t_low for w in ("canzone", "canzoni", "brano", "brani", "musica", "traccia", "tracce", "cantante", "album", "disco"))
+        ) and not is_dj_command
+
+        has_explicit_uo = any(w in t_low for w in ("guida", "wiki", "dungeon", "aspect", "build", "template", "macro", "script", "outlands", "droppa", "spawn"))
 
         if has_jack_words and intent in ("sports_match", "play_music", "wiki_guide", "razor_script"):
             penalty += 0.50
 
         if intent == "jack_math_boost":
+            if is_formula_one:
+                penalty += 0.65
+            if is_audio_boost:
+                penalty += 0.70
             if CONFLICT_PATTERNS["colloquial_fra_chatter"].search(t_low):
                 penalty += 0.60
-            if (has_sport_words or has_script_words or has_wiki_words) and not has_jack_words:
+            if (has_sport_words or has_script_words or has_wiki_words or is_dj_command) and not has_jack_words:
                 penalty += 0.50
-            if any(w in t_low for w in ("metti ", "suona ", "riproduci ")) and not has_jack_words:
+            if is_explicit_music and not has_jack_words:
                 penalty += 0.60
+
+        if is_uo_entity and not (is_explicit_music and not has_explicit_uo):
+            # Se la frase contiene una chiara entità di Outlands (e non è una richiesta musicale con cantante/brano omonimo)
+            if intent in ("play_music", "dj_control"):
+                penalty += 0.55
+            elif intent in ("sports_match", "smart_assistant"):
+                penalty += 0.50
+            elif intent == "chat" and not any(w in t_low for w in ("ciao", "buongiorno", "buonasera", "grazie")):
+                penalty += 0.40
 
         if intent in ("wiki_guide", "razor_script") and has_sport_words and not any(w in t_low for w in ("outlands", "ultima", "pet", "taming", "lockpicking")):
             penalty += 0.45
 
-        if intent == "sports_match" and (has_script_words or has_wiki_words):
-            penalty += 0.40
+        # Penalizza wiki_guide se inizia con comando musicale esplicito o privo di pertinenza Outlands
+        if intent == "wiki_guide":
+            if is_explicit_music and not has_explicit_uo:
+                penalty += 0.60
+            elif not is_uo_entity and not has_wiki_words and not has_explicit_uo:
+                penalty += 0.35
 
-        if intent == "play_music" and (has_script_words or has_wiki_words or has_sport_words):
-            penalty += 0.45
+        if intent == "razor_script" and not any(w in t_low for w in ("script", "scripts", "macro", "razor", "razorscript")):
+            penalty += 0.35
 
-        if intent == "dj_control" and CONFLICT_PATTERNS["colloquial_fra_chatter"].search(t_low):
-            penalty += 0.50
+        if intent == "admin_control" and not any(w in t_low for w in ("sposta", "porta", "caccia", "scollega", "muta", "smuta", "ruolo", "timeout", "kick", "ban", "banna", "espelli", "pulisci", "stanza", "admin")):
+            penalty += 0.35
+
+        if intent == "dj_control":
+            if CONFLICT_PATTERNS["colloquial_fra_chatter"].search(t_low):
+                penalty += 0.50
+            elif not ACTION_SYNTAX_PATTERNS["dj_control"].search(t_low) and not any(w in t_low for w in ("stop", "pausa", "volume", "loop", "shuffle", "bassi", "boost")):
+                penalty += 0.30
+
+        if intent == "sports_match":
+            if has_script_words or has_wiki_words:
+                penalty += 0.40
+            elif not ACTION_SYNTAX_PATTERNS["sports_match"].search(t_low) and not any(w in t_low for w in ("partita", "partite", "match", "serie a", "champions", "milan", "inter", "juve", "f1", "motogp", "gara", "sport")):
+                penalty += 0.30
+
+        if intent == "smart_assistant" and not ACTION_SYNTAX_PATTERNS["smart_assistant"].search(t_low) and not any(w in t_low for w in ("ora", "ore", "meteo", "tempo", "timer", "sveglia", "calcola", "quanto", "dado", "moneta", "barzelletta")):
+            penalty += 0.30
+
+        if intent == "liveness_check" and not ACTION_SYNTAX_PATTERNS["liveness_check"].search(t_low):
+            penalty += 0.30
+
+        if intent == "social_interaction" and not ACTION_SYNTAX_PATTERNS["social_interaction"].search(t_low):
+            penalty += 0.30
+
+        if intent == "live_fable" and not ACTION_SYNTAX_PATTERNS["live_fable"].search(t_low) and not any(w in t_low for w in ("favola", "favole", "poesia", "vocalist", "metempsicosi", "insomnia", "raccontami")):
+            penalty += 0.30
+
+        if intent == "play_music":
+            if is_dj_command:
+                penalty += 0.65
+            elif (has_script_words or has_sport_words or (has_wiki_words and not is_explicit_music)):
+                penalty += 0.45
+
+        if intent == "chat" and has_sport_words and not any(w in t_low for w in ("ciao", "buongiorno", "buonasera", "grazie", "ti voglio bene")):
+            penalty += 0.35
 
         return min(0.95, penalty)
 
@@ -459,6 +603,23 @@ class JackIntelligenceFormula:
 
         phi_w = self.calculate_wake(clean_text)
 
+        # Precalcolo entità Outlands e script una sola volta prima del ciclo
+        is_uo_entity = False
+        uo_entity_name = ""
+        uo_entity_type = None
+        try:
+            from outlands_wiki import is_outlands_entity
+            is_uo_entity, uo_entity_name, uo_entity_type = is_outlands_entity(clean_cmd)
+        except Exception:
+            pass
+
+        is_razor = False
+        try:
+            from razor_scripts import is_script_question
+            is_razor, _ = is_script_question(clean_cmd)
+        except Exception:
+            pass
+
         # Calcolo di S(Intent, q) per ciascun intento
         scores: Dict[str, float] = {}
         components: Dict[str, Dict[str, float]] = {}
@@ -466,8 +627,8 @@ class JackIntelligenceFormula:
         for it in INTENTS:
             sigma_j = self.calculate_phonetic(cmd_tokens or full_tokens, it)
             bm25_s = self.bm25.score(cmd_tokens or full_tokens, it)
-            alpha_s = self.calculate_syntax(clean_cmd, it)
-            lambda_n = self.calculate_noise(clean_text, it)
+            alpha_s = self.calculate_syntax(clean_cmd, it, is_uo_entity=is_uo_entity, is_razor=is_razor)
+            lambda_n = self.calculate_noise(clean_text, it, is_uo_entity=is_uo_entity)
 
             raw_score = (
                 W_WAKE * phi_w
@@ -511,6 +672,9 @@ class JackIntelligenceFormula:
             res = resolve_skill_from_text(clean_cmd)
             entities["skill_slug"] = res[1] if res else "lista"
             entities["skill_name"] = res[0] if res else "UO Outlands"
+        elif winner_intent == "wiki_guide":
+            entities["wiki_topic"] = uo_entity_name if is_uo_entity else clean_cmd
+            entities["entity_type"] = uo_entity_type or "topic"
         elif winner_intent in ("sports_match", "sports_schedule"):
             clean_q = re.sub(
                 r"^(?:franchino|mi\s+dici|quali\s+sono|dimmi|trova|cerca|dove\s+(?:fanno\s+vedere|posso\s+vedere)|streaming\s+di|partita\s+(?:del|della|di)?)\s*",
@@ -522,6 +686,32 @@ class JackIntelligenceFormula:
         elif winner_intent == "play_music":
             clean_music = re.sub(r"^(?:metti|suona|play|riproduci|fammi\s+sentire|cerca)\s+", "", clean_cmd, flags=re.IGNORECASE).strip()
             entities["music_query"] = clean_music or clean_cmd
+        elif winner_intent == "dj_control":
+            c_low = clean_cmd.lower()
+            if any(w in c_low for w in ("pausa", "aspetta")):
+                entities["action"] = "pause"
+            elif any(w in c_low for w in ("riprendi", "continua", "vai", "togli la pausa")):
+                entities["action"] = "resume"
+            elif any(w in c_low for w in ("stop", "ferma", "stoppa", "basta", "zitto", "muto")):
+                entities["action"] = "stop"
+            elif any(w in c_low for w in ("skip", "salta", "prossima", "avanti", "cambia")):
+                entities["action"] = "skip"
+            elif any(w in c_low for w in ("loop", "ripeti")):
+                entities["action"] = "loop"
+            elif any(w in c_low for w in ("shuffle", "mescola", "casuale", "mischia")):
+                entities["action"] = "shuffle"
+            elif any(w in c_low for w in ("volume", "alza", "abbassa", "massimo")):
+                entities["action"] = "volume"
+            elif any(w in c_low for w in ("boost", "bass", "riverbero", "eco", "effetto", "filtro")):
+                entities["action"] = "effect"
+            else:
+                entities["action"] = "general"
+        elif winner_intent == "admin_control":
+            entities["command"] = clean_cmd
+        elif winner_intent == "social_interaction":
+            entities["interaction"] = clean_cmd
+        elif winner_intent == "liveness_check":
+            entities["check"] = clean_cmd
         elif winner_intent == "smart_assistant":
             from smart_assistant import detect_smart_assistant_intent
             entities["subintent"] = detect_smart_assistant_intent(clean_cmd) or "general"

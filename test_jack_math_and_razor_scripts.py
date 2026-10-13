@@ -493,3 +493,326 @@ class TestJackMathEngineIntegration(unittest.TestCase):
         self.assertEqual(res["code"], "say 'Heal'")
         self.assertEqual(res["author"], "DavideTester")
 
+
+# ==============================================================================
+# 5. TEST DISAMBIGUAZIONE AUTOMATICA SOTTO IL COFANO (SENZA BOOST)
+# ==============================================================================
+
+class TestTransparentDomainDisambiguation(unittest.TestCase):
+    """
+    Test suite per verificare che Franchino distingua automaticamente e silenziosamente tra:
+    1. Ultima Online Outlands (creature, dungeon, aspetti, skill, build, item, script)
+    2. Musica (richieste di riproduzione YouTube/Spotify, brani, artisti, generi)
+    3. Altre funzionalità (smart assistant, sport, vocalist chat)
+    SENZA che l'utente debba pronunciare la parola 'boost' o invocare formule.
+    """
+
+    def test_outlands_queries_without_boost(self):
+        """Verifica che query naturali e brevi su UO Outlands siano identificate come wiki_guide."""
+        from outlands_wiki import is_wiki_question, is_outlands_entity
+        from brain import brain
+
+        test_cases = [
+            "bloodwolf",
+            "aegis keep",
+            "drake",
+            "magery",
+            "pesca",
+            "cosa fa il fire aspect",
+            "dove trovo la mastery chain",
+            "dimmi tutto su cavernam",
+            "quanta skill serve per un ostard",
+        ]
+
+        for query in test_cases:
+            is_ent, ent_name, ent_type = is_outlands_entity(query)
+            self.assertTrue(
+                is_ent,
+                f"is_outlands_entity ha fallito per la query Outlands: '{query}'"
+            )
+
+            is_w, w_q = is_wiki_question(query)
+            self.assertTrue(
+                is_w,
+                f"is_wiki_question ha fallito per la query Outlands: '{query}'"
+            )
+
+            jack_res = jack_engine.classify(query)
+            self.assertEqual(
+                jack_res.intent,
+                "wiki_guide",
+                f"Jack Math ha classificato erroneamente '{query}' come {jack_res.intent} (prob={jack_res.probability:.2f})"
+            )
+
+            decision = brain.decide_intent(query)
+            self.assertEqual(
+                decision["intent"],
+                "wiki_guide",
+                f"Brain decide_intent ha classificato erroneamente '{query}' come {decision['intent']}"
+            )
+            self.assertIn("wiki_topic", decision)
+
+    def test_music_queries_route_to_playback(self):
+        """Verifica che le richieste musicali vengano classificate come play_music e NON wiki."""
+        from outlands_wiki import is_wiki_question
+        from brain import brain
+
+        music_queries = [
+            "metti albachiara",
+            "suona i queen",
+            "riproduci eminem",
+            "play bohemian rhapsody",
+            "fammi sentire i coldplay",
+        ]
+
+        for query in music_queries:
+            is_w, _ = is_wiki_question(query)
+            self.assertFalse(
+                is_w,
+                f"is_wiki_question ha erroneamente scambiato la richiesta musicale '{query}' per wiki!"
+            )
+
+            jack_res = jack_engine.classify(query)
+            self.assertEqual(
+                jack_res.intent,
+                "play_music",
+                f"Jack Math ha classificato '{query}' come {jack_res.intent} invece di play_music"
+            )
+
+            decision = brain.decide_intent(query)
+            self.assertEqual(
+                decision["intent"],
+                "play_music",
+                f"Brain decide_intent ha classificato '{query}' come {decision['intent']} invece di play_music"
+            )
+            self.assertTrue(bool(decision.get("music_query")))
+
+    def test_razor_script_queries_route_correctly(self):
+        """Verifica che le richieste di script Razor vengano riconosciute come razor_script."""
+        from brain import brain
+
+        script_queries = [
+            ("script per magery", "magery"),
+            ("dammi lo script per pesca", "fishing"),
+            ("macro lockpicking", "lockpicking"),
+            ("script animal taming", "animaltaming"),
+        ]
+
+        for query, expected_slug in script_queries:
+            jack_res = jack_engine.classify(query)
+            self.assertEqual(
+                jack_res.intent,
+                "razor_script",
+                f"Jack Math non ha classificato '{query}' come razor_script (got {jack_res.intent})"
+            )
+
+            decision = brain.decide_intent(query)
+            self.assertEqual(
+                decision["intent"],
+                "razor_script",
+                f"Brain non ha classificato '{query}' come razor_script (got {decision['intent']})"
+            )
+            self.assertEqual(decision["skill_slug"], expected_slug)
+
+    def test_smart_assistant_queries_without_boost(self):
+        """Verifica che i comandi smart assistant non vengano intercettati da wiki o musica."""
+        from brain import brain
+
+        smart_queries = [
+            "Franchino che ore sono?",
+            "Franchino che tempo fa a Milano?",
+            "Franchino lancia un dado",
+            "Franchino testa o croce",
+            "Franchino quanto fa 50 diviso 2?",
+        ]
+
+        for query in smart_queries:
+            jack_res = jack_engine.classify(query)
+            self.assertEqual(
+                jack_res.intent,
+                "smart_assistant",
+                f"Jack Math ha classificato '{query}' come {jack_res.intent} invece di smart_assistant"
+            )
+
+            decision = brain.decide_intent(query)
+            self.assertEqual(
+                decision["intent"],
+                "smart_assistant",
+                f"Brain decide_intent ha classificato '{query}' come {decision['intent']} invece di smart_assistant"
+            )
+
+    def test_sports_queries_route_to_sports(self):
+        """Verifica che le richieste su partite e gare sportive vadano a sports_match."""
+        from brain import brain
+
+        sport_queries = [
+            "chi gioca stasera",
+            "quali partite ci sono oggi",
+            "quando corre la formula 1",
+            "orari della motogp",
+        ]
+
+        for query in sport_queries:
+            jack_res = jack_engine.classify(query)
+            self.assertIn(
+                jack_res.intent,
+                ("sports_match", "sports_schedule"),
+                f"Jack Math ha classificato '{query}' come {jack_res.intent} invece di sport"
+            )
+
+            decision = brain.decide_intent(query)
+            self.assertEqual(
+                decision["intent"],
+                "sports_match",
+                f"Brain decide_intent ha classificato '{query}' come {decision['intent']}"
+            )
+
+    def test_blended_music_and_outlands_queries(self):
+        """Verifica che query con verbi musicali e nomi sovrapposti (drake, pet shop boys) vadano a play_music."""
+        from brain import brain
+
+        blended_cases = [
+            ("suona la canzone del drake", "play_music"),
+            ("suona drake", "play_music"),
+            ("suona i pet shop boys", "play_music"),
+            ("metti pet shop boys", "play_music"),
+            ("metti drake", "play_music"),
+            ("metti balron", "play_music"),
+        ]
+
+        for query, expected_intent in blended_cases:
+            jack_res = jack_engine.classify(query)
+            self.assertEqual(
+                jack_res.intent,
+                expected_intent,
+                f"Jack Math ha classificato '{query}' come {jack_res.intent} invece di {expected_intent}"
+            )
+
+            decision = brain.decide_intent(query)
+            self.assertEqual(
+                decision["intent"],
+                expected_intent,
+                f"Brain decide_intent ha classificato '{query}' come {decision['intent']} invece di {expected_intent}"
+            )
+
+    def test_dj_console_control_queries(self):
+        """Verifica che i comandi di controllo DJ (stop, pausa, volume, loop, shuffle, bass boost) vadano a dj_control e non a musica o boost matematico."""
+        from brain import brain
+
+        dj_cases = [
+            "stop",
+            "stoppa la musica",
+            "ferma la musica",
+            "metti in pausa",
+            "pausa",
+            "riprendi la musica",
+            "salta la traccia",
+            "skip",
+            "alza il volume",
+            "abbassa il volume",
+            "metti in loop",
+            "metti in shuffle",
+            "attiva il bass boost",
+            "togli il boost",
+        ]
+
+        for query in dj_cases:
+            jack_res = jack_engine.classify(query)
+            self.assertEqual(
+                jack_res.intent,
+                "dj_control",
+                f"Jack Math ha classificato '{query}' come {jack_res.intent} invece di dj_control"
+            )
+
+            decision = brain.decide_intent(query)
+            self.assertEqual(
+                decision["intent"],
+                "dj_control",
+                f"Brain decide_intent ha classificato '{query}' come {decision['intent']} invece di dj_control"
+            )
+
+    def test_generic_dungeons_with_context_and_songs(self):
+        """Verifica la disambiguazione tra dungeon generici con contesto (inferno, ocean) e canzoni/artisti omonimi (ocean eyes, frank ocean)."""
+        from outlands_wiki import is_wiki_question, is_outlands_entity
+        from brain import brain
+
+        # Richieste dungeon con contesto -> wiki_guide
+        dungeon_context_queries = [
+            "cerca la guida di inferno",
+            "boss del dungeon inferno",
+            "guida dungeon ocean",
+            "guida a inferno",
+        ]
+        for query in dungeon_context_queries:
+            is_ent, ent_name, ent_type = is_outlands_entity(query)
+            self.assertTrue(
+                is_ent,
+                f"is_outlands_entity non ha riconosciuto il contesto dungeon per '{query}'"
+            )
+            is_w, _ = is_wiki_question(query)
+            self.assertTrue(
+                is_w,
+                f"is_wiki_question non ha riconosciuto '{query}' come domanda wiki"
+            )
+            jack_res = jack_engine.classify(query)
+            self.assertEqual(
+                jack_res.intent,
+                "wiki_guide",
+                f"Jack Math ha classificato '{query}' come {jack_res.intent} invece di wiki_guide"
+            )
+
+        # Brani o artisti omonimi -> play_music, NON wiki
+        music_disambig_queries = [
+            "ocean eyes",
+            "frank ocean",
+            "metti ocean eyes",
+            "suona frank ocean",
+        ]
+        for query in music_disambig_queries:
+            is_w, _ = is_wiki_question(query)
+            self.assertFalse(
+                is_w,
+                f"is_wiki_question ha erroneamente scambiato '{query}' per wiki!"
+            )
+            jack_res = jack_engine.classify(query)
+            self.assertIn(
+                jack_res.intent,
+                ("play_music", "chat"),
+                f"Jack Math ha classificato '{query}' erroneamente come {jack_res.intent}"
+            )
+
+    def test_liveness_and_social_queries(self):
+        """Verifica che controlli di presenza (ci senti, sei vivo) e interazioni sociali (brindisi) non vadano a musica o wiki."""
+        from brain import brain
+
+        liveness_queries = ["ci senti", "sei vivo", "ci sei"]
+        for query in liveness_queries:
+            jack_res = jack_engine.classify(query)
+            self.assertEqual(
+                jack_res.intent,
+                "liveness_check",
+                f"Jack Math ha classificato '{query}' come {jack_res.intent} invece di liveness_check"
+            )
+            decision = brain.decide_intent(query)
+            self.assertEqual(
+                decision["intent"],
+                "liveness_check",
+                f"Brain decide_intent ha classificato '{query}' come {decision['intent']}"
+            )
+
+        social_queries = ["fai un brindisi", "batti cinque", "abbraccia marco"]
+        for query in social_queries:
+            jack_res = jack_engine.classify(query)
+            self.assertEqual(
+                jack_res.intent,
+                "social_interaction",
+                f"Jack Math ha classificato '{query}' come {jack_res.intent} invece di social_interaction"
+            )
+            decision = brain.decide_intent(query)
+            self.assertEqual(
+                decision["intent"],
+                "social_interaction",
+                f"Brain decide_intent ha classificato '{query}' come {decision['intent']}"
+            )
+
+

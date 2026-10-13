@@ -2226,7 +2226,61 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
             re.IGNORECASE,
         )
         if play_match:
-            query = play_match.group(1).strip()
+            raw_query = play_match.group(1).strip()
+            q_low = raw_query.lower()
+
+            # Disambiguazione immediata: controlli DJ espliciti con "metti in pausa", "metti pausa", "metti in loop", ecc.
+            if q_low in ("in pausa", "pausa", "aspetta", "un attimo"):
+                if self.player.is_playing():
+                    self.player.pause()
+                    await self._notify_channel(f"🎙️ **{user.display_name}** ha messo in pausa con la voce ⏸️")
+                return
+
+            if q_low in ("in stop", "stop", "muto", "silenzio", "basta"):
+                self.player.stop()
+                await self._notify_channel(f"⏹️ **{user.display_name}** ha fermato la musica in console! 🔇")
+                return
+
+            if q_low in ("in loop", "loop", "ripeti"):
+                self.player.loop_mode = "off" if self.player.loop_mode != "off" else "song"
+                stato = "attivato 🔂" if self.player.loop_mode == "song" else "disattivato ➡️"
+                await self._notify_channel(f"🎙️ **{user.display_name}** ha {stato} il loop con la voce!")
+                return
+
+            if q_low in ("in shuffle", "shuffle", "casuale", "mescola"):
+                if len(self.player.queue) > 1:
+                    self.player.shuffle()
+                    await self._notify_channel(f"🎙️ **{user.display_name}** ha mescolato la coda con la voce! 🔀")
+                return
+
+            if q_low.startswith(("il volume", "volume", "a ")):
+                v_match = re.search(r"(\d{1,3})\s*%?", q_low)
+                if v_match:
+                    val = max(1, min(100, int(v_match.group(1))))
+                    self.player.set_volume(val / 100.0)
+                    await self._notify_channel(f"🎙️ **{user.display_name}** ha impostato il volume al **{val}%** 🔊")
+                    return
+
+            if any(w in q_low for w in ("guida", "wiki", "dungeon", "aspect")):
+                from outlands_wiki import is_outlands_entity, query_outlands_wiki
+                is_ent, ent_name, _ = is_outlands_entity(q_low)
+                if is_ent:
+                    wiki_target = ent_name or raw_query
+                    try:
+                        wiki_res = await asyncio.wait_for(query_outlands_wiki(wiki_target), timeout=18.0)
+                        if wiki_res:
+                            await self._notify_channel(
+                                f"📖 **{user.display_name}**, ecco la guida da [**wiki.uooutlands.com** ({wiki_res['page_title']} → {wiki_res['section_title']})]({wiki_res['section_url']}) tradotta in italiano:",
+                                embed=wiki_res["embed"],
+                            )
+                            asyncio.create_task(
+                                self.player.speak_tts(wiki_res["voice_answer"], wait=False, interrupt_music=True, keep_paused_after=False)
+                            )
+                            return
+                    except Exception:
+                        pass
+
+            query = raw_query
             if query:
                 # Normalizzazione: rimuove filler italiani che rovinano la ricerca YouTube
                 query = re.sub(
@@ -2429,6 +2483,9 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
             # Controllo di sicurezza 0: Richiesta Script Razor per una skill o catalogo generale
             from razor_scripts import is_script_question, build_razor_scripts_response
             is_script, script_skill = is_script_question(command_part)
+            if not is_script and jack_fb.intent == "razor_script" and jack_fb.probability >= 0.20:
+                is_script = True
+                script_skill = jack_fb.extracted_entities.get("skill_slug") or "lista"
             if is_script:
                 target_skill = script_skill if script_skill and script_skill != "lista" else "lista"
                 logger.info(f"📜 Intercettata richiesta script Razor in fallback per {target_skill} da {user.display_name}: '{command_part}'")
@@ -2473,8 +2530,11 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
                 )
                 return
 
-            # Controllo di sicurezza 2: Domanda esplicita sulla Wiki di Outlands
+            # Controllo di sicurezza 2: Domanda esplicita o ontologica sulla Wiki di Outlands
             is_wiki, wiki_q = is_wiki_question(command_part)
+            if not is_wiki and jack_fb.intent == "wiki_guide" and jack_fb.probability >= 0.20:
+                is_wiki = True
+                wiki_q = jack_fb.extracted_entities.get("wiki_topic") or command_part
             if is_wiki:
                 logger.info(f"📖 Intercettata domanda Wiki Outlands in fallback da {user.display_name}: '{wiki_q}'")
                 self.player._manual_stop = False
@@ -2504,6 +2564,17 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
                         return
                 except Exception as e:
                     logger.warning(f"Errore gestione fallback wiki: {e}")
+
+            # Controllo di sicurezza 2-bis: Intenti intelligenti aggiuntivi (smart assistant, sport, favole vocalist, controlli dj, admin, social, presenza)
+            if jack_fb.intent in ("smart_assistant", "sports_match", "sports_schedule", "live_fable", "dj_control", "admin_control", "social_interaction", "liveness_check") and jack_fb.probability >= 0.25:
+                from brain import brain
+                decision = brain.decide_intent(
+                    command_part,
+                    user.display_name,
+                    current_song_title=self.player.current.title if self.player.current else None,
+                )
+                if await self._dispatch_brain_decision(user, decision, command_part):
+                    return
 
             # Controllo di sicurezza 3: Se la frase è chiaramente una domanda o un intento discorsivo
             # NON inviarla MAI a YouTube come canzone!
@@ -2620,7 +2691,11 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
                         timeout=5.0,
                     )
                 except Exception:
-                    decision = {"intent": "chat", "voice_reply": "Magia ragazzi! Sono sempre presente qui in console!"}
+                    decision = brain.decide_intent(
+                        command_part,
+                        user.display_name,
+                        current_song_title=self.player.current.title if self.player.current else None,
+                    )
 
                 if await self._dispatch_brain_decision(user, decision, command_part):
                     return
@@ -2972,6 +3047,96 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
             asyncio.create_task(
                 self.player.speak_tts(fable, wait=False, interrupt_music=True, keep_paused_after=False)
             )
+            return True
+
+        if intent == "dj_control":
+            act = decision.get("action", "general")
+            c_low = command_part.lower()
+            if act == "pause" or any(w in c_low for w in ("pausa", "aspetta")):
+                if self.player.is_playing():
+                    self.player.pause()
+                    await self._notify_channel(f"🎙️ **{user.display_name}** ha messo in pausa con la voce ⏸️")
+                return True
+            elif act == "resume" or any(w in c_low for w in ("riprendi", "continua", "vai", "togli la pausa")):
+                if self.player.is_paused():
+                    self.player.resume()
+                    await self._notify_channel(f"🎙️ **{user.display_name}** ha ripreso la musica con la voce ▶️")
+                return True
+            elif act == "stop" or any(w in c_low for w in ("stop", "ferma", "stoppa", "basta", "zitto", "muto")):
+                self.player.stop()
+                await self._notify_channel(f"⏹️ **{user.display_name}** ha fermato la musica in console! 🔇")
+                return True
+            elif act == "skip" or any(w in c_low for w in ("skip", "salta", "prossima", "avanti", "cambia")):
+                if self.player.is_active:
+                    self.player.skip()
+                    await self._notify_channel(f"🎙️ **{user.display_name}** — Salto al prossimo brano! ⏭️")
+                return True
+            elif act == "loop" or "loop" in c_low or "ripeti" in c_low:
+                self.player.loop_mode = "off" if self.player.loop_mode != "off" else "song"
+                stato = "attivato 🔂" if self.player.loop_mode == "song" else "disattivato ➡️"
+                await self._notify_channel(f"🎙️ **{user.display_name}** ha {stato} il loop con la voce!")
+                return True
+            elif act == "shuffle" or "shuffle" in c_low or "mescola" in c_low:
+                if len(self.player.queue) > 1:
+                    self.player.shuffle()
+                    await self._notify_channel(f"🎙️ **{user.display_name}** ha mescolato la coda con la voce! 🔀")
+                return True
+            elif act == "volume" or "volume" in c_low:
+                v_match = re.search(r"(\d{1,3})\s*%?", c_low)
+                if v_match:
+                    val = max(1, min(100, int(v_match.group(1))))
+                    self.player.set_volume(val / 100.0)
+                    await self._notify_channel(f"🎙️ **{user.display_name}** ha impostato il volume al **{val}%** 🔊")
+                    return True
+                elif any(w in c_low for w in ("alza", "più alto", "piu alto", "più forte")):
+                    new_vol = min(1.0, self.player.volume + 0.20)
+                    self.player.set_volume(new_vol)
+                    await self._notify_channel(f"🎙️ Volume alzato al **{int(new_vol * 100)}%** 🔊")
+                    return True
+                elif any(w in c_low for w in ("abbassa", "più basso", "piu basso", "più piano")):
+                    new_vol = max(0.05, self.player.volume - 0.20)
+                    self.player.set_volume(new_vol)
+                    await self._notify_channel(f"🎙️ Volume abbassato al **{int(new_vol * 100)}%** 🔉")
+                    return True
+            elif act == "effect" or any(w in c_low for w in ("boost", "bass", "riverbero", "eco", "effetto")):
+                eff = "bassboost"
+                if "riverbero" in c_low or "reverb" in c_low:
+                    eff = "reverb"
+                elif "megabass" in c_low:
+                    eff = "megabass"
+                elif "slowed" in c_low:
+                    eff = "slowed"
+                elif "nightcore" in c_low:
+                    eff = "nightcore"
+                elif "8d" in c_low:
+                    eff = "8d"
+                elif any(w in c_low for w in ("togli", "senza", "no boost", "disattiva")):
+                    eff = "off"
+                lbl = await self.player.set_effect(eff)
+                await self._notify_channel(f"🎛️ **{user.display_name}**: Effetto DJ impostato: **{lbl}**!")
+                return True
+            return True
+
+        if intent == "liveness_check":
+            v_msg = "Forte e chiaro ragazzi! Franchino è sveglio, carico e sempre sul pezzo in console! Magia!"
+            await self._notify_channel(f"🎙️ **Franchino**: *\"{v_msg}\"*")
+            asyncio.create_task(self.player.speak_tts(v_msg, wait=False, interrupt_music=True, keep_paused_after=False))
+            return True
+
+        if intent == "social_interaction":
+            from interactions import handle_voice_interaction
+            if await handle_voice_interaction(self.player, user, command_part, self._notify_channel):
+                return True
+            v_msg = "Magia pura! Un grande abbraccio e un brindisi a tutta la sala da Franchino!"
+            await self._notify_channel(f"🥂 **Franchino**: *\"{v_msg}\"*")
+            asyncio.create_task(self.player.speak_tts(v_msg, wait=False, interrupt_music=True, keep_paused_after=False))
+            return True
+
+        if intent == "admin_control":
+            from admin_commands import handle_voice_admin_command
+            if await handle_voice_admin_command(self.player, user, command_part, self._notify_channel):
+                return True
+            await self._notify_channel(f"🛡️ **Franchino Admin**: Comando elaborato per **{user.display_name}**.")
             return True
 
         if intent == "play_music":

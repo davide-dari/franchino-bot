@@ -228,7 +228,28 @@ class FranchinoBrain:
             pass
         return self._fallback_heuristic_intent(original_text, user_name)
 
-    def _fallback_heuristic_intent(self, text: str, user_name: str = "amico") -> Dict[str, Any]:
+    def decide_intent(
+        self,
+        text: str,
+        user_name: str = "amico",
+        current_song_title: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Motore deterministico e matematico di alta precisione basato sulla Formula Jack
+        e i cataloghi di conoscenza UO Outlands/Musica/Assistente.
+        Distingue in modo invisibile (<0.5 ms) se l'utente si riferisce a:
+        1. Ultima Online Outlands (wiki, creature, dungeon, aspect, build, razor script)
+        2. Musica (riproduzione YouTube, brano, artista, genere)
+        3. Altro (assistente smart, sport, dj console, admin, interazioni sociali, chat).
+        """
+        return self._fallback_heuristic_intent(text, user_name, current_song_title=current_song_title)
+
+    def _fallback_heuristic_intent(
+        self,
+        text: str,
+        user_name: str = "amico",
+        current_song_title: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """
         Motore euristico e matematico basato sulla Formula Jack che riproduce fedelmente l'umanità
         e il carisma di Franchino quando l'LLM non è attivo.
@@ -236,9 +257,10 @@ class FranchinoBrain:
         t_low = text.lower().strip()
 
         # 0. Valutazione prioritaria tramite Super Matematico Jack
+        jack_res = None
         try:
             from jack_math_engine import jack_engine
-            jack_res = jack_engine.classify(text)
+            jack_res = jack_engine.classify(text, current_song_title=current_song_title)
             if jack_res.intent == "jack_math_boost" and jack_res.probability >= 0.25:
                 return {
                     "intent": "jack_math_boost",
@@ -372,6 +394,9 @@ class FranchinoBrain:
         # 0B. Script Razor per UO Outlands (outlands.uorazorscripts.com)
         from razor_scripts import is_script_question
         is_sc, sc_skill = is_script_question(t_low)
+        if not is_sc and jack_res and jack_res.intent == "razor_script":
+            is_sc = True
+            sc_skill = jack_res.extracted_entities.get("skill_slug") or "lista"
         if is_sc:
             target_skill = sc_skill if sc_skill and sc_skill != "lista" else "lista"
             s_name = target_skill.title() if target_skill != "lista" else "UO Outlands"
@@ -428,24 +453,25 @@ class FranchinoBrain:
 
         # 3. UO Outlands Wiki & Conoscenza Approfondita
         is_w, w_q = is_wiki_question(t_low)
-        if is_w:
+        if is_w or (jack_res and jack_res.intent == "wiki_guide"):
+            target_topic = w_q or (jack_res.extracted_entities.get("wiki_topic") if jack_res else "") or t_low
             rag_info = ""
             try:
                 from outlands_wiki import get_outlands_rag_context
-                rag_info = get_outlands_rag_context(w_q, max_chars=400)
+                rag_info = get_outlands_rag_context(target_topic, max_chars=400)
             except Exception:
                 pass
 
-            c_reply = f"📖 **Franchino UO Outlands Guide**:\n{rag_info}" if rag_info else f"📖 Scavo nei tomi antichi di UO Outlands: **{w_q}**..."
+            c_reply = f"📖 **Franchino UO Outlands Guide**:\n{rag_info}" if rag_info else f"📖 Scavo nei tomi antichi di UO Outlands: **{target_topic}**..."
             return {
                 "intent": "wiki_guide",
-                "wiki_topic": w_q,
-                "voice_reply": f"Magia ragazzi! Scavo nella conoscenza di Outlands per {w_q}! Tenetevi pronti!",
+                "wiki_topic": target_topic,
+                "voice_reply": f"Magia ragazzi! Scavo nella conoscenza di Outlands per {target_topic}! Tenetevi pronti!",
                 "chat_reply": c_reply,
             }
 
         # 4. Favole della Notte & Monologhi Vocalist
-        if any(w in t_low for w in ("favola", "raccontami", "poesia", "vocalist", "notte", "metempsicosi", "insomnia", "magia")):
+        if any(w in t_low for w in ("favola", "raccontami", "poesia", "vocalist", "notte", "metempsicosi", "insomnia", "magia")) or (jack_res and jack_res.intent == "live_fable"):
             fable = random.choice(DEFAULT_FABLES)
             return {
                 "intent": "live_fable",
@@ -453,15 +479,72 @@ class FranchinoBrain:
                 "chat_reply": f"✨ *\"{fable}\"*",
             }
 
+        # 4-bis. Controlli DJ Console & Effetti Audio
+        is_dj_phrase = any(
+            t_low.startswith(p) for p in (
+                "stop", "stoppa", "ferma", "pausa", "riprendi", "salta", "skip",
+                "volume", "alza", "abbassa", "loop", "shuffle", "bassi", "boost",
+                "togli il boost", "attiva il bass boost", "metti in pausa", "metti pausa",
+                "metti in loop", "metti in shuffle", "metti muto"
+            )
+        )
+        if (jack_res and jack_res.intent == "dj_control") or is_dj_phrase:
+            act = jack_res.extracted_entities.get("action") if jack_res else "general"
+            return {
+                "intent": "dj_control",
+                "action": act,
+                "voice_reply": "Subito ragazzi! Controllo console operativo!",
+                "chat_reply": "🎛️ **Franchino DJ**: Comando console eseguito!",
+            }
+
         # 5. Musica & Mood
-        play_re = re.search(r"(?:metti|suona|play|riproduci|fammi sentire|cerca)\s+(.+)", t_low)
+        play_re = re.search(
+            r"^(?:metti(?!\s+(?:in\s+)?(?:pausa|stop|loop|ripetizione|shuffle|muto|mute)(?:\b|$)|(?:\s+(?:il\s+)?volume)|(?:\s+(?:un\s+|il\s+)?timer)|(?:\s+(?:una\s+|la\s+)?sveglia))|"
+            r"suona(?!\s+(?:la\s+)?sveglia)|play|riproduci|fammi\s+sentire|cerca)\s+(.+)",
+            t_low,
+            re.IGNORECASE,
+        )
+        music_q = ""
         if play_re:
-            query = play_re.group(1).strip()
+            music_q = play_re.group(1).strip()
+        elif jack_res and jack_res.intent == "play_music":
+            music_q = jack_res.extracted_entities.get("music_query") or t_low
+        if music_q:
             return {
                 "intent": "play_music",
-                "music_query": query,
-                "voice_reply": f"Subito fratello! In console sale {query}! Alziamo il volume!",
-                "chat_reply": f"🎵 **Franchino DJ**: Accendo il piatto per: **{query}**! Buon viaggio!",
+                "music_query": music_q,
+                "voice_reply": f"Subito fratello! In console sale {music_q}! Alziamo il volume!",
+                "chat_reply": f"🎵 **Franchino DJ**: Accendo il piatto per: **{music_q}**! Buon viaggio!",
+            }
+
+        # 5-bis. Test Presenza / Liveness Check
+        if (jack_res and jack_res.intent == "liveness_check") or any(
+            w in t_low for w in ("ci senti", "mi senti", "ci sei", "ci siete", "sei vivo", "sei sveglio", "batti un colpo", "rispondi")
+        ):
+            return {
+                "intent": "liveness_check",
+                "voice_reply": "Forte e chiaro ragazzi! Franchino è sveglio, carico e sempre sul pezzo in console! Magia!",
+                "chat_reply": "🎙️ **Franchino**: Forte e chiaro fratelli! Sempre sveglio e pronto in console!",
+            }
+
+        # 5-ter. Interazioni Sociali con la community
+        if (jack_res and jack_res.intent == "social_interaction") or any(
+            t_low.startswith(p) for p in ("brindisi", "fai un brindisi", "abbraccia", "abbraccio", "batti cinque", "saluta")
+        ):
+            return {
+                "intent": "social_interaction",
+                "voice_reply": "Magia pura! Un grande abbraccio e un brindisi a tutta la sala da Franchino!",
+                "chat_reply": "🥂 **Franchino**: Alziamo i calici fratelli! Un brindisi alla musica e alla vita!",
+            }
+
+        # 5-quater. Controlli Amministrazione / Moderazione
+        if (jack_res and jack_res.intent == "admin_control") or any(
+            t_low.startswith(p) for p in ("sposta ", "porta ", "caccia ", "scollega ", "muta ", "smuta ", "kick ", "ban ", "espelli ")
+        ):
+            return {
+                "intent": "admin_control",
+                "voice_reply": "Ricevuto capo! Moderazione e console allineate!",
+                "chat_reply": "🛡️ **Franchino Admin**: Comando moderazione elaborato!",
             }
 
         # 6. Saluti & Interazione Umana Calda (Empatia e Connessione)

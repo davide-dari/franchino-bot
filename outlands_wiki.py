@@ -695,6 +695,26 @@ def ensure_wiki_catalog_sync() -> List[str]:
                             _WIKI_CLEAN_TITLES_SET.add(c_row[0].strip())
                 except Exception:
                     pass
+                for d in OUTLANDS_DUNGEONS:
+                    if d.lower() not in ("ocean", "wilderness", "inferno", "time"):
+                        _WIKI_CLEAN_TITLES_SET.add(d.lower())
+                for asp in (
+                    "air aspect", "artisan aspect", "blood aspect", "command aspect",
+                    "death aspect", "discipline aspect", "earth aspect", "eldritch aspect",
+                    "fire aspect", "fortune aspect", "harvest aspect", "holy aspect",
+                    "lyric aspect", "madness aspect", "poison aspect", "shadow aspect",
+                    "void aspect", "war aspect", "water aspect", "aspect core", "aspect tome",
+                    "aspect distillation", "aspect extract", "mastery chain", "taming bestiary"
+                ):
+                    _WIKI_CLEAN_TITLES_SET.add(asp)
+                generic_it_skip = {
+                    "lancia", "casa", "case", "nave", "navi", "barca", "barche",
+                    "tesoro", "curare", "guarire", "lotta", "pugni", "scudo", "classe", "classi",
+                    "legna", "animali", "bestie", "cuccioli"
+                }
+                for it_term in IT_TO_UO_TERMS:
+                    if it_term.lower() not in generic_it_skip:
+                        _WIKI_CLEAN_TITLES_SET.add(it_term.lower())
                 _INDEX_LOADED = True
                 conn.close()
                 logger.info(f"📚 Caricate {len(_ALL_WIKI_TITLES)} pagine ufficiali e {len(_WIKI_CLEAN_TITLES_SET)} termini nel catalogo locale outlands_knowledge.db!")
@@ -2272,21 +2292,171 @@ def get_outlands_help_embed(page_count: int = 2212, creature_count: int = 1301) 
     return embed, voice_answer
 
 
+_GENERIC_SINGLE_WORDS = {
+    "il", "lo", "la", "i", "gli", "le", "un", "uno", "una", "e", "o",
+    "di", "da", "in", "con", "su", "per", "tra", "fra", "del", "della",
+    "dei", "degli", "delle", "al", "alla", "ai", "agli", "a", "che",
+    "chi", "cosa", "come", "dove", "quando", "se", "ma", "anche", "non",
+    "mi", "ti", "si", "ci", "vi", "bird", "bull", "wolf", "ocean",
+    "time", "fire", "eyes", "star", "cold", "tree", "gold", "iron",
+    "wood", "ship", "song", "love", "night", "dark", "light", "house",
+    "city", "moon", "sun", "wind", "water", "bear", "boar", "frog",
+    "goat", "hare", "hawk", "lion", "pig", "rat", "stag", "toad",
+    "cat", "dog", "cow", "snake", "fish", "deer", "sheep", "horse",
+    "blue", "green", "red", "black", "white", "gray", "grey", "free",
+    "play", "stop", "back", "more", "live", "game", "book", "band",
+    "rock", "head", "face", "hand", "mind", "life", "baby", "girl", "boy",
+    "ciao", "salve", "grazie", "prego", "bene", "male", "vero", "falso",
+    "si", "no", "ok", "dai", "ora", "oggi", "ieri", "domani", "stasera",
+    "giorno", "tempo", "dado", "moneta", "volume", "canzone", "musica",
+    "brano", "traccia", "metti", "suona", "porta", "sposta", "ruolo", "stanza",
+    "lancia", "casa", "case", "nave", "navi", "barca", "barche",
+    "tesoro", "curare", "guarire", "lotta", "pugni", "scudo", "classe", "classi",
+    "legna", "animali", "bestie", "cuccioli", "inferno", "wilderness"
+}
+
+_ALLOWED_SHORT_UO_WORDS = {"orc", "uo", "pk", "pvm", "pvp"}
+
+
+def is_outlands_entity(text: str) -> Tuple[bool, str, Optional[str]]:
+    """
+    Riconosce se il testo contiene un'entità chiara di Ultima Online Outlands:
+    creatura, dungeon, item speciale, skill, aspetto o meccanica UO.
+    Restituisce (is_entity, entity_name, entity_type).
+    Esecuzione istantanea O(1) in memoria (<0.02 ms).
+    """
+    if not text:
+        return False, "", None
+
+    t_norm = normalize_uo_speech(text)
+    t_low = t_norm.lower().strip(" ?!.,;:")
+
+    # Se il testo inizia con un comando musicale esplicito e non contiene indicatori Outlands espliciti, scarta
+    if t_low.startswith(("metti ", "suona ", "riproduci ", "play ", "ascolta ")):
+        uo_explicit = (
+            "outlands", "uo", "ultima online", "wiki", "dungeon", "guida",
+            "script", "macro", "aspect", "build", "taming", "bestiario", "boss"
+        )
+        if not any(re.search(r"\b" + re.escape(u) + r"\b", t_low) for u in uo_explicit):
+            return False, "", None
+
+    # Esclusione quesiti smart assistant (timer, dadi, meteo, ora, calcoli, barzellette)
+    smart_assistant_kw = (
+        "che ore sono", "che ora e", "che ora è", "che giorno e", "che giorno è",
+        "che tempo fa", "previsioni meteo", "previsioni del tempo", "previsioni",
+        "quanto fa", "calcola", "radice quadrata",
+        "lancia un dado", "lancia il dado", "tira un dado", "tira il dado",
+        "lancia una moneta", "lancia la moneta", "tira una moneta", "tira la moneta",
+        "testa o croce", "raccontami una barzelletta", "racconta una barzelletta",
+        "dimmi una barzelletta", "quanto manca al timer", "ferma il timer", "ferma la sveglia"
+    )
+    if any(sa in t_low for sa in smart_assistant_kw):
+        uo_explicit = ("outlands", "uo", "ultima online", "dungeon", "aspect", "build", "template")
+        if not any(re.search(r"\b" + re.escape(u) + r"\b", t_low) for u in uo_explicit):
+            return False, "", None
+
+    # Esclusione quesiti sportivi evidenti se non hanno termini Outlands espliciti
+    sport_kw = (
+        "serie a", "serie b", "champions", "premier league", "la liga",
+        "bundesliga", "nba", "eurolega", "formula 1", "f1", "motogp",
+        "gran premio", "chi gioca", "prossima gara", "prossimo gp",
+        "partita", "partite", "calcio", "basket"
+    )
+    if any(s in t_low for s in sport_kw):
+        uo_explicit = (
+            "outlands", "uo", "ultima online", "dungeon", "aspect", "taming",
+            "pet", "pets", "creature", "template", "build", "skill"
+        )
+        if not any(re.search(r"\b" + re.escape(u) + r"\b", t_low) for u in uo_explicit):
+            return False, "", None
+
+    # 1. Controllo Dungeons di Outlands
+    generic_dungeons = {"ocean", "wilderness", "inferno", "time"}
+    uo_dungeon_context = bool(re.search(
+        r"\b(?:dungeon|guida|wiki|boss|mostri|mostro|livello|livelli|loot|spawn|mappa|entrare|trovo|trova|spiegami|info|outlands|uo|ultima\s+online)\b",
+        t_low
+    ))
+    for d in OUTLANDS_DUNGEONS:
+        d_low = d.lower()
+        if d_low in generic_dungeons:
+            if re.search(r"\b(?:dungeon\s+" + re.escape(d_low) + r"|" + re.escape(d_low) + r"\s+dungeon)\b", t_low):
+                return True, d, "dungeon"
+            elif uo_dungeon_context and re.search(r"\b" + re.escape(d_low) + r"\b", t_low):
+                return True, d, "dungeon"
+        else:
+            if re.search(r"\b" + re.escape(d_low) + r"\b", t_low):
+                return True, d, "dungeon"
+    dungeon_shorthands = (
+        "aegis", "cavernam", "darkmire", "petram", "nusero",
+        "ossuary", "pulma", "shadowspire", "mausoleum", "undermountain"
+    )
+    for dh in dungeon_shorthands:
+        if re.search(r"\b" + re.escape(dh) + r"\b", t_low):
+            return True, dh, "dungeon"
+
+    # 2. Controllo Aspetti di Outlands
+    aspect_kw = (
+        "fire aspect", "water aspect", "air aspect", "earth aspect", "void aspect",
+        "shadow aspect", "blood aspect", "poison aspect", "holy aspect", "discipline aspect",
+        "command aspect", "lyric aspect", "madness aspect", "death aspect", "eldritch aspect",
+        "fortune aspect", "artisan aspect", "harvest aspect", "war aspect", "aspect core",
+        "aspect tome", "aspect distillation", "aspect extract", "mastery chain"
+    )
+    for asp in aspect_kw:
+        if asp in t_low:
+            return True, asp, "aspect"
+
+    # 3. Controllo Skill di Outlands
+    generic_skill_terms = {
+        "lancia", "casa", "case", "nave", "navi", "barca", "barche",
+        "tesoro", "curare", "guarire", "lotta", "pugni", "scudo", "classe", "classi",
+        "legna", "animali", "bestie", "cuccioli"
+    }
+    for it_term in IT_TO_UO_TERMS:
+        if it_term in generic_skill_terms:
+            if it_term == "lancia" and re.search(r"\blancia\s+(?:un\s+|il\s+)?dado|\blancia\s+(?:una\s+|la\s+)?moneta", t_low):
+                continue
+            if (
+                t_low == it_term
+                or re.search(r"\b(?:skill|guida|build|macro|outlands|uo|pvm|pvp|funziona|usare|serve|fa|fanno|come|cosa)\s+(?:a|al|alla|il|la|di|del|della|per)?\s*" + re.escape(it_term) + r"\b", t_low)
+                or re.search(r"\b" + re.escape(it_term) + r"\s+(?:skill|build|guide|uo|outlands)\b", t_low)
+            ):
+                return True, it_term, "skill"
+        else:
+            if re.search(r"\b" + re.escape(it_term) + r"\b", t_low):
+                return True, it_term, "skill"
+
+    # 4. Controllo Termini / Frasi Chiave UO
+    uo_phrases = (
+        "animal taming", "taming bestiary", "frenzied ostard", "corpse worm",
+        "bloodwolf", "hellhound", "fire steed", "nightmare", "drake", "ostard",
+        "bestiario", "bestiary", "dexxer", "slayer", "codex", "lockpicking",
+        "mastery chain", "tier list"
+    )
+    for p in uo_phrases:
+        if re.search(r"\b" + re.escape(p) + r"s?\b", t_low):
+            return True, p, "mechanic"
+
+    # 5. N-gram matching contro _WIKI_CLEAN_TITLES_SET (da 4-grammi a 1-grammi)
+    if _WIKI_CLEAN_TITLES_SET:
+        words = t_low.split()
+        for n in range(min(4, len(words)), 0, -1):
+            for i in range(len(words) - n + 1):
+                ngram = " ".join(words[i:i+n])
+                if n > 1 and ngram in _WIKI_CLEAN_TITLES_SET:
+                    return True, ngram, "wiki_page"
+                elif n == 1:
+                    if (ngram in _ALLOWED_SHORT_UO_WORDS or len(ngram) >= 4) and ngram in _WIKI_CLEAN_TITLES_SET and ngram not in _GENERIC_SINGLE_WORDS:
+                        return True, ngram, "creature_or_page"
+
+    return False, "", None
+
+
 def is_wiki_question(command_part: str) -> Tuple[bool, str]:
     """
-    Determina se la frase rivolta a Franchino e' una domanda su UO Outlands.
-    Normalizza foneticamente il parlato italiano e riconosce qualsiasi domanda naturale
-    oppure qualsiasi riferimento alle ~2.212 pagine della Wiki, creature o dungeon!
-
-    Strategia (in ordine di priorita'):
-    1. Normalizzazione fonetica STT italiano -> termini UO
-    2. Esclusione esplicita comandi musicali/admin/DM (con eccezione se dopo il verbo c'e' un termine UO)
-    3. Rilevamento domande aiuto/guida outlands
-    4. DB title-set match: qualsiasi singola parola o coppia di parole che coincide
-       con un clean_title del database wiki (skill, dungeon, aspetti, oggetti, ...)
-    5. Pattern UO (keyword single-word + frasi composte + dungeon)
-    6. Pattern domande naturali in italiano
-    7. Match creature nel DB (solo se il nome e' lungo almeno 8 char)
+    Determina se la frase rivolta a Franchino e' una domanda o menzione di UO Outlands.
+    Normalizza foneticamente il parlato italiano e riconosce qualsiasi richiesta Outlands,
+    creatura, dungeon, skill, aspect o meccanica senza rischiare fallback musicale su YouTube!
     """
     cmd_norm = normalize_uo_speech(command_part)
     cmd = cmd_norm.strip()
@@ -2315,6 +2485,11 @@ def is_wiki_question(command_part: str) -> Tuple[bool, str]:
     if cmd_low.startswith(non_wiki_starts) or cmd_low in (
         "skip", "stop", "pausa", "riprendi", "ripeti", "loop", "shuffle", "coda", "aspetta"
     ):
+        # Eccezione: se dopo 'metti/suona' l'utente chiede esplicitamente la guida/wiki o un dungeon/aspect
+        if any(w in cmd_low for w in ("guida", "wiki", "dungeon", "aspect", "outlands")):
+            is_ent, ent_name, _ = is_outlands_entity(cmd_low)
+            if is_ent:
+                return True, ent_name or cmd
         return False, ""
 
     # Se è una richiesta specifica di script Razor, delega al modulo dedicato razor_scripts
@@ -2326,11 +2501,16 @@ def is_wiki_question(command_part: str) -> Tuple[bool, str]:
     except Exception:
         pass
 
-    # --- 0. Domanda di aiuto/guida outlands ---
+    # 0. Domanda di aiuto/guida outlands
     if is_help_question(cmd_low):
         return True, cmd
 
-    # --- 1. Termini chiave UO Outlands con word boundary (alta priorita') ---
+    # 1. Riconoscimento entità Outlands (dungeon, creature, aspetti, skill, pagine)
+    is_ent, ent_name, ent_type = is_outlands_entity(cmd)
+    if is_ent:
+        return True, cmd
+
+    # 2. Termini chiave UO Outlands con word boundary (alta priorita')
     uo_kw = re.compile(
         r"\b(?:pet|pets|build|builds|template|tamer|taming|dexxer|aspect|slayer|slayers|"
         r"drake|ostard|nightmare|bestiario|bestiary|lockpicking|codex|pvm|pvp)\b",
@@ -2345,11 +2525,10 @@ def is_wiki_question(command_part: str) -> Tuple[bool, str]:
             "outlands", "uo", "ultima online", "wiki", "dungeon", "creature", "mostro",
             "taming", "aspect", "slayer", "dexxer", "bardo", "skill", "tamare", "pet", "pets", "template", "build"
         )
-        if not any(u in cmd_low for u in uo_explicit):
+        if not any(re.search(r"\b" + re.escape(u) + r"\b", cmd_low) for u in uo_explicit):
             return False, ""
 
-    # Escludi quesiti sportivi (match, partite, campionati, motori, tennis, basket)
-    # a meno che non contengano termini inequivocabili di Ultima Online Outlands
+    # Escludi quesiti sportivi a meno che non contengano termini inequivocabili di Ultima Online Outlands
     sport_exclusion_kw = (
         "match", "partita", "partite", "chi gioca", "gioca stasera", "giocano stasera",
         "serie a", "serie b", "champions", "champions league", "premier league", "la liga",
@@ -2361,9 +2540,10 @@ def is_wiki_question(command_part: str) -> Tuple[bool, str]:
             "outlands", "uo", "ultima online", "taming", "aspect", "slayer", "dungeon",
             "dexxer", "bardo", "skill", "tamare", "pet", "pets", "template", "build"
         )
-        if not any(u in cmd_low for u in uo_explicit):
+        if not any(re.search(r"\b" + re.escape(u) + r"\b", cmd_low) for u in uo_explicit):
             return False, ""
 
+    # 3. Frasi tipiche UO
     uo_phrases = (
         "come buildare", "miglior build", "migliori build", "consigliami una build", "che build mi consigli",
         "come si usa", "come usare", "a cosa serve", "a che serve", "cosa fa", "come funziona",
@@ -2376,61 +2556,7 @@ def is_wiki_question(command_part: str) -> Tuple[bool, str]:
     if any(p in cmd_low for p in uo_phrases):
         return True, cmd
 
-    # --- 2. DB title-set match (qualsiasi clean_title della wiki) ---
-    if _WIKI_CLEAN_TITLES_SET:
-        _generic_single_words = {
-            "il", "lo", "la", "i", "gli", "le", "un", "uno", "una", "e", "o",
-            "di", "da", "in", "con", "su", "per", "tra", "fra", "del", "della",
-            "dei", "degli", "delle", "al", "alla", "ai", "agli", "a", "che",
-            "chi", "cosa", "come", "dove", "quando", "se", "ma", "anche", "non",
-            "mi", "ti", "si", "ci", "vi", "bird", "bull", "wolf", "ocean",
-            "time", "fire", "eyes", "star", "cold", "tree", "gold", "iron",
-            "wood", "ship", "song", "love", "night", "dark", "light", "house",
-            "city", "moon", "sun", "wind", "water", "bear", "boar", "frog",
-            "goat", "hare", "hawk", "lion", "pig", "rat", "stag", "toad",
-            "cat", "dog", "cow", "snake", "fish", "deer", "sheep", "horse",
-            "blue", "green", "red", "black", "white", "gray", "grey", "free",
-            "play", "stop", "back", "more", "live", "game", "book", "band",
-            "rock", "head", "face", "hand", "mind", "life", "baby", "girl", "boy",
-        }
-        # Se l'intera frase corrisponde esattamente a un titolo wiki
-        if cmd_low in _WIKI_CLEAN_TITLES_SET and cmd_low not in _generic_single_words:
-            return True, cmd
-
-        words = cmd_low.split()
-        # Se è una parola singola distintiva di almeno 5 caratteri
-        if len(words) == 1 and words[0] in _WIKI_CLEAN_TITLES_SET and words[0] not in _generic_single_words and len(words[0]) >= 5:
-            return True, cmd
-
-        # Match su bigrammi esatti nel DB (es. "aegis keep", "darkmire temple", "fire aspect")
-        for i in range(len(words) - 1):
-            bigram = f"{words[i]} {words[i+1]}"
-            if bigram in _WIKI_CLEAN_TITLES_SET and (words[i] not in _generic_single_words or words[i+1] not in _generic_single_words):
-                return True, cmd
-
-    # --- 3. Dungeons ufficiali di Outlands ---
-    uo_dungeon_full = (
-        "aegis keep", "cavernam", "darkmire temple", "field of souls",
-        "kraul hive", "mount petram", "new player dungeon", "nusero", "omni realm",
-        "ossuary", "pulma", "shadowspire cathedral", "the mausoleum", "tidal tomb",
-        "time dungeon", "undermountain",
-    )
-    if any(df in cmd_low for df in uo_dungeon_full):
-        return True, cmd
-    if re.search(r"\b(?:aegis|cavernam|darkmire|petram|nusero|ossuary|pulma|shadowspire|mausoleum)\b", cmd_low):
-        return True, cmd
-    if re.search(r"\b(?:dungeon\s+(?:inferno|ocean|wilderness|time)|(?:inferno|ocean|wilderness|time)\s+dungeon)\b", cmd_low):
-        return True, cmd
-
-    # --- 4. Termini singoli diretti ---
-    standalone_terms = {
-        "pet", "pets", "taming", "tamer", "build", "template", "drake", "slayer", "dexxer",
-        "aspect", "mastery chain", "codex", "bestiary", "bestiario", "dungeon", "lockpicking",
-    }
-    if cmd_low in standalone_terms or cmd_low in IT_TO_UO_TERMS:
-        return True, cmd
-
-    # --- 5. Pattern domande naturali in italiano ---
+    # 4. Pattern domande naturali in italiano
     question_patterns = (
         r"^(?:wiki|outlands|uo|ultima\s+online)\s+(.+)$",
         r"^(?:cerca\s+sulla\s+wiki|cerca\s+su\s+outlands|chiedi\s+alla\s+wiki)\s+(.+)$",
@@ -2450,18 +2576,18 @@ def is_wiki_question(command_part: str) -> Tuple[bool, str]:
     if "outlands" in cmd_low or "wiki" in cmd_low:
         return True, cmd
 
-    # --- 6. Match diretto sul catalogo completo ---
+    # 5. Match diretto sul catalogo completo
     if _LOWER_TO_TITLE and cmd_low in _LOWER_TO_TITLE:
         return True, cmd
 
-    # --- 7. Controllo SQLite per creature ---
+    # 6. Controllo SQLite per creature
     try:
         conn = get_db_connection()
         if conn:
             c = conn.cursor()
             c.execute("SELECT name FROM creatures WHERE lower(name) = ? OR lower(name) || 's' = ? LIMIT 1", (cmd_low, cmd_low))
             cr = c.fetchone()
-            if not cr and len(cmd_low) >= 8:
+            if not cr and len(cmd_low) >= 8 and " " in cmd_low:
                 c.execute("SELECT name FROM creatures WHERE length(name) >= 8 AND instr(name, ' ') > 0")
                 for r in c.fetchall():
                     c_name = r["name"].lower()
