@@ -244,8 +244,23 @@ def build_commands_embed() -> discord.Embed:
     )
 
     embed.add_field(
+        name="🤖 Suite Assistente Intelligente Vocale (stile Alexa / Google Home)",
+        value=(
+            "Parla a voce con Franchino o usa i comandi slash dedicati:\n"
+            "• **\"Franchino che ore sono?\"** / `/ora` — Ora e data esatta italiana (`Europe/Rome`)\n"
+            "• **\"Franchino che tempo fa a Milano?\"** / `/meteo [citta]` — Previsioni live Open-Meteo\n"
+            "• **\"Franchino metti un timer di 5 minuti per la pasta\"** / `/timer <durata> [motivo]` — Timer asincrono con sveglia 'Driiiin!' e TTS\n"
+            "• **\"Franchino quanto fa 25 per 4?\"** / `/calcola <espressione>` — Calcolatrice vocale e AST di precisione\n"
+            "• **\"Franchino lancia un dado\"** / **\"testa o croce\"** / `/lancia [tipo]` — Sorti, dadi e monete\n"
+            "• **\"Franchino raccontami una barzelletta\"** / `/barzelletta` — Freddure e battute da vocalist della notte"
+        ),
+        inline=False
+    )
+
+    embed.add_field(
         name="💬 Comandi Slash & Chat",
         value=(
+            f"`/ora` • `/meteo [citta]` • `/timer <tempo> [motivo]` • `/calcola <operazione>` • `/lancia [dado|moneta]` • `/barzelletta`\n"
             f"`/cisei` (`/ping`, `/cisenti`, `/seivivo`) • `/play <brano>` • `/pause` • `/resume` • `/skip` • `/stop` • `/queue` • `/volume <1-100>`\n"
             f"`/saluta` • `/bacio` • `/brindisi` • `/abbraccio` • `/carica` • `/auguri` • `/buonanotte` • `/cinque` • `/troll`\n"
             f"`/partita <squadra>` • `/wiki <domanda>` (`/outlands`) • `/effetto <filtro>` • `/suono <effetto>` • `/radio` • `/salva` • `/preferiti` • `/riavvia` • `/comandi`\n"
@@ -695,11 +710,11 @@ class GuildPlayer:
 
         return f"{effect_meta['emoji']} {effect_meta['label']}"
 
-    async def play_sound_effect(self, sfx_key: str) -> str:
+    async def play_sound_effect(self, sfx_key: str, resume: bool = True) -> str:
         """
         Riproduce un effetto sonoro della Soundboard DJ (Trombetta, Sirena, Drop, Rullo di Tamburi, Applausi, ecc.).
         Se una canzone sta suonando, la mette un istante in pausa al secondo esatto, spara l'effetto sonoro
-        e riprende subito la canzone da dove si era fermata!
+        e riprende subito la canzone da dove si era fermata (se resume=True)!
         """
         from sound_effects import SOUNDBOARD_EFFECTS, ensure_sfx_file
 
@@ -755,7 +770,7 @@ class GuildPlayer:
         finally:
             self._playing_tts = False
 
-        if self._interrupted_song and not self._manual_stop:
+        if resume and self._interrupted_song and not self._manual_stop:
             await self.resume_interrupted_song()
 
         return label

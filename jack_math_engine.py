@@ -31,6 +31,7 @@ BETA_SOFTMAX = 3.0
 
 # Intenzioni riconosciute dal bot
 INTENTS = [
+    "smart_assistant",
     "jack_math_boost",
     "razor_script",
     "wiki_guide",
@@ -46,6 +47,14 @@ INTENTS = [
 
 # Corpus documentale per Okapi BM25
 DOMAIN_CORPUS: Dict[str, List[str]] = {
+    "smart_assistant": [
+        "ore", "ora", "orario", "data", "giorno", "oggi", "calendario",
+        "meteo", "previsioni", "tempo", "pioggia", "temperatura", "gradi",
+        "timer", "promemoria", "avvertimi", "avvisami", "sveglia", "minuti", "secondi", "minuto", "secondo",
+        "quarto", "mezzora", "calcola", "quanto", "somma", "moltiplicazione", "divisione", "radice",
+        "dado", "dadi", "moneta", "testa", "croce", "sorte", "scegli",
+        "barzelletta", "barzellette", "battuta", "battute", "ridere", "freddura"
+    ],
     "jack_math_boost": [
         "jack", "matematico", "formula", "matematica", "boost", "algoritmo", "probabilita",
         "scoring", "intelligenza", "bm25", "jaro", "winkler", "arm", "oracle", "hardware",
@@ -69,7 +78,8 @@ DOMAIN_CORPUS: Dict[str, List[str]] = {
         "pet", "pets", "creature", "bestiary", "bestiario", "nightmare", "ostard", "drake",
         "drago", "stat", "stats", "dexxer", "codex", "slayer", "pvm", "pvp", "parry",
         "aegis", "ossuary", "nusero", "sanctuary", "mausoleum", "pulma", "corpserun",
-        "prevalia", "andaria", "cambria", "terramir", "shelter", "newb", "spiegami", "funziona"
+        "prevalia", "andaria", "cambria", "terramir", "shelter", "newb", "spiegami", "funziona",
+        "mastery", "chain", "link", "taming", "dexxer", "bard", "tamer"
     ],
     "sports_match": [
         "partita", "partite", "match", "incontri", "gare", "sfide", "stasera", "oggi",
@@ -118,6 +128,16 @@ DOMAIN_CORPUS: Dict[str, List[str]] = {
 
 # Imperative / action verbs syntactical regexes
 ACTION_SYNTAX_PATTERNS = {
+    "smart_assistant": re.compile(
+        r"^(?:che\s+ore\s+sono|che\s+ora\s+[eè]|orario|dimmi\s+l[\x27\’]?\s*ora|che\s+giorno\s+[eè]|data\s+di\s+oggi|giorno\s+siamo|"
+        r"che\s+tempo\s+fa|che\s+tempo\s+far[aà]|com[\x27\’]?\s*[eè]\s+(?:il\s+)?(?:meteo|tempo)|previsioni\s+(?:del\s+tempo|meteo)|previsioni|meteo|"
+        r"metti\s+(?:un\s+)?timer|imposta\s+(?:un\s+)?timer|timer|promemoria|avvertimi\s+tra|avvisami\s+tra|quanto\s+manca|cancella\s+(?:il\s+)?timer|ferma\s+(?:il\s+)?timer|stop\s+timer|"
+        r"metti\s+(?:la\s+|una\s+)?sveglia|sveglia|cancella\s+(?:la\s+)?sveglia|ferma\s+(?:la\s+)?sveglia|"
+        r"quanto\s+fa|calcola|fai\s+il\s+calcolo|radice\s+(?:quadrata\s+)?di|"
+        r"testa\s+o\s+croce|lancia\s+(?:un\s+|il\s+)?dado|tira\s+(?:un\s+|il\s+)?dado|lancia\s+(?:una\s+|la\s+)?moneta|tira\s+(?:una\s+|la\s+)?moneta|scegli\s+tra|decidi\s+tra|"
+        r"raccontami\s+una\s+barzelletta|racconta\s+una\s+barzelletta|dimmi\s+una\s+barzelletta|dimmi\s+una\s+battuta|fammi\s+ridere|barzelletta|battuta)\b",
+        re.IGNORECASE,
+    ),
     "jack_math_boost": re.compile(
         r"^(?:chiedi\s+a(?:l)?\s+(?:super\s+)?(?:matematico\s+)?jack|super\s+matematico\s+jack|"
         r"formula\s+(?:matematica|di\s+jack)|boost\s+(?:jack|matematico)|"
@@ -132,7 +152,7 @@ ACTION_SYNTAX_PATTERNS = {
         re.IGNORECASE,
     ),
     "wiki_guide": re.compile(
-        r"^(?:wiki|guida|spiegami|come\s+funziona|dove\s+si\s+trova|cosa\s+serve|a\s+cosa\s+serve|come\s+si\s+fa|stats\s+di|info\s+su)\b",
+        r"^(?:cos[\x27\’]?\s*[eè]|cosa\s+[eè]|wiki|guida|spiegami|come\s+funziona|dove\s+si\s+trova|cosa\s+serve|a\s+cosa\s+serve|come\s+si\s+fa|stats\s+di|info\s+su)\b",
         re.IGNORECASE,
     ),
     "sports_match": re.compile(
@@ -140,7 +160,7 @@ ACTION_SYNTAX_PATTERNS = {
         re.IGNORECASE,
     ),
     "dj_control": re.compile(
-        r"^(?:stop|stoppa|ferma|pausa|riprendi|salta|skip|volume|alza|abbassa|riavvia|riavviati|reset|bassi|boost|/boost|togli\s+il\s+boost|attiva\s+il\s+boost)\b",
+        r"^(?:stop(?!\s+(?:timer|sveglia|il\s+timer|la\s+sveglia))|stoppa|ferma(?!\s+(?:il\s+timer|la\s+sveglia|timer|sveglia))|pausa|riprendi|salta|skip|volume|alza|abbassa|riavvia|riavviati|reset|bassi|boost|/boost|togli\s+il\s+boost|attiva\s+il\s+boost)\b",
         re.IGNORECASE,
     ),
     "admin_control": re.compile(
@@ -502,6 +522,9 @@ class JackIntelligenceFormula:
         elif winner_intent == "play_music":
             clean_music = re.sub(r"^(?:metti|suona|play|riproduci|fammi\s+sentire|cerca)\s+", "", clean_cmd, flags=re.IGNORECASE).strip()
             entities["music_query"] = clean_music or clean_cmd
+        elif winner_intent == "smart_assistant":
+            from smart_assistant import detect_smart_assistant_intent
+            entities["subintent"] = detect_smart_assistant_intent(clean_cmd) or "general"
 
         best_comp = components[winner_intent]
         return JackClassificationResult(

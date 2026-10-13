@@ -60,7 +60,7 @@ Regole Fondamentali di Risposta:
 1. Comprendi a fondo l'intenzione dell'utente.
 2. Rispondi SEMPRE in formato JSON valido con questa struttura esatta:
 {
-  "intent": "play_music" | "wiki_guide" | "razor_script" | "sports_match" | "sports_schedule" | "jack_math_boost" | "live_fable" | "song_info" | "chat",
+  "intent": "play_music" | "wiki_guide" | "razor_script" | "sports_match" | "sports_schedule" | "smart_assistant" | "jack_math_boost" | "live_fable" | "song_info" | "chat",
   "music_query": "stringa ottimizzata per ricerca YouTube" (solo se intent è play_music, altrimenti null),
   "wiki_topic": "argomento outlands" (solo se intent è wiki_guide, altrimenti null),
   "skill_slug": "slug della skill outlands" (solo se intent è razor_script, altrimenti null),
@@ -254,6 +254,120 @@ class FranchinoBrain:
                 }
         except Exception as e:
             logger.debug(f"Jack math engine check in fallback: {e}")
+
+        # 0A. Suite Assistente Intelligente (Ora, Meteo, Timer, Calcoli, Dadi/Moneta, Barzellette)
+        try:
+            from smart_assistant import (
+                detect_smart_assistant_intent,
+                get_current_time_info,
+                extract_city_from_query,
+                parse_timer_request,
+                format_duration_italian,
+                is_timer_status_query,
+                is_timer_cancel_query,
+                evaluate_math_expression,
+                flip_coin,
+                roll_dice,
+                choose_option,
+                get_vocalist_joke,
+            )
+
+            smart_type = detect_smart_assistant_intent(t_low)
+            if smart_type == "time":
+                time_data = get_current_time_info(t_low)
+                return {
+                    "intent": "smart_assistant",
+                    "subintent": "time",
+                    "voice_reply": time_data["voice_reply"],
+                    "chat_reply": time_data["chat_reply"],
+                    "embed": time_data.get("embed"),
+                }
+            elif smart_type == "weather":
+                city = extract_city_from_query(t_low)
+                return {
+                    "intent": "smart_assistant",
+                    "subintent": "weather",
+                    "city": city,
+                    "voice_reply": f"Consulto subito i radar meteo per {city} ragazzi! Tenetevi pronti!",
+                    "chat_reply": f"🌤️ **Franchino Meteo**: Controllo le condizioni meteo per **{city}**...",
+                }
+            elif smart_type == "timer":
+                if is_timer_status_query(t_low):
+                    return {
+                        "intent": "smart_assistant",
+                        "subintent": "timer_status",
+                        "voice_reply": "Controllo subito quanto manca ai tuoi timer ragazzi!",
+                        "chat_reply": "⏰ Controllo stato timer...",
+                    }
+                elif is_timer_cancel_query(t_low):
+                    return {
+                        "intent": "smart_assistant",
+                        "subintent": "timer_cancel",
+                        "voice_reply": "Cancello subito i timer attivi fratelli!",
+                        "chat_reply": "⏰ Cancellazione timer...",
+                    }
+                else:
+                    dur, lbl = parse_timer_request(t_low)
+                    dur = dur if dur > 0 else 300
+                    dur_str = format_duration_italian(dur)
+                    return {
+                        "intent": "smart_assistant",
+                        "subintent": "timer_set",
+                        "duration_seconds": dur,
+                        "label": lbl,
+                        "voice_reply": f"Timer di {dur_str} per {lbl} impostato ragazzi! Vi avviso appena scade! Magia!",
+                        "chat_reply": f"⏰ **Timer impostato**: `{dur_str}` per **{lbl}**!",
+                    }
+            elif smart_type == "math":
+                math_res = evaluate_math_expression(t_low)
+                return {
+                    "intent": "smart_assistant",
+                    "subintent": "math",
+                    "voice_reply": math_res["voice_reply"],
+                    "chat_reply": math_res["chat_reply"],
+                    "embed": math_res.get("embed"),
+                }
+            elif smart_type == "random":
+                if "testa o croce" in t_low or "moneta" in t_low:
+                    coin_res = flip_coin()
+                    return {
+                        "intent": "smart_assistant",
+                        "subintent": "random",
+                        "voice_reply": coin_res["voice_reply"],
+                        "chat_reply": coin_res["chat_reply"],
+                        "embed": coin_res.get("embed"),
+                    }
+                elif any(w in t_low for w in ("scegli tra", "decidi tra", "meglio")):
+                    choice_res = choose_option(t_low)
+                    return {
+                        "intent": "smart_assistant",
+                        "subintent": "random",
+                        "voice_reply": choice_res["voice_reply"],
+                        "chat_reply": choice_res["chat_reply"],
+                        "embed": choice_res.get("embed"),
+                    }
+                else:
+                    m_side = re.search(r"dado\s+(?:a|da)\s+(\d+)", t_low)
+                    sides = int(m_side.group(1)) if m_side else 6
+                    dice_res = roll_dice(sides)
+                    return {
+                        "intent": "smart_assistant",
+                        "subintent": "random",
+                        "voice_reply": dice_res["voice_reply"],
+                        "chat_reply": dice_res["chat_reply"],
+                        "embed": dice_res.get("embed"),
+                    }
+            elif smart_type == "joke":
+                joke_res = get_vocalist_joke()
+                return {
+                    "intent": "smart_assistant",
+                    "subintent": "joke",
+                    "voice_reply": joke_res["voice_reply"],
+                    "chat_reply": joke_res["chat_reply"],
+                    "embed": joke_res.get("embed"),
+                }
+        except Exception as e:
+            logger.debug(f"Smart assistant check in fallback: {e}")
 
         # 0B. Script Razor per UO Outlands (outlands.uorazorscripts.com)
         from razor_scripts import is_script_question

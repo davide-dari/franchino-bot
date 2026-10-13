@@ -69,6 +69,11 @@ SOUNDBOARD_EFFECTS: Dict[str, Dict[str, str]] = {
         "emoji": "👎",
         "description": "Sirena grave da risposta sbagliata / buuu",
     },
+    "alarm": {
+        "label": "Campanella Sveglia Timer (Driiiin!)",
+        "emoji": "⏰",
+        "description": "Squillo vivace di sveglia e campanella per il timer",
+    },
 }
 
 
@@ -354,6 +359,19 @@ def ensure_sfx_file(sfx_key: str) -> str:
                 freq = 440.0 + 440.0 * math.exp(-dt * 6.0)
                 phase += 2.0 * math.pi * freq / sr
                 val = math.sin(phase) * math.exp(-dt * 4.5) * 0.80
+            left.append(val)
+            right.append(val)
+
+    elif sfx_key == "alarm":
+        # Sveglia / Campanella timer (Driiiin! Trillo vivace a 1760Hz e 1840Hz con tremolo rapido)
+        dur = 1.35
+        for i in range(int(sr * dur)):
+            t = i / sr
+            env = min(1.0, t * 50.0) * min(1.0, (dur - t) * 4.0)
+            tremolo = 0.5 + 0.5 * math.sin(2.0 * math.pi * 18.0 * t)
+            tone = 0.5 * math.sin(2.0 * math.pi * 1760.0 * t) + 0.5 * math.sin(2.0 * math.pi * 1840.0 * t)
+            harmonic = 0.25 * math.sin(2.0 * math.pi * 3520.0 * t)
+            val = (tone + harmonic) * tremolo * env * 0.75
             left.append(val)
             right.append(val)
 

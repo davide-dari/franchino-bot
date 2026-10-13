@@ -1291,7 +1291,8 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
                 "sposta", "porta", "caccia", "scollega", "muta", "smuta", "ruolo", "timeout", "libera",
                 "pulisci", "cancella", "crea", "chiudi", "apri", "espelli", "banna", "sbanna",
                 "bacia", "abbraccia", "carica", "auguri", "buonanotte", "cinque", "troll",
-                "manda", "invia", "scrivi", "canta", "ascolta", "fammi", "posso", "puoi", "radio", "preferiti"
+                "manda", "invia", "scrivi", "canta", "ascolta", "fammi", "posso", "puoi", "radio", "preferiti",
+                "ora", "orario", "meteo", "tempo", "timer", "promemoria", "sveglia", "calcola", "lancia", "tira", "testa", "barzelletta", "battuta"
             )
         ) or cmd_lower.endswith("?") or bool(re.search(r'\b(?:ti|te|tu|mi|ci|noi|vi)\b', cmd_lower))
 
@@ -1662,6 +1663,258 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
                 )
             )
             return
+
+        # 0C-bis-4. SUITE ASSISTENTE INTELLIGENTE VOCALE (Ora, Meteo, Timer, Calcoli, Dadi/Moneta, Barzellette)
+        from smart_assistant import (
+            detect_smart_assistant_intent,
+            get_current_time_info,
+            get_weather_info,
+            timer_manager,
+            format_duration_italian,
+            parse_timer_request,
+            is_timer_status_query,
+            is_timer_cancel_query,
+            evaluate_math_expression,
+            flip_coin,
+            roll_dice,
+            choose_option,
+            get_vocalist_joke,
+        )
+
+        smart_type = detect_smart_assistant_intent(command_part)
+        if smart_type:
+            logger.info(f"🤖 Suite Assistente Intelligente ({smart_type}) da {user.display_name}: '{command_part}'")
+            if smart_type == "time":
+                time_data = get_current_time_info(command_part)
+                await self._notify_channel(
+                    f"🕒 **{user.display_name}** ha chiesto l'orario a Franchino:",
+                    embed=time_data["embed"],
+                )
+                asyncio.create_task(
+                    self.player.speak_tts(
+                        time_data["voice_reply"],
+                        wait=False,
+                        interrupt_music=True,
+                        keep_paused_after=False,
+                    )
+                )
+                from central_hub import hub
+                asyncio.create_task(
+                    hub.archive_interaction(
+                        user_id=str(getattr(user, "id", 0)),
+                        user_name=user.display_name,
+                        raw_query=command_part,
+                        intent="time_query",
+                        ai_response=time_data["chat_reply"],
+                        voice_summary=time_data["voice_reply"],
+                        channel_name=self.player.text_channel.name if self.player.text_channel else None,
+                        metadata={"time": time_data["time_str"]},
+                    )
+                )
+                return
+
+            elif smart_type == "weather":
+                weather_data = await get_weather_info(command_part)
+                await self._notify_channel(
+                    f"🌤️ **{user.display_name}** ha chiesto le previsioni meteo:",
+                    embed=weather_data["embed"],
+                )
+                asyncio.create_task(
+                    self.player.speak_tts(
+                        weather_data["voice_reply"],
+                        wait=False,
+                        interrupt_music=True,
+                        keep_paused_after=False,
+                    )
+                )
+                from central_hub import hub
+                asyncio.create_task(
+                    hub.archive_interaction(
+                        user_id=str(getattr(user, "id", 0)),
+                        user_name=user.display_name,
+                        raw_query=command_part,
+                        intent="weather_query",
+                        ai_response=weather_data["chat_reply"],
+                        voice_summary=weather_data["voice_reply"],
+                        channel_name=self.player.text_channel.name if self.player.text_channel else None,
+                        metadata={"city": weather_data.get("city")},
+                    )
+                )
+                return
+
+            elif smart_type == "timer":
+                guild_id = self.player.guild.id if self.player.guild else 0
+                if is_timer_status_query(command_part):
+                    timers = timer_manager.get_timers(guild_id, user_id=user.id)
+                    if not timers:
+                        timers = timer_manager.get_timers(guild_id)
+                    if not timers:
+                        ans = f"Non c'è nessun timer attivo al momento {user.display_name}!"
+                        await self._notify_channel(f"⏰ **{user.display_name}**: Nessun timer attivo.")
+                        asyncio.create_task(self.player.speak_tts(ans, wait=False, interrupt_music=True, keep_paused_after=False))
+                    else:
+                        t = timers[0]
+                        rem_str = format_duration_italian(int(t.remaining_seconds))
+                        ans = f"Mancano ancora {rem_str} al timer per {t.label} ragazzi!"
+                        await self._notify_channel(f"⏰ **{user.display_name}**: Mancano ancora **{rem_str}** al timer per **{t.label}**.")
+                        asyncio.create_task(self.player.speak_tts(ans, wait=False, interrupt_music=True, keep_paused_after=False))
+                    return
+
+                elif is_timer_cancel_query(command_part):
+                    cancelled = timer_manager.cancel_timers(guild_id, user_id=user.id)
+                    if not cancelled:
+                        cancelled = timer_manager.cancel_timers(guild_id)
+                    if cancelled:
+                        labels = ", ".join([c.label for c in cancelled])
+                        ans = f"Timer per {labels} cancellato con successo ragazzi!"
+                        await self._notify_channel(f"⏰ **{user.display_name}**: Timer per **{labels}** cancellato.")
+                        asyncio.create_task(self.player.speak_tts(ans, wait=False, interrupt_music=True, keep_paused_after=False))
+                    else:
+                        ans = f"Nessun timer attivo da cancellare {user.display_name}!"
+                        await self._notify_channel(f"⏰ **{user.display_name}**: Nessun timer da cancellare.")
+                        asyncio.create_task(self.player.speak_tts(ans, wait=False, interrupt_music=True, keep_paused_after=False))
+                    return
+
+                else:
+                    duration, label = parse_timer_request(command_part)
+                    if duration <= 0:
+                        duration = 300
+                    dur_str = format_duration_italian(duration)
+                    active_timer = timer_manager.start_timer(
+                        guild_id=guild_id,
+                        channel=self.player.text_channel,
+                        user=user,
+                        duration_seconds=duration,
+                        label=label,
+                        player=self.player,
+                    )
+                    v_msg = f"Timer di {dur_str} per {label} impostato ragazzi! Vi avviso appena scade! Magia!"
+                    embed = discord.Embed(
+                        title="⏰ Timer Impostato da Console",
+                        description=f"🔔 Timer di **{dur_str}** impostato per **{label}**!\n\n🎙️ *\"{v_msg}\"*",
+                        color=0x3498DB,
+                    )
+                    embed.add_field(name="Durata", value=f"`{dur_str}`", inline=True)
+                    embed.add_field(name="Motivo", value=f"`{label}`", inline=True)
+                    embed.add_field(name="Impostato da", value=user.display_name, inline=True)
+                    embed.set_footer(text="Franchino Bot • Timer & Promemoria")
+                    await self._notify_channel(
+                        f"⏰ **{user.display_name}** ha impostato un timer in console:",
+                        embed=embed,
+                    )
+                    asyncio.create_task(
+                        self.player.speak_tts(v_msg, wait=False, interrupt_music=True, keep_paused_after=False)
+                    )
+                    from central_hub import hub
+                    asyncio.create_task(
+                        hub.archive_interaction(
+                            user_id=str(getattr(user, "id", 0)),
+                            user_name=user.display_name,
+                            raw_query=command_part,
+                            intent="timer_set",
+                            ai_response=f"Timer di {dur_str} per {label}",
+                            voice_summary=v_msg,
+                            channel_name=self.player.text_channel.name if self.player.text_channel else None,
+                            metadata={"duration": duration, "label": label},
+                        )
+                    )
+                    return
+
+            elif smart_type == "math":
+                math_data = evaluate_math_expression(command_part)
+                await self._notify_channel(
+                    f"🧮 **{user.display_name}** ha chiesto un calcolo a Franchino:",
+                    embed=math_data["embed"],
+                )
+                asyncio.create_task(
+                    self.player.speak_tts(
+                        math_data["voice_reply"],
+                        wait=False,
+                        interrupt_music=True,
+                        keep_paused_after=False,
+                    )
+                )
+                from central_hub import hub
+                asyncio.create_task(
+                    hub.archive_interaction(
+                        user_id=str(getattr(user, "id", 0)),
+                        user_name=user.display_name,
+                        raw_query=command_part,
+                        intent="math_calc",
+                        ai_response=math_data["chat_reply"],
+                        voice_summary=math_data["voice_reply"],
+                        channel_name=self.player.text_channel.name if self.player.text_channel else None,
+                        metadata={"operation": math_data.get("operation")},
+                    )
+                )
+                return
+
+            elif smart_type == "random":
+                c_low = command_part.lower()
+                if "testa o croce" in c_low or "moneta" in c_low:
+                    rand_data = flip_coin()
+                elif any(w in c_low for w in ("scegli tra", "decidi tra", "meglio")):
+                    rand_data = choose_option(command_part)
+                else:
+                    m_sides = re.search(r"dado\s+(?:a|da)\s+(\d+)", c_low)
+                    sides = int(m_sides.group(1)) if m_sides else 6
+                    rand_data = roll_dice(sides)
+
+                await self._notify_channel(
+                    f"🎲 **{user.display_name}** ha consultato la sorte di Franchino:",
+                    embed=rand_data["embed"],
+                )
+                asyncio.create_task(
+                    self.player.speak_tts(
+                        rand_data["voice_reply"],
+                        wait=False,
+                        interrupt_music=True,
+                        keep_paused_after=False,
+                    )
+                )
+                from central_hub import hub
+                asyncio.create_task(
+                    hub.archive_interaction(
+                        user_id=str(getattr(user, "id", 0)),
+                        user_name=user.display_name,
+                        raw_query=command_part,
+                        intent="random_choice",
+                        ai_response=rand_data["chat_reply"],
+                        voice_summary=rand_data["voice_reply"],
+                        channel_name=self.player.text_channel.name if self.player.text_channel else None,
+                        metadata={"result": str(rand_data.get("result", ""))},
+                    )
+                )
+                return
+
+            elif smart_type == "joke":
+                joke_data = get_vocalist_joke()
+                await self._notify_channel(
+                    f"😄 **{user.display_name}** ha chiesto una battuta a Franchino:",
+                    embed=joke_data["embed"],
+                )
+                asyncio.create_task(
+                    self.player.speak_tts(
+                        joke_data["voice_reply"],
+                        wait=False,
+                        interrupt_music=True,
+                        keep_paused_after=False,
+                    )
+                )
+                from central_hub import hub
+                asyncio.create_task(
+                    hub.archive_interaction(
+                        user_id=str(getattr(user, "id", 0)),
+                        user_name=user.display_name,
+                        raw_query=command_part,
+                        intent="joke_vocalist",
+                        ai_response=joke_data["chat_reply"],
+                        voice_summary=joke_data["voice_reply"],
+                        channel_name=self.player.text_channel.name if self.player.text_channel else None,
+                        metadata={"joke": joke_data.get("question")},
+                    )
+                )
+                return
 
         # 0C-ter. Domande AIUTO/GUIDA su UO OUTLANDS ("cosa puoi fare su outlands", "aiuto outlands", ecc.)
         from outlands_wiki import is_help_question, is_wiki_question, query_outlands_wiki, get_outlands_help_embed
@@ -2481,6 +2734,142 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
             )
             return True
 
+        if intent == "smart_assistant":
+            from smart_assistant import (
+                get_current_time_info,
+                get_weather_info,
+                evaluate_math_expression,
+                flip_coin,
+                roll_dice,
+                choose_option,
+                get_vocalist_joke,
+                timer_manager,
+                format_duration_italian,
+            )
+            sub = decision.get("subintent", "general")
+            if sub == "time":
+                time_data = get_current_time_info(command_part)
+                await self._notify_channel(
+                    f"🕒 **{user.display_name}** ha chiesto l'orario a Franchino:",
+                    embed=time_data["embed"],
+                )
+                asyncio.create_task(
+                    self.player.speak_tts(time_data["voice_reply"], wait=False, interrupt_music=True, keep_paused_after=False)
+                )
+                return True
+            elif sub == "weather":
+                city = decision.get("city") or command_part
+                weather_data = await get_weather_info(city)
+                await self._notify_channel(
+                    f"🌤️ **{user.display_name}** ha chiesto il meteo a Franchino:",
+                    embed=weather_data["embed"],
+                )
+                asyncio.create_task(
+                    self.player.speak_tts(weather_data["voice_reply"], wait=False, interrupt_music=True, keep_paused_after=False)
+                )
+                return True
+            elif sub == "math":
+                math_data = evaluate_math_expression(command_part)
+                await self._notify_channel(
+                    f"🧮 **{user.display_name}** ha chiesto un calcolo a Franchino:",
+                    embed=math_data["embed"],
+                )
+                asyncio.create_task(
+                    self.player.speak_tts(math_data["voice_reply"], wait=False, interrupt_music=True, keep_paused_after=False)
+                )
+                return True
+            elif sub == "joke":
+                joke_data = get_vocalist_joke()
+                await self._notify_channel(
+                    f"😄 **{user.display_name}** ha chiesto una battuta a Franchino:",
+                    embed=joke_data["embed"],
+                )
+                asyncio.create_task(
+                    self.player.speak_tts(joke_data["voice_reply"], wait=False, interrupt_music=True, keep_paused_after=False)
+                )
+                return True
+            elif sub == "timer_set":
+                dur = decision.get("duration_seconds", 300)
+                lbl = decision.get("label", "Timer")
+                dur_str = format_duration_italian(dur)
+                guild_id = self.player.guild.id if self.player.guild else 0
+                timer_manager.start_timer(
+                    guild_id=guild_id,
+                    channel=self.player.text_channel,
+                    user=user,
+                    duration_seconds=dur,
+                    label=lbl,
+                    player=self.player,
+                )
+                v_msg = f"Timer di {dur_str} per {lbl} impostato ragazzi! Vi avviso appena scade! Magia!"
+                embed = discord.Embed(
+                    title="⏰ Timer Impostato da Console",
+                    description=f"🔔 Timer di **{dur_str}** impostato per **{lbl}**!\n\n🎙️ *\"{v_msg}\"*",
+                    color=0x3498DB,
+                )
+                await self._notify_channel(f"⏰ **{user.display_name}** ha impostato un timer in console:", embed=embed)
+                asyncio.create_task(self.player.speak_tts(v_msg, wait=False, interrupt_music=True, keep_paused_after=False))
+                return True
+            elif sub == "timer_status":
+                guild_id = self.player.guild.id if self.player.guild else 0
+                timers = timer_manager.get_timers(guild_id, user_id=user.id)
+                if not timers:
+                    timers = timer_manager.get_timers(guild_id)
+                if not timers:
+                    ans = f"Non c'è nessun timer attivo al momento {user.display_name}!"
+                    await self._notify_channel(f"⏰ **{user.display_name}**: Nessun timer attivo.")
+                    asyncio.create_task(self.player.speak_tts(ans, wait=False, interrupt_music=True, keep_paused_after=False))
+                else:
+                    t = timers[0]
+                    rem_str = format_duration_italian(int(t.remaining_seconds))
+                    ans = f"Mancano ancora {rem_str} al timer per {t.label} ragazzi!"
+                    await self._notify_channel(f"⏰ **{user.display_name}**: Mancano ancora **{rem_str}** al timer per **{t.label}**.")
+                    asyncio.create_task(self.player.speak_tts(ans, wait=False, interrupt_music=True, keep_paused_after=False))
+                return True
+            elif sub == "timer_cancel":
+                guild_id = self.player.guild.id if self.player.guild else 0
+                cancelled = timer_manager.cancel_timers(guild_id, user_id=user.id)
+                if not cancelled:
+                    cancelled = timer_manager.cancel_timers(guild_id)
+                if cancelled:
+                    labels = ", ".join([c.label for c in cancelled])
+                    ans = f"Timer per {labels} cancellato con successo ragazzi!"
+                    await self._notify_channel(f"⏰ **{user.display_name}**: Timer per **{labels}** cancellato.")
+                    asyncio.create_task(self.player.speak_tts(ans, wait=False, interrupt_music=True, keep_paused_after=False))
+                else:
+                    ans = f"Nessun timer attivo da cancellare {user.display_name}!"
+                    await self._notify_channel(f"⏰ **{user.display_name}**: Nessun timer da cancellare.")
+                    asyncio.create_task(self.player.speak_tts(ans, wait=False, interrupt_music=True, keep_paused_after=False))
+                return True
+            elif sub == "random":
+                c_low = command_part.lower()
+                if "testa o croce" in c_low or "moneta" in c_low:
+                    rand_data = flip_coin()
+                elif any(w in c_low for w in ("scegli tra", "decidi tra", "meglio")):
+                    rand_data = choose_option(command_part)
+                else:
+                    m_sides = re.search(r"dado\s+(?:a|da)\s+(\d+)", c_low)
+                    sides = int(m_sides.group(1)) if m_sides else 6
+                    rand_data = roll_dice(sides)
+                await self._notify_channel(
+                    f"🎲 **{user.display_name}** ha consultato la sorte di Franchino:",
+                    embed=rand_data["embed"],
+                )
+                asyncio.create_task(
+                    self.player.speak_tts(rand_data["voice_reply"], wait=False, interrupt_music=True, keep_paused_after=False)
+                )
+                return True
+            else:
+                voice_msg = decision.get("voice_reply") or "Magia ragazzi! Assistente pronto in console!"
+                chat_msg = decision.get("chat_reply") or voice_msg
+                emb = decision.get("embed")
+                if emb:
+                    await self._notify_channel(f"🎙️ **Franchino**: {chat_msg}", embed=emb)
+                else:
+                    await self._notify_channel(f"🎙️ **Franchino**: {chat_msg}")
+                asyncio.create_task(self.player.speak_tts(voice_msg, wait=False, interrupt_music=True, keep_paused_after=False))
+                return True
+
         if intent == "razor_script":
             from razor_scripts import build_razor_scripts_response
             skill_target = decision.get("skill_slug") or "lista"
@@ -2652,9 +3041,15 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
             self._dm_timeout_tasks.clear()
         if hasattr(self, "_pending_dm"):
             self._pending_dm.clear()
-        self._buffers.clear()
-        self._preroll_buffers.clear()
-        self._last_packet_time.clear()
-        self._users.clear()
-        self._user_cache.clear()
-        self._pending_wake.clear()
+        if hasattr(self, "_buffers"):
+            self._buffers.clear()
+        if hasattr(self, "_preroll_buffers"):
+            self._preroll_buffers.clear()
+        if hasattr(self, "_last_packet_time"):
+            self._last_packet_time.clear()
+        if hasattr(self, "_users"):
+            self._users.clear()
+        if hasattr(self, "_user_cache"):
+            self._user_cache.clear()
+        if hasattr(self, "_pending_wake"):
+            self._pending_wake.clear()

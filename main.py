@@ -788,7 +788,7 @@ async def effetto_cmd(
 @bot.hybrid_command(
     name="boost",
     aliases=["bassboost"],
-    description="Attiva/disattiva Bass Boost DJ oppure consulta la Formula Matematica Jack (/boost jack)"
+    description="Attiva o regola il Bass Boost DJ (off, low, medium, high)"
 )
 async def boost_cmd(ctx: commands.Context, modo: Optional[str] = None):
     await ctx.defer()
@@ -843,13 +843,13 @@ async def boost_cmd(ctx: commands.Context, modo: Optional[str] = None):
 @bot.hybrid_command(
     name="suono",
     aliases=["sfx", "soundboard"],
-    description="Riproduce subito uno dei 12 effetti sonori della Soundboard DJ nel canale vocale"
+    description="Riproduce subito uno dei 13 effetti sonori della Soundboard DJ nel canale vocale"
 )
 async def suono_cmd(
     ctx: commands.Context,
     suono: Literal[
         "airhorn", "siren", "drop", "drumroll", "applause", "fail",
-        "victory", "laser", "censor", "whistle", "laugh", "booo"
+        "victory", "laser", "censor", "whistle", "laugh", "booo", "alarm"
     ] = "airhorn"
 ):
     vc = await ensure_voice_connection(ctx)
@@ -1542,55 +1542,182 @@ async def favola_live_cmd(ctx: commands.Context, *, tema: Optional[str] = None):
 
 
 @bot.hybrid_command(
-    name="jack",
-    aliases=["formula", "matematico_jack", "jack_formula"],
-    description="Mostra la formula matematica di intelligenza del Super Matematico Jack e la telemetria Oracle ARM"
+    name="ora",
+    aliases=["orario", "data"],
+    description="Mostra l'ora e la data esatta (fuso Roma Europe/Rome) con stile e voce da vocalist"
 )
-async def jack_cmd(ctx: commands.Context):
-    """Mostra la formula analitica del Super Matematico Jack e lo stato delle risorse server ARM."""
+async def ora_cmd(ctx: commands.Context):
+    """Mostra l'orario e la data corrente italiana con animazione vocalist."""
     await ctx.defer()
-    from jack_math_engine import jack_engine, hardware_optimizer
-    telem = hardware_optimizer.get_hardware_telemetry()
-    embed = discord.Embed(
-        title="🧠 Formula Matematica Jack & Ottimizzazione Hardware ARM",
-        description=(
-            "Franchino opera con il motore di intelligenza analitica **Super Matematico Jack**:\n\n"
-            "$$\\mathcal{S}(\\text{Intent}, q) = w_{\\text{wake}} \\cdot \\phi_{\\text{wake}} + "
-            "w_{\\text{phonetic}} \\cdot \\sigma_{\\text{jaro}} + w_{\\text{domain}} \\cdot \\text{BM25}(q, D) + "
-            "w_{\\text{action}} \\cdot \\alpha_{\\text{syntax}} - \\lambda_{\\text{noise}}$$\n\n"
-            "**Distribuzione Probabilistica Softmax:**\n"
-            "$$\\mathcal{P}(\\text{Intent} \\mid q) = \\frac{e^{\\beta \\cdot \\mathcal{S}(\\text{Intent}, q)}}{\\sum_k e^{\\beta \\cdot \\mathcal{S}(k, q)}}$$"
-        ),
-        color=0xF1C40F,
-    )
-    embed.add_field(
-        name="⚖️ Pesi & Parametri Jack",
-        value=(
-            "• $w_{\\text{wake}}$: `0.15` (Riconoscimento vocale diretto)\n"
-            "• $w_{\\text{phonetic}}$: `0.25` (Jaro-Winkler tolleranza STT)\n"
-            "• $w_{\\text{domain}}$: `0.35` (Okapi BM25 pertinenza ontologica)\n"
-            "• $w_{\\text{action}}$: `0.25` (Sintassi imperativa grammaticale)\n"
-            "• $\\beta$ Softmax: `3.0` (Contrasto netto decisionale)"
-        ),
-        inline=False,
-    )
-    embed.add_field(
-        name="☁️ Ottimizzazione Hardware Server Oracle ARM",
-        value=(
-            f"• **Architettura:** `{telem['server_arch']}`\n"
-            f"• **vCPU:** Target `2 vCPU ARM` (Disponibili: `{telem['cpu_cores_available']}`)\n"
-            f"• **RAM Sistema:** Target `12 GB` (Processo Python: `{telem['process_ram_mb']} MB`)\n"
-            f"• **Disco:** `{telem['disk_used_gb']} GB` usati su `{telem['disk_total_gb']} GB` max ({telem['disk_free_gb']} GB liberi)\n"
-            f"• **Efficienza Risorse:** `{telem['target_efficiency']}`"
-        ),
-        inline=False,
-    )
-    embed.set_footer(text="Franchino Bot • Super Matematico Jack Intelligence")
-    voice_jack = "Magia ragazzi! Ecco la formula del super matematico Jack! Ho ottimizzato la console con Okapi BM25 e Jaro-Winkler per 2 core ARM!"
-    await ctx.send(content=f"🧠 **{ctx.author.display_name}**, ecco la formula del **Super Matematico Jack**:", embed=embed)
+    from smart_assistant import get_current_time_info
+    time_info = get_current_time_info()
+    await ctx.send(embed=time_info["embed"])
     player = player_manager.get_player(ctx.guild)
     if player.voice_client and player.voice_client.is_connected():
-        asyncio.create_task(player.speak_tts(voice_jack, wait=False, interrupt_music=True, keep_paused_after=False))
+        asyncio.create_task(player.speak_tts(time_info["voice_reply"], wait=False, interrupt_music=True, keep_paused_after=False))
+
+
+@bot.hybrid_command(
+    name="meteo",
+    aliases=["tempo", "previsioni"],
+    description="Previsioni meteo in tempo reale via Open-Meteo per qualsiasi città"
+)
+async def meteo_cmd(ctx: commands.Context, citta: Optional[str] = "Roma"):
+    """Consulta le condizioni meteo attuali e previsioni del giorno per la città indicata."""
+    await ctx.defer()
+    from smart_assistant import get_weather_info
+    target_city = (citta or "Roma").strip()
+    w_data = await get_weather_info(target_city)
+    await ctx.send(embed=w_data["embed"])
+    player = player_manager.get_player(ctx.guild)
+    if player.voice_client and player.voice_client.is_connected():
+        asyncio.create_task(player.speak_tts(w_data["voice_reply"], wait=False, interrupt_music=True, keep_paused_after=False))
+
+
+@bot.hybrid_command(
+    name="timer",
+    aliases=["promemoria", "sveglia"],
+    description="Imposta un timer vocale asincrono (es. '5m', '10 minuti per la pasta', 'status', 'cancella')"
+)
+async def timer_cmd(ctx: commands.Context, durata: str, *, motivo: Optional[str] = None):
+    """Gestisce timer e promemoria con squillo sveglia e annuncio vocale da vocalist."""
+    await ctx.defer()
+    from smart_assistant import (
+        timer_manager,
+        format_duration_italian,
+        parse_timer_request,
+    )
+    player = player_manager.get_player(ctx.guild)
+    clean_d = durata.strip().lower()
+
+    if clean_d in ("status", "stato", "info", "tempo"):
+        timers = timer_manager.get_timers(ctx.guild.id, user_id=ctx.author.id)
+        if not timers:
+            timers = timer_manager.get_timers(ctx.guild.id)
+        if not timers:
+            msg = f"Nessun timer attivo al momento, {ctx.author.display_name}!"
+            await ctx.send(f"⏰ {msg}")
+            if player.voice_client and player.voice_client.is_connected():
+                asyncio.create_task(player.speak_tts(msg, wait=False, interrupt_music=True))
+        else:
+            t = timers[0]
+            rem_str = format_duration_italian(int(t.remaining_seconds))
+            msg = f"Mancano ancora {rem_str} al timer per '{t.label}', {ctx.author.display_name}!"
+            embed = discord.Embed(
+                title="⏰ Stato Timer Attivo",
+                description=f"⏳ Mancano ancora **{rem_str}** al timer per **{t.label}**!",
+                color=0x3498DB,
+            )
+            embed.add_field(name="Durata iniziale", value=format_duration_italian(t.duration_seconds), inline=True)
+            embed.add_field(name="Tempo residuo", value=rem_str, inline=True)
+            embed.add_field(name="Impostato da", value=t.user_name, inline=True)
+            await ctx.send(embed=embed)
+            if player.voice_client and player.voice_client.is_connected():
+                asyncio.create_task(player.speak_tts(msg, wait=False, interrupt_music=True))
+        return
+
+    if clean_d in ("cancella", "stop", "elimina", "annulla", "clear", "cancel"):
+        cancelled = timer_manager.cancel_timers(ctx.guild.id, user_id=ctx.author.id)
+        if not cancelled:
+            cancelled = timer_manager.cancel_timers(ctx.guild.id)
+        if cancelled:
+            names = ", ".join([c.label for c in cancelled])
+            msg = f"Timer per '{names}' cancellato con successo ragazzi!"
+            await ctx.send(f"⏰ {msg}")
+            if player.voice_client and player.voice_client.is_connected():
+                asyncio.create_task(player.speak_tts(msg, wait=False, interrupt_music=True))
+        else:
+            msg = "Nessun timer attivo da cancellare ragazzi!"
+            await ctx.send(f"⏰ {msg}")
+            if player.voice_client and player.voice_client.is_connected():
+                asyncio.create_task(player.speak_tts(msg, wait=False, interrupt_music=True))
+        return
+
+    full_text = f"{durata} {motivo or ''}".strip()
+    seconds, label = parse_timer_request(full_text)
+    if seconds <= 0:
+        seconds = 300
+    if motivo:
+        cleaned_m = re.sub(r"^(?:per|di|a|che|il|la|lo|i|gli|le|l['’])\s+", "", motivo.strip()).strip()
+        label = cleaned_m if cleaned_m else motivo.strip()
+
+    dur_str = format_duration_italian(seconds)
+    timer_manager.start_timer(
+        guild_id=ctx.guild.id,
+        channel=ctx.channel,
+        user=ctx.author,
+        duration_seconds=seconds,
+        label=label,
+        player=player,
+    )
+    v_msg = f"Timer di {dur_str} per {label} impostato ragazzi! Vi avviso appena scade! Magia!"
+    embed = discord.Embed(
+        title="⏰ Timer Impostato",
+        description=f"🔔 Timer impostato per **{label}**!\n\n🎙️ *\"{v_msg}\"*",
+        color=0x3498DB,
+    )
+    embed.add_field(name="Durata", value=f"`{dur_str}`", inline=True)
+    embed.add_field(name="Motivo", value=f"`{label}`", inline=True)
+    embed.add_field(name="Autore", value=ctx.author.display_name, inline=True)
+    embed.set_footer(text="Franchino Bot • Timer & Promemoria")
+    await ctx.send(embed=embed)
+    if player.voice_client and player.voice_client.is_connected():
+        asyncio.create_task(player.speak_tts(v_msg, wait=False, interrupt_music=True, keep_paused_after=False))
+
+
+@bot.hybrid_command(
+    name="calcola",
+    aliases=["calc", "calcolatrice"],
+    description="Esegue calcoli matematici con il motore analitico di Franchino (es. '25 * 4', '150 / 3', 'radice di 16')"
+)
+async def calcola_cmd(ctx: commands.Context, *, operazione: str):
+    """Calcola un'espressione matematica in sicurezza e restituisce il risultato vocale e chat."""
+    await ctx.defer()
+    from smart_assistant import evaluate_math_expression
+    m_data = evaluate_math_expression(operazione)
+    await ctx.send(embed=m_data["embed"])
+    player = player_manager.get_player(ctx.guild)
+    if player.voice_client and player.voice_client.is_connected():
+        asyncio.create_task(player.speak_tts(m_data["voice_reply"], wait=False, interrupt_music=True, keep_paused_after=False))
+
+
+@bot.hybrid_command(
+    name="lancia",
+    aliases=["dado", "moneta", "sorte", "roll"],
+    description="Lancia una moneta (testa o croce) o un dado da gioco (es. dado, moneta, d20, d100)"
+)
+async def lancia_cmd(ctx: commands.Context, tipo: Optional[str] = "dado"):
+    """Interroga la sorte con testa o croce o il lancio di dadi numerici."""
+    await ctx.defer()
+    from smart_assistant import flip_coin, roll_dice
+    clean_t = (tipo or "dado").lower().strip()
+    if any(w in clean_t for w in ("moneta", "coin", "testa", "croce")):
+        res = flip_coin()
+    else:
+        m = re.search(r"(\d+)", clean_t)
+        sides = int(m.group(1)) if m else 6
+        res = roll_dice(sides)
+
+    await ctx.send(embed=res["embed"])
+    player = player_manager.get_player(ctx.guild)
+    if player.voice_client and player.voice_client.is_connected():
+        asyncio.create_task(player.speak_tts(res["voice_reply"], wait=False, interrupt_music=True, keep_paused_after=False))
+
+
+@bot.hybrid_command(
+    name="barzelletta",
+    aliases=["battuta", "ridere"],
+    description="Racconta una barzelletta o battuta divertente da vocalist della notte"
+)
+async def barzelletta_cmd(ctx: commands.Context):
+    """Franchino intrattiene la compagnia con una battuta carica di buonumore."""
+    await ctx.defer()
+    from smart_assistant import get_vocalist_joke
+    j_data = get_vocalist_joke()
+    await ctx.send(embed=j_data["embed"])
+    player = player_manager.get_player(ctx.guild)
+    if player.voice_client and player.voice_client.is_connected():
+        asyncio.create_task(player.speak_tts(j_data["voice_reply"], wait=False, interrupt_music=True, keep_paused_after=False))
 
 
 @bot.event
