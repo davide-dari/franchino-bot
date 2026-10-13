@@ -2303,7 +2303,7 @@ def is_wiki_question(command_part: str) -> Tuple[bool, str]:
         "crea stanza", "crea canale", "chiudi la stanza", "apri la stanza",
         "espelli ", "banna ", "sbanna ", "trombetta", "sirena", "applausi",
         "rullo", "fail", "vittoria", "laser", "censura", "fischio", "risata",
-        "buuu", "bass boost", "mega bass", "nightcore", "slowed", "8d", "karaoke",
+        "buuu", "bass boost", "bassboost", "boost", "/boost", "boosta", "mega bass", "nightcore", "slowed", "8d", "karaoke",
         "vaporwave", "scoiattolo", "voce profonda", "normale", "ripeti", "loop",
         "shuffle", "mescola", "mischia", "coda", "mostra la coda",
         "chi canta", "canzone precedente", "torna indietro", "aspetta",
@@ -2335,6 +2335,10 @@ def is_wiki_question(command_part: str) -> Tuple[bool, str]:
     )
     if uo_kw.search(cmd_low):
         return True, cmd
+
+    # Escludi quesiti su boost audio / discord server boost a meno che non contengano termini UO Outlands
+    if any(b in cmd_low for b in ("boost", "/boost", "bassboost", "bass boost")):
+        return False, ""
 
     uo_phrases = (
         "come buildare", "miglior build", "migliori build", "consigliami una build", "che build mi consigli",

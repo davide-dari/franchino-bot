@@ -742,6 +742,19 @@ async def effetto_cmd(
 
 
 @bot.hybrid_command(
+    name="boost",
+    aliases=["bassboost"],
+    description="Attiva o disattiva al volo l'effetto DJ Bass Boost (Club) sulla musica in corso"
+)
+async def boost_cmd(ctx: commands.Context):
+    await ctx.defer()
+    player = player_manager.get_player(ctx.guild)
+    target = "off" if player.audio_effect == "bassboost" else "bassboost"
+    label = await player.set_effect(target)
+    await ctx.send(f"🎛️ Effetto Bass Boost impostato su: **{label}**!")
+
+
+@bot.hybrid_command(
     name="suono",
     aliases=["sfx", "soundboard"],
     description="Riproduce subito uno dei 12 effetti sonori della Soundboard DJ nel canale vocale"
