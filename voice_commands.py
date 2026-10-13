@@ -6,7 +6,7 @@ import logging
 import random
 import re
 import time
-from typing import Dict, Optional, TYPE_CHECKING
+from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
 
 import discord
 from discord.ext import voice_recv
@@ -1354,81 +1354,71 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
                 asyncio.create_task(self.player.speak_tts("Non c'è musica attiva al momento ragazzi!"))
             return
 
-        # 0B-sexies. Ricerca Partita / Streaming Live Sport (MadPlay77)
-        # Esempi: "Franchino cerca la partita del Milan", "Franchino dove fanno vedere la Juventus", "Franchino streaming NBA"
-        sports_match = re.search(
+        # 0B-sexies. Ricerca Sport, Palinsesto & Partite di Stasera (Calcio, Basket, F1, MotoGP, Tennis, ecc.)
+        # Esempi: "Franchino mi dici i match di stasera?", "Franchino chi gioca stasera?", "Franchino chi gioca in Serie A?",
+        # "Franchino prossima gara F1", "Franchino streaming NBA", "Franchino cerca la partita del Milan"
+        sport_detected = False
+        sport_query = ""
+
+        # Match ricerca puntuale team / streaming
+        specific_match = re.search(
             r"(?:cerca\s+(?:la\s+)?partita|dove\s+(?:fanno\s+vedere|posso\s+vedere|vedere|trasmettono)|streaming\s+(?:della\s+)?partita|trova\s+(?:la\s+)?partita|partita\s+(?:del|della|di|dei)|streaming\s+di|guarda\s+(?:la\s+)?partita)\s+(.+)",
             cmd_lower
         )
-        if not sports_match and any(w in cmd_lower for w in ("partita", "streaming", "formula 1", "motogp", "f1", "nba", "chi gioca", "partite live")):
-            sports_kw_match = re.search(r"(?:partita|streaming|evento|sport)\s+(?:del|della|di|per)?\s*(.+)", cmd_lower)
-            if sports_kw_match:
-                sports_match = sports_kw_match
+        if specific_match:
+            sport_detected = True
+            sport_query = specific_match.group(1).strip(" ,.!?:;-")
+        else:
+            # Pattern palinsesto, oggi/stasera, leghe e motori
+            schedule_patterns = (
+                r"(?:mi\s+dici\s+(?:i\s+|le\s+)?|dimmi\s+(?:i\s+|le\s+)?|cosa\s+c['’]?\s*e\s+|ci\s+sono\s+)?(?:quali|che)?\s*(?:match|partite|incontri|gare|sfide)\s+(?:ci\s+sono\s+)?(?:di\s+)?(?:stasera|oggi)(?:\s+(?:a|in|nella)\s+[a-zA-Z0-9_]+)*",
+                r"chi\s+gioca(?:\s+stasera|\s+oggi)?(?:\s+(?:a|in|nella)\s+[a-zA-Z0-9_]+)*",
+                r"chi\s+scende\s+in\s+campo(?:\s+stasera|\s+oggi)?",
+                r"(?:quali|che)\s+(?:partite|match|incontri|gare)\s+(?:ci\s+sono|fanno|trasmettono)",
+                r"(?:partite|match|incontri)\s+(?:di\s+)?(?:champions|serie\s+a|serie\s+b|premier|la\s+liga|liga|bundesliga|nba|basket|tennis|eurolega|serie\s+a\s+basket)(?:\s+stasera|\s+oggi)?",
+                r"(?:partite|match|incontri)\s+(?:di\s+)?(?:oggi|stasera)",
+                r"(?:prossima\s+gara|prossimo\s+gp|prossimo\s+gran\s+premio|quando\s+corre|orari\s+(?:della\s+)?|quando\s+c['’]?\s*e\s+(?:il\s+)?gp)\s*(?:formula\s*1|f1|motogp|moto\s*gp|motori|ferrari)?",
+                r"(?:quando\s+gareggia|quando\s+corrono)\s+(?:la\s+)?(?:f1|formula\s*1|motogp|ferrari)",
+                r"(?:palinsesto|partite\s+live|match\s+live|sport\s+live|palinsesto\s+sportivo)",
+            )
+            for spat in schedule_patterns:
+                if re.search(spat, cmd_lower):
+                    sport_detected = True
+                    sport_query = cmd_lower
+                    break
 
-        if sports_match:
-            sport_query = sports_match.group(1).strip(" ,.!?:;-")
+            if not sport_detected and any(w in cmd_lower for w in ("partita", "streaming", "formula 1", "motogp", "f1", "nba", "chi gioca", "partite live")):
+                sports_kw_match = re.search(r"(?:partita|streaming|evento|sport)\s+(?:del|della|di|per)?\s*(.+)", cmd_lower)
+                if sports_kw_match:
+                    sport_detected = True
+                    sport_query = sports_kw_match.group(1).strip(" ,.!?:;-")
+
+        if sport_detected and sport_query:
             from sports_scraper import sports_scraper
             from central_hub import hub
 
             res = await sports_scraper.search_event(sport_query)
-            if res.get("found"):
-                match = res["best_match"]
-                embed = discord.Embed(
-                    title=f"🏆 {match['title']}",
-                    description="Diretta streaming live disponibile su **MadPlay77**!",
-                    color=discord.Color.green(),
-                )
-                embed.add_field(name="⚽ Disciplina", value=match['sport_name'], inline=True)
-                embed.add_field(name="⏰ Orario / Stato", value=f"`{match['time']}`", inline=True)
-                embed.add_field(name="🔗 Link Streaming", value=f"[Guarda la Partita in Diretta]({match['url']})", inline=False)
-                embed.set_footer(text="Franchino Sports • MadPlay77 Live")
+            embed, view, voice_msg = sports_scraper.build_sports_embed(res)
 
-                view = discord.ui.View()
-                view.add_item(discord.ui.Button(label="Guarda lo Streaming", url=match['url'], style=discord.ButtonStyle.link, emoji="📺"))
-                view.add_item(discord.ui.Button(label="Tutti gli Eventi Live", url=match['portal_url'], style=discord.ButtonStyle.link, emoji="🌐"))
+            await self._notify_channel(
+                message=f"🎙️⚽ **Franchino Sports ({user.display_name}):**\n> *\"{voice_msg}\"*",
+                embed=embed,
+                view=view
+            )
+            asyncio.create_task(self.player.speak_tts(voice_msg, wait=False, interrupt_music=True))
 
-                await self._notify_channel(
-                    message=f"🎙️⚽ **Franchino Sports ({user.display_name}):**\n> *\"Magia ragazzi! Ho trovato **{match['title']}** in programma alle **{match['time']}**! Vi ho messo il link in chat!\"*",
-                    embed=embed,
-                    view=view
+            asyncio.create_task(
+                hub.archive_interaction(
+                    user_id=str(user.id),
+                    user_name=user.display_name,
+                    raw_query=f"voce_partita {sport_query}",
+                    intent="sports_stream",
+                    ai_response=res.get("best_match", {}).get("title", "Palinsesto Sport"),
+                    voice_summary=voice_msg,
+                    metadata={"query": sport_query}
                 )
-                voice_msg = f"Magia ragazzi! Ho trovato {match['title']}! Vi ho inviato il link dello streaming in chat, andate a vederla!"
-                asyncio.create_task(self.player.speak_tts(voice_msg, wait=False, interrupt_music=True))
-
-                asyncio.create_task(
-                    hub.archive_interaction(
-                        user_id=str(user.id),
-                        user_name=user.display_name,
-                        raw_query=f"voce_partita {sport_query}",
-                        intent="sports_stream",
-                        ai_response=f"Partita: {match['title']}",
-                        voice_summary=voice_msg,
-                        metadata={"url": match['url']}
-                    )
-                )
-                return
-            else:
-                embed = discord.Embed(
-                    title="⚠️ Nessuna Partita Trovata",
-                    description=res.get("message", f"Nessun evento sportivo trovato per *\"{sport_query}\"*."),
-                    color=discord.Color.orange(),
-                )
-                featured = res.get("featured", [])
-                if featured:
-                    lines = [f"• **{f['title']}** ({f['sport_name']}) - `{f['time']}` → [Streaming]({f['url']})" for f in featured]
-                    embed.add_field(name="🔥 Eventi Principali Attivi Adesso:", value="\n".join(lines), inline=False)
-
-                view = discord.ui.View()
-                view.add_item(discord.ui.Button(label="Apri Palinsesto MadPlay77", url="https://web01.madplay77.ru/it", style=discord.ButtonStyle.link, emoji="🌐"))
-
-                await self._notify_channel(
-                    message=f"🎙️ **Franchino ({user.display_name})**: Non ho trovato eventi attivi per *\"{sport_query}\"* in questo momento, ecco le partite live adesso:",
-                    embed=embed,
-                    view=view
-                )
-                voice_fail = f"Non ho trovato partite per {sport_query} al momento ragazzi, vi ho mostrato gli eventi attivi in chat!"
-                asyncio.create_task(self.player.speak_tts(voice_fail, wait=False, interrupt_music=True))
-                return
+            )
+            return
 
         # 0B-septies. INTERAZIONI SOCIALI CON GLI UTENTI DEL CANALE
         # (Bacio, Saluto, Brindisi, Abbraccio, Carica, Cinque, Auguri, Buonanotte, Benvenuto, Troll, Amore)
@@ -2111,21 +2101,8 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
                     current_song_title=self.player.current.title if self.player.current else None,
                     channel_name=self.player.text_channel.name if self.player.text_channel else None,
                 )
-                chat_reply = decision.get("chat_reply")
-                voice_reply = decision.get("voice_reply") or chat_reply
-                if voice_reply:
-                    await self._notify_channel(
-                        f"🎙️ **Franchino** risponde a **{user.display_name}**:\n> *\"{chat_reply or voice_reply}\"*"
-                    )
-                    asyncio.create_task(
-                        self.player.speak_tts(
-                            voice_reply,
-                            wait=False,
-                            interrupt_music=True,
-                            keep_paused_after=False,
-                        )
-                    )
-                return
+                if await self._dispatch_brain_decision(user, decision, command_part):
+                    return
 
             # Controllo di sicurezza 4: Disambiguazione tra Conversazione Ordinaria e Ricerca Musicale YouTube
             # Se la frase non contiene indicatori musicali espliciti, interroga Gemma Brain
@@ -2154,23 +2131,9 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
                 except Exception:
                     decision = {"intent": "chat", "voice_reply": "Magia ragazzi! Sono sempre presente qui in console!"}
 
-                intent = decision.get("intent", "chat")
-                if intent == "chat" or intent not in ("play_music", "wiki_guide"):
-                    chat_reply = decision.get("chat_reply") or "🎧 **Franchino**: Sempre presente in console! Dimmi tutto!"
-                    voice_reply = decision.get("voice_reply") or "Magia! Sono sempre qui in console con voi ragazzi!"
-                    await self._notify_channel(
-                        f"🎙️ **Franchino** risponde a **{user.display_name}**:\n> *\"{chat_reply or voice_reply}\"*"
-                    )
-                    asyncio.create_task(
-                        self.player.speak_tts(
-                            voice_reply,
-                            wait=False,
-                            interrupt_music=True,
-                            keep_paused_after=False,
-                        )
-                    )
+                if await self._dispatch_brain_decision(user, decision, command_part):
                     return
-                elif intent == "play_music" and decision.get("music_query"):
+                elif decision.get("intent") == "play_music" and decision.get("music_query"):
                     command_part = decision.get("music_query")
 
             # Normalizzazione query musicale (rimuove filler tipici del parlato italiano)
@@ -2218,6 +2181,117 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
                 await self._notify_channel(
                     f"⚠️ Non sono riuscito a trovare **{music_query}**: `{e}`"
                 )
+
+    async def _dispatch_brain_decision(self, user, decision: Dict[str, Any], command_part: str) -> bool:
+        """
+        Esegue l'intento deciso da Gemma Brain o dal fallback euristico:
+        - sports_match / sports_schedule: invoca sports_scraper, crea Embed e parla a voce
+        - wiki_guide: invoca query_outlands_wiki con embed e TTS
+        - outlands_help: invoca get_outlands_help_embed con embed e TTS
+        - live_fable: racconta monologo poetico inedito
+        - play_music: ritorna False per far proseguire la ricerca musicale YouTube
+        - chat: invia chat_reply e legge voice_reply
+        Ritorna True se gestito, False se deve proseguire (es. musica).
+        """
+        intent = decision.get("intent", "chat")
+
+        if intent in ("sports_match", "sports_schedule"):
+            from sports_scraper import sports_scraper
+            from central_hub import hub
+            sq = decision.get("sport_query") or command_part
+            res = await sports_scraper.search_event(sq)
+            embed, view, voice_msg = sports_scraper.build_sports_embed(res)
+
+            await self._notify_channel(
+                message=f"🎙️⚽ **Franchino Sports ({user.display_name}):**\n> *\"{voice_msg}\"*",
+                embed=embed,
+                view=view,
+            )
+            asyncio.create_task(self.player.speak_tts(voice_msg, wait=False, interrupt_music=True))
+            asyncio.create_task(
+                hub.archive_interaction(
+                    user_id=str(user.id),
+                    user_name=user.display_name,
+                    raw_query=f"brain_sport {sq}",
+                    intent=intent,
+                    ai_response=res.get("best_match", {}).get("title", "Palinsesto Sport"),
+                    voice_summary=voice_msg,
+                    metadata={"query": sq},
+                )
+            )
+            return True
+
+        if intent == "wiki_guide":
+            from outlands_wiki import query_outlands_wiki
+            wq = decision.get("wiki_topic") or command_part
+            try:
+                wiki_res = await asyncio.wait_for(query_outlands_wiki(wq), timeout=12.0)
+                if wiki_res:
+                    title = wiki_res["page_title"]
+                    sec_title = wiki_res["section_title"]
+                    sec_url = wiki_res["section_url"]
+                    voice_answer = wiki_res["voice_answer"]
+                    wiki_embed = wiki_res["embed"]
+                    await self._notify_channel(
+                        f"📖 **{user.display_name}**, ecco la guida da [**wiki.uooutlands.com** ({title} → {sec_title})]({sec_url}) tradotta in italiano:",
+                        embed=wiki_embed,
+                    )
+                    asyncio.create_task(
+                        self.player.speak_tts(
+                            voice_answer,
+                            wait=False,
+                            interrupt_music=True,
+                            keep_paused_after=False,
+                        )
+                    )
+                    return True
+            except Exception as e:
+                logger.debug(f"Brain wiki dispatch error: {e}")
+
+        if intent == "outlands_help":
+            from outlands_wiki import get_outlands_help_embed
+            help_embed, voice_answer = get_outlands_help_embed()
+            await self._notify_channel(
+                f"🗺️ **{user.display_name}** ha chiesto la guida su **UO Outlands**:",
+                embed=help_embed,
+            )
+            asyncio.create_task(
+                self.player.speak_tts(
+                    voice_answer,
+                    wait=False,
+                    interrupt_music=True,
+                    keep_paused_after=False,
+                )
+            )
+            return True
+
+        if intent == "live_fable":
+            from brain import brain
+            fable = await brain.generate_live_fable(user.display_name)
+            await self._notify_channel(f"🎙️✨ **Franchino racconta a {user.display_name}**:\n> *\"{fable}\"*")
+            asyncio.create_task(
+                self.player.speak_tts(fable, wait=False, interrupt_music=True, keep_paused_after=False)
+            )
+            return True
+
+        if intent == "play_music":
+            return False
+
+        # Chat / generale
+        chat_reply = decision.get("chat_reply") or "🎧 **Franchino**: Sempre presente in console! Dimmi tutto!"
+        voice_reply = decision.get("voice_reply") or chat_reply
+        await self._notify_channel(
+            f"🎙️ **Franchino** risponde a **{user.display_name}**:\n> *\"{chat_reply or voice_reply}\"*"
+        )
+        asyncio.create_task(
+            self.player.speak_tts(
+                voice_reply,
+                wait=False,
+                interrupt_music=True,
+                keep_paused_after=False,
+            )
+        )
+        return True
 
     async def _notify_channel(
         self,

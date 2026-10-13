@@ -998,79 +998,100 @@ async def script_cmd(ctx: commands.Context, skill: str, numero: Optional[int] = 
 
 @bot.hybrid_command(
     name="partita",
-    aliases=["sport", "streaming", "match", "partita_live"],
-    description="Cerca una partita o evento sportivo in diretta su MadPlay77 e ottieni il link streaming!"
+    aliases=["streaming", "partita_live"],
+    description="Cerca una partita, evento o diretta streaming (es. Milan, Juventus, NBA, F1, stasera)"
 )
-async def partita_cmd(ctx: commands.Context, *, squadra_o_evento: str):
+async def partita_cmd(ctx: commands.Context, *, squadra_o_evento: Optional[str] = "stasera"):
+    """Cerca una partita o evento sportivo con link allo streaming diretto e dettagli."""
     await ctx.defer()
     from sports_scraper import sports_scraper
     from central_hub import hub
 
-    res = await sports_scraper.search_event(squadra_o_evento)
+    query = (squadra_o_evento or "stasera").strip()
+    res = await sports_scraper.search_event(query)
+    embed, view, voice_msg = sports_scraper.build_sports_embed(res)
 
-    if res.get("found"):
-        match = res["best_match"]
-        embed = discord.Embed(
-            title=f"🏆 {match['title']}",
-            description=f"Diretta streaming live disponibile su **MadPlay77**!",
-            color=discord.Color.green(),
+    await ctx.send(
+        content=f"🎙️ **Franchino**: *\"{voice_msg}\"*",
+        embed=embed,
+        view=view,
+    )
+
+    asyncio.create_task(
+        hub.archive_interaction(
+            user_id=str(ctx.author.id),
+            user_name=ctx.author.display_name,
+            raw_query=f"partita {query}",
+            intent="sports_stream",
+            ai_response=res.get("best_match", {}).get("title", "Partita"),
+            voice_summary=voice_msg,
+            channel_name=ctx.channel.name if hasattr(ctx.channel, 'name') else None,
+            metadata={"query": query}
         )
-        embed.add_field(name="⚽ Disciplina", value=match['sport_name'], inline=True)
-        embed.add_field(name="⏰ Orario / Stato", value=f"`{match['time']}`", inline=True)
-        embed.add_field(name="🔗 Link Streaming", value=f"[Guarda la Partita in Diretta]({match['url']})", inline=False)
-        embed.set_footer(text="Franchino Sports • MadPlay77 Live")
+    )
 
-        view = discord.ui.View()
-        view.add_item(discord.ui.Button(label="Guarda lo Streaming", url=match['url'], style=discord.ButtonStyle.link, emoji="📺"))
-        view.add_item(discord.ui.Button(label="Tutti gli Eventi Live", url=match['portal_url'], style=discord.ButtonStyle.link, emoji="🌐"))
+    player = player_manager.get_player(ctx.guild)
+    if player.voice_client and player.voice_client.is_connected() and voice_msg:
+        await player.speak_tts(voice_msg, wait=False, interrupt_music=True)
 
-        await ctx.send(
-            content=f"🎙️ **Franchino**: *\"Magia ragazzi! Ho trovato **{match['title']}** ({match['sport_name']}) in programma alle **{match['time']}**! Vi lascio il link per vederla!\"*",
-            embed=embed,
-            view=view
+
+@bot.hybrid_command(
+    name="partite",
+    aliases=["match", "partite_stasera"],
+    description="Palinsesto sportivo completo (Calcio, Serie A, Champions, NBA, Tennis, F1, MotoGP) & streaming!"
+)
+async def partite_cmd(
+    ctx: commands.Context,
+    disciplina_o_lega: Optional[str] = None,
+    squadra_o_filtro: Optional[str] = None
+):
+    """Mostra tutti i match di stasera per qualsiasi sport o consulta una specifica lega (es. Serie A, Champions, NBA)."""
+    await ctx.defer()
+    from sports_scraper import sports_scraper
+    from central_hub import hub
+
+    parts = [p for p in (disciplina_o_lega, squadra_o_filtro) if p]
+    query = " ".join(parts).strip() or "stasera"
+
+    res = await sports_scraper.search_event(query)
+    embed, view, voice_msg = sports_scraper.build_sports_embed(res)
+
+    await ctx.send(
+        content=f"🎙️ **Franchino**: *\"{voice_msg}\"*",
+        embed=embed,
+        view=view,
+    )
+
+    asyncio.create_task(
+        hub.archive_interaction(
+            user_id=str(ctx.author.id),
+            user_name=ctx.author.display_name,
+            raw_query=f"partite {query}",
+            intent="sports_schedule",
+            ai_response=res.get("best_match", {}).get("title", "Palinsesto Sport"),
+            voice_summary=voice_msg,
+            channel_name=ctx.channel.name if hasattr(ctx.channel, 'name') else None,
+            metadata={"query": query}
         )
+    )
 
-        asyncio.create_task(
-            hub.archive_interaction(
-                user_id=str(ctx.author.id),
-                user_name=ctx.author.display_name,
-                raw_query=f"partita {squadra_o_evento}",
-                intent="sports_stream",
-                ai_response=f"Partita: {match['title']} - {match['url']}",
-                voice_summary=f"Trovata partita {match['title']}",
-                channel_name=ctx.channel.name if hasattr(ctx.channel, 'name') else None,
-                metadata={"url": match['url']}
-            )
-        )
+    player = player_manager.get_player(ctx.guild)
+    if player.voice_client and player.voice_client.is_connected() and voice_msg:
+        await player.speak_tts(voice_msg, wait=False, interrupt_music=True)
 
-        player = player_manager.get_player(ctx.guild)
-        if player.voice_client and player.voice_client.is_connected():
-            voice_msg = f"Magia ragazzi! Ho trovato {match['title']}! Vi ho lasciato il link dello streaming in chat, andate a vederla!"
-            await player.speak_tts(voice_msg, wait=False, interrupt_music=True)
-    else:
-        embed = discord.Embed(
-            title="⚠️ Nessuna Partita Trovata",
-            description=res.get("message", "Nessun evento sportivo trovato per questa ricerca."),
-            color=discord.Color.orange(),
-        )
-        featured = res.get("featured", [])
-        if featured:
-            lines = []
-            for f in featured:
-                lines.append(f"• **{f['title']}** ({f['sport_name']}) - `{f['time']}` → [Streaming]({f['url']})")
-            embed.add_field(name="🔥 Eventi Principali Trasferiti Ora:", value="\n".join(lines), inline=False)
 
-        view = discord.ui.View()
-        view.add_item(discord.ui.Button(label="Apri Palinsesto MadPlay77", url="https://web01.madplay77.ru/it", style=discord.ButtonStyle.link, emoji="🌐"))
-        await ctx.send(embed=embed, view=view)
-
-        player = player_manager.get_player(ctx.guild)
-        if player.voice_client and player.voice_client.is_connected():
-            await player.speak_tts(
-                f"Non ho trovato partite per {squadra_o_evento} in questo momento ragazzi, vi ho mostrato gli eventi attivi in chat!",
-                wait=False,
-                interrupt_music=True
-            )
+@bot.hybrid_command(
+    name="sport",
+    aliases=["palinsesto", "match_stasera"],
+    description="Palinsesto sportivo completo (Calcio, Serie A, Champions, NBA, Tennis, F1, MotoGP) & streaming!"
+)
+async def sport_cmd(
+    ctx: commands.Context,
+    disciplina_o_lega: Optional[str] = None,
+    squadra_o_filtro: Optional[str] = None
+):
+    """Consulta il palinsesto sportivo per oggi, stasera o per una specifica lega o squadra."""
+    await partite_cmd(ctx, disciplina_o_lega=disciplina_o_lega, squadra_o_filtro=squadra_o_filtro)
 
 
 # ==========================================

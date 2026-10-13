@@ -2340,6 +2340,22 @@ def is_wiki_question(command_part: str) -> Tuple[bool, str]:
     if any(b in cmd_low for b in ("boost", "/boost", "bassboost", "bass boost")):
         return False, ""
 
+    # Escludi quesiti sportivi (match, partite, campionati, motori, tennis, basket)
+    # a meno che non contengano termini inequivocabili di Ultima Online Outlands
+    sport_exclusion_kw = (
+        "match", "partita", "partite", "chi gioca", "gioca stasera", "giocano stasera",
+        "serie a", "serie b", "champions", "champions league", "premier league", "la liga",
+        "bundesliga", "nba", "eurolega", "formula 1", "f1", "motogp", "gran premio",
+        "tennis", "calcio", "basket", "pallacanestro", "prossima gara", "prossimo gp",
+    )
+    if any(s in cmd_low for s in sport_exclusion_kw):
+        uo_explicit = (
+            "outlands", "uo", "ultima online", "taming", "aspect", "slayer", "dungeon",
+            "dexxer", "bardo", "skill", "tamare", "pet", "pets", "template", "build"
+        )
+        if not any(u in cmd_low for u in uo_explicit):
+            return False, ""
+
     uo_phrases = (
         "come buildare", "miglior build", "migliori build", "consigliami una build", "che build mi consigli",
         "come si usa", "come usare", "a cosa serve", "a che serve", "cosa fa", "come funziona",
