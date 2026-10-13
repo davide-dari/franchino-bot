@@ -326,7 +326,8 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
     WAKE_WORDS = (
         "franchino", "frankino", "francino", "franchi", "franchì",
         "franchini", "franklin", "frankie", "franci", "franchin",
-        "franchi no", "tranchino", "franceschino"
+        "franchi no", "tranchino", "franceschino", "franco", "francesco",
+        "frank", "fra", "panchino", "fanchino", "banchino", "chino", "franchina"
     )
 
     def __init__(self, player: "GuildPlayer"):
@@ -649,7 +650,11 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
 
         user = await self._resolve_user_object(key, speaker_obj)
         logger.info(f"🎙️ [{user.display_name}] ha detto: '{selected_text}'")
-        await self._handle_transcribed_text(user, selected_text)
+        try:
+            await self._handle_transcribed_text(user, selected_text)
+        except Exception as e:
+            logger.error(f"❌ Errore critico gestione comando vocale '{selected_text}' da {user.display_name}: {e}", exc_info=True)
+            await self._notify_channel(f"⚠️ Si è verificato un errore durante l'elaborazione del comando: `{e}`")
 
     async def _handle_transcribed_text(self, user, text: str):
         """Analizza il testo trascritto ed esegue il comando per qualsiasi utente del canale."""
@@ -759,18 +764,36 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
                 command_part = f"{pending_prefix} {text}".strip() if pending_prefix else text.strip()
                 logger.info(f"🔗 Continuazione comando vocale per {user.display_name}: '{command_part}'")
 
-        # Se non è stata detta la wake word esplicita, controlla se è una domanda diretta di presenza/ascolto nel canale vocale:
+        # Se non è stata detta la wake word esplicita, controlla se è un comando vocale diretto nella stanza:
         if command_part is None:
-            liveness_direct = (
+            direct_triggers = (
+                # Liveness & presenza
                 "ci senti", "ci sentite", "mi senti", "mi sentite",
                 "ci sei", "ci siete", "sei vivo", "sei sveglio",
-                "batti un colpo", "mi ascolti", "ci ascolti", "rispondi"
+                "batti un colpo", "mi ascolti", "ci ascolti", "rispondi",
+                # Musica
+                "metti ", "mette ", "mettimi ", "riproduci ", "suona ", "suonami ", "play ",
+                "fammi sentire ", "fammi ascoltare ", "avvia ", "cerca ", "cercami ", "fai partire ",
+                "aggiungi ", "accoda ", "metti in coda ",
+                # Controlli player
+                "stop", "stoppa", "ferma", "fermati", "basta", "zitto", "silenzio", "muto", "spegni",
+                "pausa", "riprendi", "continua", "salta", "skip", "skippa", "prossima", "cambia",
+                "alza il volume", "abbassa il volume", "volume a ", "volume al ",
+                # Funzionalità
+                "raccontami una favola", "racconta una favola", "dimmi una favola", "favola",
+                "chi canta", "che canzone è", "partita", "streaming",
+                "riavviati", "sbloccati", "reset", "comandi", "aiuto"
             )
             clean_l = re.sub(r"[^\w\s]", " ", lower_text).strip()
-            if any(k in clean_l for k in liveness_direct):
-                command_part = clean_l
+            for trig in direct_triggers:
+                trig_clean = trig.strip()
+                if clean_l == trig_clean or clean_l.startswith(trig) or (len(trig_clean) >= 4 and trig_clean in clean_l):
+                    command_part = text.strip()
+                    logger.info(f"🎯 Comando diretto senza wake word rilevato da {user.display_name}: '{command_part}'")
+                    break
 
         if command_part is None:
+            logger.info(f"ℹ️ Nessun comando vocale riconosciuto in: '{text}' (da {user.display_name})")
             return
 
         cmd_lower = command_part.lower().strip()
@@ -1315,6 +1338,7 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
         if queue_match:
             query = queue_match.group(1).strip()
             if query:
+                self.player._manual_stop = False
                 await self._notify_channel(
                     f"🎙️ **{user.display_name}**: *\"Franchino aggiungi {query}\"* — Aggiungo in coda!"
                 )
@@ -1324,8 +1348,6 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
                         timeout=25.0,
                     )
                     if songs:
-                        if self.player._manual_stop:
-                            return
                         await self.player.add_songs(songs, text_channel=self.player.text_channel)
                 except Exception as e:
                     await self._notify_channel(f"⚠️ Non sono riuscito a trovare **{query}**: `{e}`")
@@ -1340,6 +1362,7 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
         if play_match:
             query = play_match.group(1).strip()
             if query:
+                self.player._manual_stop = False
                 # Se è una richiesta descrittiva/mood, Gemma la trasforma nella miglior query YouTube
                 from brain import brain
                 if any(k in query.lower() for k in ("qualcosa", "un pezzo", "una canzone", "musica per", "un po di", "un po' di", "traccia da", "musica da")):
@@ -1366,8 +1389,6 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
                         timeout=25.0,
                     )
                     if songs:
-                        if self.player._manual_stop:
-                            return
                         await self.player.play_now(
                             songs,
                             text_channel=self.player.text_channel,
@@ -1468,6 +1489,30 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
             await self.player.disconnect()
             return
 
+        # 10. Fallback intelligente su ricerca musicale
+        if command_part:
+            logger.info(f"🎵 Fallback ricerca musicale per {user.display_name}: '{command_part}'")
+            self.player._manual_stop = False
+            await self._notify_channel(
+                f"🎙️ **{user.display_name}**: *\"Franchino {command_part}\"* — Cerco e avvio in console! 🎶"
+            )
+            try:
+                songs = await asyncio.wait_for(
+                    self.player.source_manager.resolve_url_or_query(command_part, requester=requester_arg),
+                    timeout=25.0,
+                )
+                if songs:
+                    await self.player.play_now(
+                        songs,
+                        text_channel=self.player.text_channel,
+                        voice_announce=f"Subito! Metto {command_part}",
+                    )
+            except Exception as e:
+                logger.warning(f"Fallback ricerca brano fallito per '{command_part}': {e}")
+                await self._notify_channel(
+                    f"⚠️ Non ho trovato una traccia musicale per *\"{command_part}\"*. Dì *\"Franchino comandi\"* per l'elenco comandi!"
+                )
+
     async def _notify_channel(
         self,
         message: Optional[str] = None,
@@ -1489,12 +1534,18 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
                 kwargs["view"] = view
             try:
                 await target_ch.send(**kwargs)
-            except Exception:
+                logger.info(f"💬 Notifica inviata con successo nel canale #{target_ch.name}")
+            except Exception as e:
+                logger.warning(f"⚠️ Errore invio notifica a #{target_ch.name} ({e}), provo canale fallback...")
                 if fallback and fallback != target_ch:
                     try:
                         await fallback.send(**kwargs)
-                    except Exception:
-                        pass
+                        logger.info(f"💬 Notifica inviata con successo nel canale fallback #{fallback.name}")
+                    except Exception as e2:
+                        logger.error(f"❌ Impossibile inviare notifica Discord in nessun canale: {e2}")
+        else:
+            logger.warning(f"⚠️ Nessun canale testuale trovato per inviare notifiche sul server {self.player.guild.name}")
+
 
     def cleanup(self) -> None:
         self._running = False

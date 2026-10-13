@@ -352,7 +352,12 @@ class GuildPlayer:
           con pitch ribassato e cadenza ipnotica da vocalist notturno.
         - Applica in FFmpeg la catena DSP da Console Club (calore sui medio-bassi + eco/delay da discoteca).
         """
+        if (not self.voice_client or not self.voice_client.is_connected()) and self.guild.voice_client:
+            if self.guild.voice_client.is_connected():
+                self.voice_client = self.guild.voice_client
+
         if not self.voice_client or not self.voice_client.is_connected():
+            logger.warning(f"⚠️ Impossibile eseguire speak_tts: Franchino non è connesso a una stanza vocale in '{self.guild.name}'")
             return
         if (self.is_playing() or self.is_paused()) and not interrupt_music and not self._playing_tts:
             return
@@ -379,8 +384,10 @@ class GuildPlayer:
                 )
                 await communicate.save(tts_file)
                 generated_ok = os.path.isfile(tts_file) and os.path.getsize(tts_file) > 100
+                if generated_ok:
+                    logger.info(f"🔊 Audio generato con successo tramite edge-tts per: '{text[:45]}'")
             except Exception as e:
-                logger.debug(f"Fallback da edge-tts a gTTS ({e})")
+                logger.warning(f"⚠️ edge-tts non riuscito ({e}), fallback su gTTS in corso...")
 
         # 2. Fallback d'emergenza a gTTS (con pitch shift maschile in FFmpeg)
         if not generated_ok:
@@ -390,14 +397,15 @@ class GuildPlayer:
                     tts = gTTS(text=phrase, lang="it", slow=False)
                     tts.save(tts_file)
                     return True
-                except Exception as e:
-                    logger.debug(f"Errore generazione gTTS: {e}")
+                except Exception as ge:
+                    logger.error(f"❌ Errore generazione anche con gTTS: {ge}")
                     return False
 
             generated_ok = await asyncio.to_thread(_generate_gtts, text)
             used_gtts_fallback = True
 
         if not generated_ok or not os.path.isfile(tts_file):
+            logger.error(f"❌ Impossibile generare l'audio vocale per la frase: '{text}'")
             return
 
         if not self.voice_client or not self.voice_client.is_connected():
@@ -415,13 +423,19 @@ class GuildPlayer:
                 self.voice_client.stop_playing()
             else:
                 self.voice_client.stop()
-            await asyncio.sleep(0.08)
+            # Attende fino a 300ms che il player si fermi completamente per evitare ClientException
+            for _ in range(6):
+                if not self.voice_client.is_playing() and not self.voice_client.is_paused():
+                    break
+                await asyncio.sleep(0.05)
 
         done_ev = asyncio.Event()
         self._tts_done_event = done_ev
         self._playing_tts = True
 
         def _after_tts(err):
+            if err:
+                logger.error(f"❌ Errore callback after_tts: {err}")
             self._playing_tts = False
             self.bot.loop.call_soon_threadsafe(done_ev.set)
 
@@ -443,6 +457,7 @@ class GuildPlayer:
 
             source = discord.FFmpegPCMAudio(tts_file, options=f'-vn -af "{af_chain}"')
             transformed = discord.PCMVolumeTransformer(source, volume=min(1.0, self.volume + 0.35))
+            logger.info(f"🗣️ Avvio riproduzione audio TTS nella stanza vocale: '{text[:50]}'")
             self.voice_client.play(transformed, after=_after_tts)
             if wait or (self._interrupted_song and not keep_paused_after):
                 await asyncio.wait_for(done_ev.wait(), timeout=55.0)
@@ -451,9 +466,10 @@ class GuildPlayer:
             raise
         except Exception as e:
             self._playing_tts = False
-            logger.debug(f"Errore riproduzione TTS: {e}")
+            logger.error(f"❌ Errore durante la riproduzione audio TTS: {e}", exc_info=True)
         finally:
             self._playing_tts = False
+
 
         if self._interrupted_song and not keep_paused_after and not self._manual_stop:
             await self.resume_interrupted_song()
@@ -552,6 +568,10 @@ class GuildPlayer:
             sfx_key = "airhorn"
         meta = SOUNDBOARD_EFFECTS[sfx_key]
         label = f"{meta['emoji']} {meta['label']}"
+
+        if (not self.voice_client or not self.voice_client.is_connected()) and self.guild.voice_client:
+            if self.guild.voice_client.is_connected():
+                self.voice_client = self.guild.voice_client
 
         if not self.voice_client or not self.voice_client.is_connected():
             return label
