@@ -15,7 +15,8 @@ from config import (
     INACTIVITY_TIMEOUT,
     COLOR_FRANCHINO,
     COLOR_INFO,
-    FRANCHINO_QUOTES
+    FRANCHINO_QUOTES,
+    FRANCHINO_ENTRANCE_QUOTES
 )
 from sources import SongInfo, SourceManager, format_duration
 from views import FranchinoControlsView, QueuePaginationView
@@ -297,6 +298,7 @@ class GuildPlayer:
         # Stato Auto-Ducking (abbassamento automatico volume musica mentre qualcuno parla)
         self._is_ducked: bool = False
         self._duck_restore_task: Optional[asyncio.Task] = None
+        self._last_entrance_greeting_time: float = 0.0
 
     @property
     def is_active(self) -> bool:
@@ -384,27 +386,40 @@ class GuildPlayer:
         cache_dir = "/tmp/franchino_cache"
         os.makedirs(cache_dir, exist_ok=True)
         import hashlib
-        cache_hash = hashlib.md5(f"{text.strip().lower()}_{dramatic_fable}".encode("utf-8")).hexdigest()
+        cache_hash = hashlib.md5(f"vocalist_v2_{text.strip().lower()}_{dramatic_fable}".encode("utf-8")).hexdigest()
         tts_file = os.path.join(cache_dir, f"tts_{cache_hash}.mp3")
         used_gtts_fallback = False
         generated_ok = os.path.isfile(tts_file) and os.path.getsize(tts_file) > 100
 
         # 1. Se non è già in cache, genera la voce tramite Microsoft Edge Neural TTS
+        # Utilizza la voce neurale espressiva italiana (GiuseppeMultilingualNeural o DiegoNeural)
         if not generated_ok:
             try:
                 import edge_tts
-                pitch_val = "-14Hz" if dramatic_fable else "-10Hz"
-                rate_val = "-12%" if dramatic_fable else "-5%"
-                communicate = edge_tts.Communicate(
-                    text=text,
-                    voice="it-IT-DiegoNeural",
-                    pitch=pitch_val,
-                    rate=rate_val,
-                )
-                await asyncio.wait_for(communicate.save(tts_file), timeout=12.0)
-                generated_ok = os.path.isfile(tts_file) and os.path.getsize(tts_file) > 100
+                pitch_val = "-10Hz" if dramatic_fable else "-6Hz"
+                rate_val = "-4%" if dramatic_fable else "+0%"
+                try:
+                    communicate = edge_tts.Communicate(
+                        text=text,
+                        voice="it-IT-GiuseppeMultilingualNeural",
+                        pitch=pitch_val,
+                        rate=rate_val,
+                    )
+                    await asyncio.wait_for(communicate.save(tts_file), timeout=12.0)
+                    generated_ok = os.path.isfile(tts_file) and os.path.getsize(tts_file) > 100
+                except Exception as ve:
+                    logger.warning(f"⚠️ GiuseppeMultilingualNeural non disponibile ({ve}), fallback su DiegoNeural...")
+                    communicate = edge_tts.Communicate(
+                        text=text,
+                        voice="it-IT-DiegoNeural",
+                        pitch="-12Hz" if dramatic_fable else "-8Hz",
+                        rate=rate_val,
+                    )
+                    await asyncio.wait_for(communicate.save(tts_file), timeout=12.0)
+                    generated_ok = os.path.isfile(tts_file) and os.path.getsize(tts_file) > 100
+
                 if generated_ok:
-                    logger.info(f"🔊 Audio generato con successo tramite edge-tts per: '{text[:45]}'")
+                    logger.info(f"🔊 Audio vocalist generato con successo tramite edge-tts per: '{text[:45]}'")
             except Exception as e:
                 logger.warning(f"⚠️ edge-tts non riuscito ({e}), fallback su gTTS in corso...")
 
@@ -464,18 +479,31 @@ class GuildPlayer:
 
         try:
             # Catena DSP "Franchino il Vocalist":
-            # - Presenza calda sui bassi (150Hz) e graffio microfonico sui medio-alti (2700Hz)
-            # - Eco/Delay da console da discoteca se self.vocalist_mode è attivo
+            # - Calore ed effetto prossimità da microfono club a condensatore (140Hz a +5dB)
+            # - Taglio inscatolamento e risonanza medio-bassa (450Hz a -2.5dB)
+            # - Presenza e graffio microfonico da console DJ (3200Hz a +4dB)
+            # - Brillantezza ed aria sulle alte frequenze (9500Hz a +2dB)
+            # - Compressore/Limiter analogico broadcast (voce solida, presente e mai saturata)
+            # - Eco/Delay ritmico da console live (Franchino signature club delay)
             filters = []
             if used_gtts_fallback:
                 filters.append("asetrate=24000*0.78,aresample=48000,atempo=1.22")
-            filters.append("equalizer=f=150:t=q:w=1.1:g=5,equalizer=f=2700:t=q:w=1.4:g=3")
+
+            # Equalizzatore da console vocalist
+            filters.append("equalizer=f=140:t=q:w=1.2:g=5")
+            filters.append("equalizer=f=450:t=q:w=1.5:g=-2.5")
+            filters.append("equalizer=f=3200:t=q:w=1.3:g=4")
+            filters.append("equalizer=f=9500:t=q:w=1.0:g=2")
+
+            # Compressore analogico broadcast live
+            filters.append("acompressor=threshold=-16dB:ratio=4:attack=5:release=50:makeup=3")
+
             if getattr(self, "vocalist_mode", True):
                 if dramatic_fable:
-                    filters.append("aecho=0.8:0.88:160|320:0.32|0.18")
+                    filters.append("aecho=0.8:0.75:165|330:0.36|0.18")
                 else:
-                    filters.append("aecho=0.8:0.86:135|270:0.20|0.09")
-            filters.append("volume=1.8")
+                    filters.append("aecho=0.8:0.75:140|280:0.28|0.14")
+            filters.append("volume=1.4")
             af_chain = ",".join(filters)
 
             source = discord.FFmpegPCMAudio(tts_file, options=f'-vn -af "{af_chain}"')
@@ -537,6 +565,35 @@ class GuildPlayer:
             self.voice_client.play(transformed_source, after=after_playback)
         except Exception as e:
             logger.debug(f"Errore ripresa brano interrotto: {e}")
+
+    async def play_entrance_greeting(self, member: Optional[discord.Member] = None):
+        """Riproduce un saluto vocale iconico da vero vocalist quando qualcuno entra nel canale."""
+        now = time.monotonic()
+        if (now - self._last_entrance_greeting_time) < 8.0:
+            return  # Evita doppie riproduzioni consecutive o spam di saluti ravvicinati
+        self._last_entrance_greeting_time = now
+
+        if member and member.display_name:
+            clean_name = member.display_name.strip()
+            quotes = [
+                f"Magia ragazzi! Ciao {clean_name}! Franchino è in console con voi! Chiudi gli occhi e vola!",
+                f"Buonasera popolo della notte! Benvenuto {clean_name}! Franchino al microfono, si accende la console!",
+                f"Eccomi qua ragazzi! Ciao {clean_name}! Alziamo le mani al cielo e andiamo a decollare!",
+                f"Sempre presente in console! Ciao {clean_name}, vivere per vivere! Dimmi cosa ti serve stasera!",
+                f"Magia pura! {clean_name} entra in pista e Franchino accende la console! Pronti a volare!",
+            ]
+            chosen_quote = random.choice(quotes)
+        else:
+            chosen_quote = random.choice(FRANCHINO_ENTRANCE_QUOTES)
+
+        logger.info(f"🎙️ Franchino vocalist saluta l'ingresso in stanza: '{chosen_quote}'")
+        try:
+            # Breve attesa per consentire al client Discord dell'utente di negoziare WebRTC e attivare l'audio delle cuffie
+            await asyncio.sleep(0.6)
+            if self.voice_client and self.voice_client.is_connected():
+                await self.speak_tts(chosen_quote, wait=False, interrupt_music=True, dramatic_fable=False)
+        except Exception as e:
+            logger.debug(f"Errore riproduzione saluto vocale d'ingresso: {e}")
 
     # ==========================================================================
     # Effetti DJ in Tempo Reale (FFmpeg Filter Hot-Swap)

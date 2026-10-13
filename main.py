@@ -82,18 +82,18 @@ player_manager = PlayerManager(bot, source_manager)
 _presence_loop_task: Optional[asyncio.Task] = None
 
 
-def _get_human_ids_in_channel(vc_channel: discord.VoiceChannel) -> list[int]:
+def _get_human_ids_in_channel(vc_channel: discord.VoiceChannel, excluding_user_id: Optional[int] = None) -> list[int]:
     """Restituisce gli ID degli utenti umani (non-bot) presenti in un canale vocale."""
     guild = vc_channel.guild
     bot_id = bot.user.id if bot.user else 0
     human_ids = set()
 
     for m in getattr(vc_channel, "members", []):
-        if not m.bot and m.id != bot_id:
+        if not m.bot and m.id != bot_id and m.id != excluding_user_id:
             human_ids.add(m.id)
 
     for uid in getattr(vc_channel, "voice_states", {}).keys():
-        if uid == bot_id:
+        if uid == bot_id or uid == excluding_user_id:
             continue
         member = guild.get_member(uid)
         if member and member.bot:
@@ -101,6 +101,14 @@ def _get_human_ids_in_channel(vc_channel: discord.VoiceChannel) -> list[int]:
         human_ids.add(uid)
 
     return list(human_ids)
+
+
+def _get_all_humans_in_voice(guild: discord.Guild, excluding_user_id: Optional[int] = None) -> list[int]:
+    """Restituisce tutti gli utenti umani (non-bot) attualmente presenti nei canali vocali del server."""
+    all_humans = set()
+    for vc in getattr(guild, "voice_channels", []):
+        all_humans.update(_get_human_ids_in_channel(vc, excluding_user_id=excluding_user_id))
+    return list(all_humans)
 
 
 async def _sync_slash_commands_bg():
@@ -116,7 +124,7 @@ async def _check_and_sync_voice_presence():
     """
     Controlla tutti i server:
     - Se ci sono persone in una stanza vocale e Franchino non è dentro (o è in una stanza vuota), ENTRA SUBITO!
-    - Se non c'è più nessuna persona in nessuna stanza vocale, Franchino SI DISCONNETTE.
+    - Se non c'è più nessuna persona in nessuna stanza vocale, Franchino SI DISCONNETTE SUBITO.
     """
     for guild in bot.guilds:
         try:
@@ -136,29 +144,31 @@ async def _check_and_sync_voice_presence():
                     text_ch = _find_default_text_channel(guild, target_vc)
                     await player.connect(target_vc, text_ch)
                     logger.info(f"🎙️ Franchino è entrato automaticamente nella stanza '{target_vc.name}' ({guild.name})")
+                    asyncio.create_task(player.play_entrance_greeting())
                 else:
                     current_humans = _get_human_ids_in_channel(bot_vc.channel)
                     if len(current_humans) == 0 and bot_vc.channel != target_vc:
                         text_ch = _find_default_text_channel(guild, target_vc)
                         await player.connect(target_vc, text_ch)
                         logger.info(f"🎙️ Franchino si è spostato nella stanza popolata '{target_vc.name}' ({guild.name})")
+                        asyncio.create_task(player.play_entrance_greeting())
                     else:
                         player.voice_client = bot_vc
                         player._ensure_voice_listening()
             else:
                 if bot_vc and (bot_vc.is_connected() or bot_vc.channel):
-                    logger.info(f"👋 Stanza vocale vuota su '{guild.name}': Franchino si disconnette in attesa che entri qualcuno.")
+                    logger.info(f"👋 Nessun utente nelle stanze vocali su '{guild.name}': Franchino esce subito dalla console.")
                     await player.disconnect()
         except Exception as e:
             logger.debug(f"Errore controllo presenza vocale in {guild.name}: {e}")
 
 
 async def _voice_room_presence_loop():
-    """Loop continuo 24/7 che verifica ogni 3 secondi se ci sono persone in stanza per entrare/uscire."""
+    """Loop continuo 24/7 che verifica ogni 2.5 secondi se ci sono persone in stanza per entrare/uscire."""
     try:
         while True:
             await _check_and_sync_voice_presence()
-            await asyncio.sleep(3.0)
+            await asyncio.sleep(2.5)
     except asyncio.CancelledError:
         pass
 
@@ -178,7 +188,7 @@ async def on_ready():
     # 1. Entra SUBITO nel canale vocale se ci sono già persone dentro (prima di qualsiasi altra operazione!)
     await _check_and_sync_voice_presence()
 
-    # 2. Avvia il guardiano continuo 24/7 delle stanze vocali (controlla ogni 3 secondi)
+    # 2. Avvia il guardiano continuo 24/7 delle stanze vocali (controlla ogni 2.5 secondi)
     if _presence_loop_task is None or _presence_loop_task.done():
         _presence_loop_task = asyncio.create_task(_voice_room_presence_loop())
 
@@ -229,41 +239,73 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
     if member.bot:
         return
 
+    # Se lo stato vocale non riguarda un cambio di canale (es. mute/deafen/webcam), ignoriamo
+    if before.channel == after.channel:
+        return
+
     guild = member.guild
     player = player_manager.get_player(guild)
     bot_vc = guild.voice_client or player.voice_client
 
-    # Se un utente entra o si sposta in una stanza vocale:
-    # - se Franchino non è connesso, entra subito!
-    # - se Franchino era in una stanza rimasta vuota, lo segue subito!
+    # 1. Se un utente entra o si sposta in una stanza vocale:
     if after.channel:
+        target_vc = after.channel
+        text_ch = _find_default_text_channel(guild, target_vc)
+
+        # Caso A: Franchino non è connesso a nessun canale vocale -> spunta fuori subito!
         if not bot_vc or not bot_vc.is_connected() or not bot_vc.channel:
-            text_ch = _find_default_text_channel(guild, after.channel)
             try:
-                await player.connect(after.channel, text_ch)
-                logger.info(f"🎙️ Auto-ingresso nel canale '{after.channel.name}' per ascoltare {member.display_name}")
+                await player.connect(target_vc, text_ch)
+                logger.info(f"🎙️ Auto-ingresso immediato nel canale '{target_vc.name}' per accogliere {member.display_name}")
+                asyncio.create_task(player.play_entrance_greeting(member))
             except Exception as e:
                 logger.warning(f"Errore durante auto-ingresso vocale: {e}")
             return
-        elif bot_vc.channel != after.channel and len(_get_human_ids_in_channel(bot_vc.channel)) == 0:
-            text_ch = _find_default_text_channel(guild, after.channel)
-            try:
-                await player.connect(after.channel, text_ch)
-                logger.info(f"🎙️ Franchino ha seguito {member.display_name} nel canale '{after.channel.name}'")
-            except Exception as e:
-                logger.warning(f"Errore spostamento automatico vocale: {e}")
+
+        # Caso B: Franchino è già nello stesso canale in cui è appena entrato l'utente -> saluta l'utente!
+        elif bot_vc.channel == target_vc:
+            logger.info(f"🎙️ Utente {member.display_name} entrato nel canale di Franchino '{target_vc.name}'")
+            asyncio.create_task(player.play_entrance_greeting(member))
             return
 
-    # Se la stanza attuale di Franchino è rimasta senza persone:
-    if bot_vc and bot_vc.channel:
-        if len(_get_human_ids_in_channel(bot_vc.channel)) == 0:
-            for vc_ch in guild.voice_channels:
-                if vc_ch != bot_vc.channel and len(_get_human_ids_in_channel(vc_ch)) > 0:
-                    await player.connect(vc_ch, _find_default_text_channel(guild, vc_ch))
-                    return
+        # Caso C: Franchino era in un'altra stanza rimasta vuota (o tutti si sono spostati) -> lo segue subito!
+        elif bot_vc.channel != target_vc:
+            humans_in_current = _get_human_ids_in_channel(bot_vc.channel, excluding_user_id=member.id)
+            if len(humans_in_current) == 0:
+                try:
+                    await player.connect(target_vc, text_ch)
+                    logger.info(f"🎙️ Franchino ha seguito {member.display_name} nel canale '{target_vc.name}'")
+                    asyncio.create_task(player.play_entrance_greeting(member))
+                except Exception as e:
+                    logger.warning(f"Errore spostamento automatico vocale: {e}")
+                return
 
-            logger.info(f"Canale vocale '{bot_vc.channel.name}' vuoto. Franchino si disconnette in attesa che entri qualcuno...")
+    # 2. Se un utente è uscito o si è spostato, verifichiamo la presenza umana nel server:
+    # Se in tutto il server Discord non c'è più nessun umano nei canali vocali, Franchino esce subito!
+    all_humans = _get_all_humans_in_voice(guild, excluding_user_id=member.id if not after.channel else None)
+    if len(all_humans) == 0:
+        if bot_vc and (bot_vc.is_connected() or bot_vc.channel):
+            logger.info(f"👋 Nessun utente rimasto nei canali vocali di '{guild.name}'. Franchino esce subito dalla console.")
             await player.disconnect()
+        return
+
+    # Se Franchino è connesso ma la sua stanza attuale è rimasta senza nessun umano:
+    if bot_vc and bot_vc.channel:
+        humans_in_bot_room = _get_human_ids_in_channel(bot_vc.channel, excluding_user_id=member.id if after.channel != bot_vc.channel else None)
+        if len(humans_in_bot_room) == 0:
+            target_vc = None
+            for vc_ch in guild.voice_channels:
+                if vc_ch != bot_vc.channel and len(_get_human_ids_in_channel(vc_ch, excluding_user_id=member.id if not after.channel else None)) > 0:
+                    target_vc = vc_ch
+                    break
+            if target_vc:
+                text_ch = _find_default_text_channel(guild, target_vc)
+                await player.connect(target_vc, text_ch)
+                logger.info(f"🎙️ Franchino si è spostato nella stanza popolata '{target_vc.name}'")
+                asyncio.create_task(player.play_entrance_greeting())
+            else:
+                logger.info(f"👋 Canale vocale '{bot_vc.channel.name}' rimasto vuoto: Franchino si disconnette subito.")
+                await player.disconnect()
 
 
 @bot.event

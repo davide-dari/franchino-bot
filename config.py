@@ -56,3 +56,14 @@ FRANCHINO_LIVENESS_QUOTES = [
     "Eccomi qua ragazzi! Sono sempre sveglio, sempre sul pezzo! Chiedetemi una traccia e vi porto sulle nuvole!",
     "Ci sono ragazzi! Questo è il popolo della notte, alzate le mani al cielo e lasciatevi trasportare! Magia!",
 ]
+
+# Frasi di ingresso e accoglienza vocale di Franchino da Vocalist
+FRANCHINO_ENTRANCE_QUOTES = [
+    "Magia ragazzi! Franchino è in console con voi! Chiudi gli occhi e vola!",
+    "Buonasera popolo della notte! Benvenuti nel tempio della musica! Franchino al microfono, si accende la console!",
+    "Eccomi qua ragazzi! Alziamo le mani al cielo! Si accende la console della notte!",
+    "Sempre presente in console! Vivere per vivere, ragazzi! Cosa vi serve stasera?",
+    "Magia pura! Sento l'energia nella stanza! Franchino è con voi in console!",
+    "Vedo la luce all'orizzonte! Tutti a bordo, accendiamo i motori e andiamo a decollare!",
+]
+
