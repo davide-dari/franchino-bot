@@ -22,6 +22,8 @@ except ImportError:
 if TYPE_CHECKING:
     from player import GuildPlayer
 
+from outlands_wiki import normalize_uo_speech
+
 logger = logging.getLogger("Franchino.VoiceCommands")
 
 
@@ -452,7 +454,18 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
 
         return True, cmd, wake_matched
 
-
+    @classmethod
+    def _clean_transcription(cls, text: str) -> str:
+        """
+        Pulisce e normalizza la trascrizione da Google Speech-to-Text (it-IT):
+        - Applica le mappature fonetiche per termini gaming e UO Outlands (es. 'pat'/'pad' -> 'pet',
+          'bild' -> 'build', 'teming' -> 'taming', 'temer' -> 'tamer', 'dreik' -> 'drake',
+          'sleier' -> 'slayer', 'dexer' -> 'dexxer', 'aspet' -> 'aspect', 'dangeon' -> 'dungeon').
+        - Normalizza comandi musicali e vocali ('skippa' -> 'skip', 'stoppa' -> 'stop', ecc.).
+        """
+        if not text:
+            return ""
+        return normalize_uo_speech(text)
 
     def __init__(self, player: "GuildPlayer"):
         super().__init__(None)
@@ -759,11 +772,20 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
         if not candidates:
             return
 
+        # Arricchimento candidati con normalizzazione fonetica specifica per l'italiano e gaming terms
+        all_candidates = []
+        for cand in candidates:
+            if cand not in all_candidates:
+                all_candidates.append(cand)
+            clean_cand = self._clean_transcription(cand)
+            if clean_cand and clean_cand not in all_candidates:
+                all_candidates.append(clean_cand)
+
         # Anti-Feedback Loop: Se Franchino sta parlando in voce (TTS), ignora l'audio catturato
         # per evitare che il bot ascolti la propria voce (eco da altoparlanti o microfoni aperti).
         # Unica eccezione: se l'utente urla "stop" o "basta" per fermare la riproduzione.
         if getattr(self.player, "_playing_tts", False):
-            first_low = candidates[0].lower()
+            first_low = all_candidates[0].lower()
             if not any(w in first_low for w in ("stop", "stoppa", "ferma", "basta", "zitto", "silenzio")):
                 logger.debug(f"🔇 Audio da {key} ignorato: Franchino sta parlando in TTS (anti-feedback loop)")
                 return
@@ -780,27 +802,65 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
         matched_wake = None
 
         # Log tutte le alternative STT per facilitare il debug (max 3)
-        if len(candidates) > 1:
-            logger.debug(f"🎙️ STT alternatives [{user.display_name}]: {candidates[:3]}")
+        if len(all_candidates) > 1:
+            logger.debug(f"🎙️ STT alternatives [{user.display_name}]: {all_candidates[:3]}")
 
         # Scansiona tutte le alternative acustiche di Google Speech API per trovare il richiamo a Franchino.
-        # Se più di un candidato contiene il wake word, sceglie quello con il comando più lungo/ricco.
-        wake_hits: list[tuple[str, str, str]] = []  # (cand, cmd, wake_tok)
-        for cand in candidates:
+        # Se più di un candidato contiene il wake word, calcola un punteggio basato su lunghezza e presenza di termini chiave.
+        wake_hits: list[tuple[str, str, str, float]] = []  # (cand, cmd, wake_tok, score)
+        uo_priority_terms = re.compile(
+            r'\b(?:pet|pets|build|builds|taming|tamer|drake|slayer|dexxer|aspect|'
+            r'mastery\s+chain|codex|dungeon|ostard|wiki|outlands|bestiario)\b',
+            re.IGNORECASE
+        )
+        music_bot_terms = re.compile(
+            r'\b(?:metti|riproduci|suona|play|skip|stop|pausa|volume|loop|shuffle|coda)\b',
+            re.IGNORECASE
+        )
+        question_terms = re.compile(
+            r'\b(?:miglior|migliori|quali|quale|come|dove|guida|consigli|consigliami|spiegami|info)\b',
+            re.IGNORECASE
+        )
+
+        for cand in all_candidates:
             has_w, cmd, w_tok = self.extract_wake_and_command(cand)
             if has_w:
-                wake_hits.append((cand, cmd, w_tok))
+                norm_cmd = self._clean_transcription(cmd)
+                score = float(len(norm_cmd))
+                # Termini UO / Gaming / Wiki / Bot con word boundary per evitare falsi positivi (es. "ripeti")
+                if uo_priority_terms.search(norm_cmd):
+                    score += 50.0
+                if music_bot_terms.search(norm_cmd):
+                    score += 40.0
+                if question_terms.search(norm_cmd):
+                    score += 20.0
+                wake_hits.append((cand, norm_cmd, w_tok, score))
 
         if wake_hits:
-            # Preferisce il candidato con il comando più lungo (più informazioni utili)
-            wake_hits.sort(key=lambda x: len(x[1]), reverse=True)
-            selected_text, detected_cmd, matched_wake = wake_hits[0]
+            wake_hits.sort(key=lambda x: x[3], reverse=True)
+            raw_cand, detected_cmd, matched_wake, _ = wake_hits[0]
+            selected_text = self._clean_transcription(raw_cand)
 
         if selected_text:
             logger.info(f"🎙️ [{user.display_name}] ha chiamato Franchino ('{matched_wake}') → frase: '{selected_text}' | comando: '{detected_cmd}'")
         elif in_active_session:
             # L'utente è in sessione attiva (aveva appena chiamato Franchino e sta completando il comando)
-            selected_text = candidates[0]
+            # Seleziona il miglior candidato tra tutte le trascrizioni e alternative fonetiche
+            best_cand = candidates[0]
+            best_score = float(len(best_cand))
+            for cand_item in all_candidates:
+                c_clean = self._clean_transcription(cand_item)
+                sc = float(len(c_clean))
+                if uo_priority_terms.search(c_clean):
+                    sc += 50.0
+                if music_bot_terms.search(c_clean):
+                    sc += 40.0
+                if question_terms.search(c_clean):
+                    sc += 20.0
+                if sc > best_score:
+                    best_score = sc
+                    best_cand = c_clean
+            selected_text = self._clean_transcription(best_cand)
             detected_cmd = selected_text.strip()
             logger.info(f"🔗 [{user.display_name}] sessione attiva (completamento comando): '{selected_text}'")
         else:
@@ -901,18 +961,19 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
                     await self.player.resume_interrupted_song()
                 return
 
-        command_part = detected_cmd
+        command_part = self._clean_transcription(detected_cmd) if detected_cmd else None
 
         if command_part is None:
             has_w, cmd, _ = self.extract_wake_and_command(text)
             if has_w:
-                command_part = cmd
+                command_part = self._clean_transcription(cmd)
 
         # Se l'utente era in sessione di attesa (aveva detto "Franchino" o "Franchino metti" e ora dice il comando/brano):
         if uid in self._pending_wake:
             wake_time, pending_prefix = self._pending_wake.pop(uid)
             if now - wake_time <= 10.0:
                 raw_followup = command_part if command_part else text.strip()
+                raw_followup = self._clean_transcription(raw_followup)
                 command_part = f"{pending_prefix} {raw_followup}".strip() if pending_prefix else raw_followup
                 logger.info(f"🔗 Continuazione comando vocale per {user.display_name}: '{command_part}'")
 

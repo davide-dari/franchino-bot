@@ -46,13 +46,151 @@ _ALL_WIKI_TITLES: List[str] = []
 _LOWER_TO_TITLE: Dict[str, str] = {}
 _INDEX_LOADED: bool = False
 
+# ==============================================================================
+# NORMALIZZAZIONE FONETICA STT ITALIANO (Google Speech-to-Text it-IT)
+# Corregge sistematicamente le trascrizioni fonetiche italianizzate di termini gaming inglesi
+# e meccaniche di Ultima Online Outlands prima di qualsiasi elaborazione NLU/ricerca.
+# ==============================================================================
+UO_PHONETIC_REPLACEMENTS: List[Tuple[re.Pattern, str]] = [
+    # --- 1. PET & ANIMAL COMPANIONS (es. "pat", "pad", "ped", "pette", "petti", "pe", "pè", "pé", "ipad per farmare") ---
+    # Varianti ipad / i pad
+    (re.compile(r'\b(migliori|miglior|quali|che|top|consigliami|guida\s+(?:agli|ai)?|parlami\s+d(?:ei|egli))\s+(?:ipad|i\s+pad)\b', re.IGNORECASE), r'\1 pet'),
+    (re.compile(r'\b(?:i\s+pad|ipad|l\'ipad|gli\s+ipad)\b(?=\s+(?:per|da|del|dei|in|di|tamer|taming|farm|farmare|dungeon|pvm))', re.IGNORECASE), 'i pet'),
+    (re.compile(r'\b(?:ipad)\b(?=\s+(?:per|da|del|dei|in|di|tamer|taming|farm|farmare|dungeon|pvm))', re.IGNORECASE), 'pet'),
+
+    # Varianti con 'bet', 'bed', 'beth', 'bette', 'betti'
+    (re.compile(r'\b(i|il|un|uno|che|quale|quali|dei|degli|del|ai|agli|al|coi|con|questo|questi|quel|quelli|ogni|tutti\s+i|miglior|migliori|top|tier\s+list|lista|elenco|consigliami|guida\s+(?:ai|agli|a)?|parlami\s+d(?:ei|egli|el)|spiegami\s+i?|mostrami\s+i?|info\s+su|scheda)\s+(?:bet|bed|beth|bette|betti)\b', re.IGNORECASE), r'\1 pet'),
+    (re.compile(r'\b(?:bet|bed|beth|bette|betti)\b(?=\s+(?:per|da|del|dei|di|in|tamer|taming|farm|farmare|pvm|pvp|dungeon|boss|usare|posso))', re.IGNORECASE), 'pet'),
+
+    # Varianti con 'pe', 'pè', 'pé' (parlato rapido o troncamento STT di 'pet')
+    (re.compile(r'\b(i|il|un|uno|che|quale|quali|dei|degli|del|dal|ai|agli|al|coi|con|nel|questo|questi|quel|quelli|ogni|tutti\s+i|miglior|migliori|top|tier\s+list|lista|elenco|consigliami|guida\s+(?:ai|agli|a)?|parlami\s+d(?:ei|egli|el)|spiegami\s+i?|mostrami\s+i?|info\s+su|scheda)\s+(?:pe|pè|pé)\b', re.IGNORECASE), r'\1 pet'),
+    (re.compile(r'\b(?:pe|pè|pé)\b(?=\s+(?:per|da|del|dei|delle|di|in|con|e|o|posso|usare|scegliere|prendere|comprare|farmare|tamer|taming|pvm|pvp|dungeon|boss|tank|dps|forti|forte|migliori|migliore|tier|livello|allena|addomestica))', re.IGNORECASE), 'pet'),
+
+    # Forme acustiche dirette di pet / pets (es. "pat", "pad", "ped", "pette", "petti", "peth", "petz", "pezz", "pez", "pett", "pads", "pats", "peds")
+    # Esclude 'mouse pad' tramite negative lookbehind
+    (re.compile(r'(?<!mouse\s)\b(?:pat|pad|ped|pette|petti|peth|petz|pezz|pez|pett)\b', re.IGNORECASE), 'pet'),
+    (re.compile(r'\b(?:pets|pads|pats|peds)\b', re.IGNORECASE), 'pet'),
+
+    # --- 2. BUILD & TEMPLATES (es. "bild", "bilde", "bilds", "bield", "biuld") ---
+    (re.compile(r'\b(?:bild|bilde|bilds|bield|bielt|biuld|builde|buid|beald)\b', re.IGNORECASE), 'build'),
+    (re.compile(r'\b(?:bildare|bildami|buildami|sbildare)\b', re.IGNORECASE), 'buildare'),
+    (re.compile(r'\b(?:bildato|bildata|bildati|bildate)\b', re.IGNORECASE), 'buildato'),
+    (re.compile(r'\b(?:bilder|bilding)\b', re.IGNORECASE), 'builder'),
+
+    # --- 3. TAMING & TAMER (es. "teming", "teiming", "temer", "teimer") ---
+    (re.compile(r'\b(?:animal\s+teming|animal\s+teiming|enimal\s+teming|enimal\s+taming|animal\s+tamin)\b', re.IGNORECASE), 'animal taming'),
+    (re.compile(r'\b(?:animal\s+temer|animal\s+teimer|enimal\s+temer|enimal\s+tamer)\b', re.IGNORECASE), 'animal tamer'),
+    (re.compile(r'\b(?:teming|teiming|tayming|tamin|temin|taiming|teyming|teimin|teymin)\b', re.IGNORECASE), 'taming'),
+    (re.compile(r'\b(?:temer|teimer|taymer|teymar|teimur|teymir|temers|teimers)\b', re.IGNORECASE), 'tamer'),
+    (re.compile(r'\b(al|del|il|un|per\s+il|come)\s+temere\b', re.IGNORECASE), r'\1 tamer'),
+    (re.compile(r'\btemere\b(?=\s+(?:mage|arciere|dexxer|pvm|pvp|build|guida|pet|animal))', re.IGNORECASE), 'tamer'),
+
+    # --- 4. DRAKE (es. "dreik", "dreic", "drec", "drek") ---
+    (re.compile(r'\b(?:dreik|dreic|drec|drek|dreyk|draik)\b', re.IGNORECASE), 'drake'),
+    (re.compile(r'\b(?:dreiks|dreics|dreiki|dreici|drakes)\b', re.IGNORECASE), 'drake'),
+    (re.compile(r'\b(?:eldritch\s+dreik|eldritc\s+drake|eldritch\s+dreic|eldritc\s+dreik)\b', re.IGNORECASE), 'eldritch drake'),
+    (re.compile(r'\b(cold|fire|poison|energy|water|blood|earth|ember|air|dusk|swamp)\s+(?:dreik|dreic)\b', re.IGNORECASE), r'\1 drake'),
+
+    # --- 5. SLAYER (es. "sleier", "sleiar", "sleger", "sleye") ---
+    (re.compile(r'\b(?:sleier|sleiar|sleger|sleye|sleer|slajer|slaier|slayr)\b', re.IGNORECASE), 'slayer'),
+    (re.compile(r'\b(?:sleiers|sleiars|slegers|slayers)\b', re.IGNORECASE), 'slayer'),
+
+    # --- 6. DEXXER (es. "dexer", "dexter", "decs", "dextar") ---
+    (re.compile(r'\b(?:dexer|dexter|decs|dextar|deccer|dexxers|dexers|decsar)\b', re.IGNORECASE), 'dexxer'),
+
+    # --- 7. ASPECT & ASPECT CORE (es. "aspet", "aspek", "aspekt", "distillazioni") ---
+    (re.compile(r'\b(gli|l\'|un|agli|dagli|sugli|degli|questo|questi|che|quali|miglior|migliori)\s+(?:aspet|aspek|aspekt|aspec)\b', re.IGNORECASE), r'\1 aspect'),
+    (re.compile(r'\b(?:aspet|aspek|aspekt|aspec)\b(?=\s+(?:core|tome|gear|mastery|command|fire|water|air|earth|void|tier|cor|tom|di|in|su|per|outlands))', re.IGNORECASE), 'aspect'),
+    (re.compile(r'\b(?:aspet\s+core|aspek\s+core|aspekt\s+core|aspect\s+cor|aspetti\s+core|aspetti\s+cor|aspect\s+cors)\b', re.IGNORECASE), 'aspect core'),
+    (re.compile(r'\b(?:aspet\s+tome|aspek\s+tome|aspect\s+tom|aspetti\s+tome)\b', re.IGNORECASE), 'aspect tome'),
+    (re.compile(r'\b(?:distillazioni|distilleiscion|distillation|distilleisciun|distillazione)\b', re.IGNORECASE), 'aspect distillation'),
+
+    # --- 8. DUNGEON (es. "dangeon", "dangion", "dongion") ---
+    (re.compile(r'\b(?:dangeon|dangion|dongion|dangiun|danjon|dungeons|dangeons)\b', re.IGNORECASE), 'dungeon'),
+
+    # --- 9. LOCKPICKING & LOCKPICK (es. "locpic", "locpiking") ---
+    (re.compile(r'\b(?:locpic|locpik|lockpic)\b', re.IGNORECASE), 'lockpick'),
+    (re.compile(r'\b(?:locpiking|locpicking|lockpiking)\b', re.IGNORECASE), 'lockpicking'),
+
+    # --- 10. MASTERY CHAIN (es. "masteri cein", "mastery cein") ---
+    (re.compile(r'\b(?:masteri\s+cein|mastery\s+cein|masteri\s+chain|masteri\s+cian|mastery\s+cian|masteri\s+scien)\b', re.IGNORECASE), 'mastery chain'),
+    (re.compile(r'\bmasteri\b', re.IGNORECASE), 'mastery'),
+
+    # --- 11. SUMMONER (es. "sammoner", "samoner") ---
+    (re.compile(r'\b(?:sammoner|samoner|semmoner)\b', re.IGNORECASE), 'summoner'),
+    (re.compile(r'\b(?:sammon|semmon)\b', re.IGNORECASE), 'summon'),
+
+    # --- 12. SPAWN & LOOT (es. "spon", "lut", "lutare") ---
+    (re.compile(r'\b(?:spon|sponare|sponna|sponano)\b', re.IGNORECASE), 'spawn'),
+    (re.compile(r'\b(?:lut|lutare|luttare|lootare)\b', re.IGNORECASE), 'loot'),
+
+    # --- 13. CODEX & BESTIARY (es. "codecs", "bestieri") ---
+    (re.compile(r'\b(?:codecs|codec|kodex)\b', re.IGNORECASE), 'codex'),
+    (re.compile(r'\b(?:bestieri|bestiari)\b', re.IGNORECASE), 'bestiary'),
+    (re.compile(r'\b(?:taming\s+bestieri|teming\s+bestiari|teming\s+bestiary)\b', re.IGNORECASE), 'taming bestiary'),
+
+    # --- 14. SIGLE & ACRONIMI (PvM, PvP, PK) ---
+    (re.compile(r'\b(?:pi\s+vu\s+emme|pi\s+v\s+emme|piviemme)\b', re.IGNORECASE), 'pvm'),
+    (re.compile(r'\b(?:pi\s+vu\s+pi|pi\s+v\s+pi|pivipi)\b', re.IGNORECASE), 'pvp'),
+    (re.compile(r'\b(?:pi\s+cappa|pi\s+ka|picappa)\b', re.IGNORECASE), 'pk'),
+
+    # --- 15. CREATURE SPECIFICHE ---
+    (re.compile(r'\b(?:frenzi|frenzid|frenzy)\s+ostard\b', re.IGNORECASE), 'frenzied ostard'),
+    (re.compile(r'\b(?:naitmer|naitmar|nightmer|naitmair)\b', re.IGNORECASE), 'nightmare'),
+    (re.compile(r'\b(?:fair\s+stid|fairsteed|fair\s+steed)\b', re.IGNORECASE), 'fire steed'),
+    (re.compile(r'\b(?:corps\s+worm|corps\s+vorm|corp\s+worm)\b', re.IGNORECASE), 'corpse worm'),
+    (re.compile(r'\b(?:bludwolf|blood\s+wolf|blud\s+wolf)\b', re.IGNORECASE), 'bloodwolf'),
+    (re.compile(r'\b(?:helhaund|hell\s+hound|hel\s+hound)\b', re.IGNORECASE), 'hellhound'),
+
+    # --- 16. COMANDI VOCALI & MUSICALI ---
+    (re.compile(r'\b(?:skippa|schip|skipp)\b', re.IGNORECASE), 'skip'),
+    (re.compile(r'\b(?:stoppa|stopp)\b', re.IGNORECASE), 'stop'),
+    (re.compile(r'\b(?:plei|pley)\b', re.IGNORECASE), 'play'),
+    (re.compile(r'\b(?:sciaffol|shuffol|shuffel)\b', re.IGNORECASE), 'shuffle'),
+    (re.compile(r'\b(?:lup)\b', re.IGNORECASE), 'loop'),
+]
+
+
+def normalize_uo_speech(text: str) -> str:
+    """
+    Normalizza una trascrizione vocale italiana (Google STT it-IT),
+    sostituendo le pronunce italianizzate di termini inglesi e gaming
+    con i corrispettivi esatti di Ultima Online Outlands.
+    """
+    if not text:
+        return ""
+    norm = text.strip()
+    for pat, repl in UO_PHONETIC_REPLACEMENTS:
+        norm = pat.sub(repl, norm)
+    return re.sub(r'\s+', ' ', norm).strip()
+
+
 # Dizionario rapido dei termini italiani più comuni su Ultima Online Outlands
 IT_TO_UO_TERMS: Dict[str, str] = {
     "addomesticare": "Animal Taming",
     "addomesticamento": "Animal Taming",
     "domare": "Animal Taming",
     "taming": "Animal Taming",
+    "pet": "Taming Bestiary",
+    "pets": "Taming Bestiary",
+    "bestie": "Taming Bestiary",
+    "animali": "Taming Bestiary",
+    "creature": "Taming Bestiary",
+    "famigli": "Taming Bestiary",
+    "famiglio": "Taming Bestiary",
+    "cuccioli": "Taming Bestiary",
+    "tamer": "Animal Taming",
     "bestiario": "Taming Bestiary",
+    "bestiario taming": "Taming Bestiary",
+    "build": "Character Templates",
+    "builds": "Character Templates",
+    "template": "Character Templates",
+    "classi": "Character Templates",
+    "classe": "Character Templates",
+    "drake": "Drake",
+    "slayer": "Slayer",
+    "slayers": "Slayer",
+    "armi slayer": "Slayer",
     "scassinare": "Lockpicking",
     "scassinamento": "Lockpicking",
     "serrature": "Lockpicking",
@@ -303,6 +441,34 @@ OUTLANDS_BUILDS: Dict[str, dict] = {
             "Se stai iniziando da zero su Outlands, la build migliore è il Bardo Melee o Bardo Arciere: ti bastano arco, bende e un liuto. "
             "Alza Provocazione e Musica: nei Sanctuary Dungeons sei al sicuro dal PvP, fai combattere i mostri tra loro e tiri su centinaia "
             "di migliaia di gold in pochissimo tempo. Ti ho mandato la guida per principianti in privato!"
+        ),
+    },
+    "meta_overview": {
+        "title": "Le 6 Migliori Build Meta di UO Outlands (700 Punti Skill)",
+        "wiki_page": "Character Templates",
+        "wiki_url": "https://wiki.uooutlands.com/Character_Templates",
+        "role": "I 6 archetipi più forti ed efficienti per PvM, Dungeon e Farm di Outlands",
+        "skills": [
+            "🏹 **Bardo Arciere (Bard Archer)**: Farm a distanza in solitaria (Provocation + Archery)",
+            "🐾 **Tamer Mage (Animal Taming)**: Il re dei boss end-game e dungeon con i pet",
+            "⚔️ **Dexxer Spada (Melee Paladin)**: Danni ad area ravvicinati con Cleave e Chivalry",
+            "💀 **Summoner Necro (Necromancy)**: Evocazioni di massa e maledizioni con mana continuo",
+            "🗝️ **Ladro da Dungeon (Chest Thief)**: Ricchezza estrema aprendo forzieri senza combattere",
+            "💰 **Starter Gold Farm (Beginner)**: Per iniziare da zero nei Sanctuary Dungeons e fare subito oro",
+        ],
+        "stats": "Str 90-100 | Dex 35-100 | Int 25-100 a seconda del template",
+        "recommended_aspects": "Command per Tamer/Bardo, Fire/Void per Dexxer, Fortune per Ladro/Starter, Death per Necro.",
+        "how_to_play": (
+            "Scegli l'archetipo più adatto al tuo stile di gioco:\n"
+            "• Vuoi combattere corpo a corpo? Scegli il Dexxer Spada.\n"
+            "• Vuoi dominare da lontano con gli animali? Scegli il Tamer Mage.\n"
+            "• Vuoi farmare in totale relax nei dungeon? Scegli il Bardo Arciere o il Ladro!\n"
+            "Dì *\"Franchino build Tamer\"* o *\"Franchino build Dexxer\"* per la guida dettagliata di ciascuna!"
+        ),
+        "voice_summary": (
+            "Le migliori build su Outlands sono 6: Bardo Arciere per i dungeon in solitaria; Tamer Mage per dominare i boss con i pet; "
+            "Dexxer con Spada per il corpo a corpo ad area; Summoner Necro per evocare orde oscure; Ladro per svuotare i forzieri; "
+            "e lo Starter Gold per iniziare da zero e fare subito centinaia di migliaia di monete! Chiedimi una build specifica per tutti i dettagli!"
         ),
     },
 }
@@ -803,13 +969,14 @@ def _extract_topic_and_keywords(question: str) -> Tuple[str, List[str]]:
     Estrae il soggetto principale da cercare sulla Wiki e le parole chiave specifiche della domanda
     per individuare la sezione esatta (#anchor) di riferimento.
     """
-    q_low = question.lower().strip(" ?!.,;:")
+    q_norm = normalize_uo_speech(question)
+    q_low = q_norm.lower().strip(" ?!.,;:")
 
     # Parole chiave di sezione (per trovare l'ancora #Sezione più pertinente alla domanda!)
     section_keywords: List[str] = []
     keyword_map = {
         "training": ("allena", "allenare", "allenamento", "alzare", "livellare", "salire", "training", "gain", "macrare"),
-        "tameable": ("addomesticato", "tamed", "pet", "follower", "slot", "min taming", "quanta skill", "domare"),
+        "tameable": ("addomesticato", "tamed", "pet", "pets", "follower", "slot", "min taming", "quanta skill", "domare", "bestiario", "bestiary", "famiglio", "famigli"),
         "abilities": ("abilità", "abilita", "poteri", "special", "spells", "attacchi", "abilities", "ability", "breath"),
         "unlock": ("sblocca", "sbloccare", "attivare", "attiva", "ottenere", "creare", "craftare", "unlock", "activate", "essence"),
         "tier": ("livello", "livelli", "tier", "upgrade", "potenziare", "esperienza", "exp", "xp"),
@@ -829,7 +996,10 @@ def _extract_topic_and_keywords(question: str) -> Tuple[str, List[str]]:
         flags=re.IGNORECASE,
     )
     topic = re.sub(
-        r"^(?:mi\s+dici|puoi\s+dirmi|dimmi\s+tutto\s+su|dimmi\s+di|dimmi|spiegami\s+bene|spiegami|parlami\s+di|raccontami\s+di)\s+",
+        r"^(?:mi\s+dici|puoi\s+dirmi|dimmi\s+tutto\s+su|dimmi\s+di|dimmi|spiegami\s+bene|spiegami|"
+        r"parlami\s+di|parlami\s+dei|parlami\s+delle|parlami\s+del|parla\s+dei|parla\s+delle|parla\s+del|parla\s+di|"
+        r"raccontami\s+di|guida\s+(?:a|ai|al|su|per|agli)|consigli\s+(?:su|per)|"
+        r"consigliami\s+(?:su\s+|per\s+|un\s+|una\s+|uno\s+)?|cosa\s+mi\s+consigli\s+(?:su\s+|per\s+)?)\s*",
         "",
         topic,
         flags=re.IGNORECASE,
@@ -840,7 +1010,9 @@ def _extract_topic_and_keywords(question: str) -> Tuple[str, List[str]]:
         r"come\s+si\s+sblocca|come\s+sblocco|come\s+si\s+attiva|come\s+si\s+ottiene|"
         r"come\s+si\s+allena|come\s+alleno|come\s+posso\s+allenare|dove\s+si\s+allena|"
         r"dove\s+si\s+trova|dove\s+si\s+trovano|dove\s+trovo|a\s+cosa\s+serve|a\s+che\s+serve|"
-        r"quanta\s+skill\s+serve\s+per|quanto\s+serve\s+per|quali\s+sono\s+le\s+statistiche\s+di|statistiche\s+di|quali\s+sono\s+i|quali\s+sono\s+le|quali\s+sono)\s+",
+        r"quanta\s+skill\s+serve\s+per|quanto\s+serve\s+per|quali\s+sono\s+le\s+statistiche\s+di|statistiche\s+di|"
+        r"quali\s+sono\s+i|quali\s+sono\s+le|quali\s+sono|qual\s+è\s+(?:il|la|l')|quale\s+è\s+(?:il|la|l')|"
+        r"che|quale|quali)\s+",
         "",
         topic,
         flags=re.IGNORECASE,
@@ -852,12 +1024,18 @@ def _extract_topic_and_keywords(question: str) -> Tuple[str, List[str]]:
         flags=re.IGNORECASE,
     )
     topic = re.sub(
+        r"\s+(?:posso\s+usare|posso\s+scegliere|usare|scegliere|prendere|mettere|consigli|mi\s+consigli|per\s+farmare|da\s+farmare|per\s+iniziare)$",
+        "",
+        topic,
+        flags=re.IGNORECASE,
+    )
+    topic = re.sub(
         r"\s+(?:su\s+uo\s+outlands|su\s+outlands|in\s+outlands|sulla\s+wiki|su\s+ultima\s+online)$",
         "",
         topic,
         flags=re.IGNORECASE,
     )
-    topic = re.sub(r"^(?:il|lo|la|i|gli|le|un|uno|una|l')\s*", "", topic.strip()).strip(" ?!.,;:")
+    topic = re.sub(r"^(?:il|lo|la|i|gli|le|un|uno|una|l'|dei|degli|delle|del|della)\s*", "", topic.strip()).strip(" ?!.,;:")
 
     return (topic or q_low), section_keywords
 
@@ -1104,10 +1282,55 @@ def _search_outlands_wiki_sync(question: str) -> Optional[dict]:
 
 def _resolve_pets_query(question: str) -> Optional[dict]:
     """Riconosce e risponde istantaneamente alle domande sui migliori pet per farmare su UO Outlands."""
-    q_low = question.lower().strip()
-    has_pet_word = any(k in q_low for k in ("pet", "bestie", "animali", "creature", "tamer", "taming"))
-    has_farm_or_best = any(k in q_low for k in ("miglior", "migliori", "farmare", "farm", "forte", "forti", "top", "consigli", "consiglia", "usare", "scegliere", "quali", "quale", "tier", "livello"))
-    if has_pet_word and has_farm_or_best:
+    q_norm = normalize_uo_speech(question)
+    q_low = q_norm.lower().strip(" ?!.,;:")
+
+    # Se l'utente sta chiedendo specificamente una build o template (es. "build tamer", "build per tamer"),
+    # lasciamo che sia _resolve_build_query a rispondere con la scheda del Tamer Mage!
+    is_pure_build = any(k in q_low for k in ("build", "template", "classe", "come buildare", "skill template"))
+    has_explicit_pet_pick = any(k in q_low for k in (
+        "miglior pet", "migliori pet", "quali pet", "che pet", "top pet", "lista pet",
+        "guida ai pet", "guida pet", "consigli pet", "consigliami un pet", "pet per", "pet da",
+        "pet pvm", "pet dungeon", "pet boss"
+    ))
+    if is_pure_build and not has_explicit_pet_pick:
+        return None
+
+    # Domanda diretta o parola chiave standalone sui pet
+    if q_low in ("pet", "pets", "i pet", "top pet", "guida pet", "guida ai pet", "taming bestiary", "bestiario taming", "lista pet"):
+        b = OUTLANDS_BEST_PETS
+        embed = discord.Embed(
+            title=f"🐾 {b['title']}",
+            url=b["wiki_url"],
+            description=f"**Ruolo**: {b['role']}\n\n**🏆 I Migliori Pet Consigliati:**\n" + "\n\n".join(b["top_pets"]),
+            color=COLOR_FRANCHINO,
+        )
+        embed.add_field(name="💡 Consigli Fondamentali per il Farm", value=b["key_tips"], inline=False)
+        embed.add_field(
+            name="🔗 Approfondisci sul Taming Bestiary",
+            value=f"[Apri la guida `{b['wiki_page']}` su wiki.uooutlands.com]({b['wiki_url']})",
+            inline=False,
+        )
+        embed.set_footer(text="Franchino UO Outlands Pet Advisor • wiki.uooutlands.com")
+        return {
+            "page_title": b["title"],
+            "section_title": "Top Farming Pets & Bestiary Guide",
+            "section_url": b["wiki_url"],
+            "voice_answer": b["voice_summary"],
+            "embed": embed,
+        }
+
+    has_pet_word = any(re.search(r'\b' + re.escape(k) + r'\b', q_low) for k in (
+        "pet", "pets", "bestie", "animali", "creature", "famigli", "cuccioli", "tamer", "taming",
+        "bestiario", "bestiary", "addomesticare", "domare"
+    ))
+    has_farm_or_best = any(k in q_low for k in (
+        "miglior", "migliori", "farmare", "farm", "forte", "forti", "top", "consigli",
+        "consiglia", "consigliami", "usare", "scegliere", "quali", "quale", "che", "tier",
+        "livello", "pvm", "dungeon", "tank", "dps", "guida", "spiegami", "parlami", "parla",
+        "come funzionano", "lista", "elenco", "raccontami", "dimmi", "iniziare", "info", "cosa sono"
+    ))
+    if (has_pet_word and has_farm_or_best) or has_explicit_pet_pick:
         b = OUTLANDS_BEST_PETS
         embed = discord.Embed(
             title=f"🐾 {b['title']}",
@@ -1134,8 +1357,12 @@ def _resolve_pets_query(question: str) -> Optional[dict]:
 
 def _resolve_build_query(question: str) -> Optional[dict]:
     """Riconosce e risponde istantaneamente alle domande sulle build e template meta di UO Outlands."""
-    q_low = question.lower().strip()
-    if not any(k in q_low for k in ("build", "template", "classe", "bardo", "tamer", "dexxer", "ladro", "necro", "starter", "iniziare", "farmare", "soldi", "gold", "paladino", "spada", "arciere")):
+    q_norm = normalize_uo_speech(question)
+    q_low = q_norm.lower().strip()
+    if not any(k in q_low for k in (
+        "build", "template", "classe", "bardo", "tamer", "dexxer", "ladro", "necro",
+        "starter", "iniziare", "farmare", "soldi", "gold", "paladino", "spada", "arciere"
+    )):
         return None
 
     matched_key = None
@@ -1149,8 +1376,10 @@ def _resolve_build_query(question: str) -> Optional[dict]:
         matched_key = "summoner_necro"
     elif any(k in q_low for k in ("dexxer", "spadaccino", "spada", "melee", "corpo a corpo")):
         matched_key = "dexxer_spada"
-    elif any(k in q_low for k in ("iniziare", "principiante", "beginner", "soldi", "gold", "farmare", "ricco", "farm")):
+    elif any(k in q_low for k in ("iniziare", "principiante", "beginner", "soldi", "gold", "starter")):
         matched_key = "starter_gold"
+    elif any(k in q_low for k in ("miglior", "migliori", "consigli", "consiglia", "consigliami", "quali", "che", "top", "meta", "farmare", "farm", "pvm")):
+        matched_key = "meta_overview"
 
     if not matched_key or matched_key not in OUTLANDS_BUILDS:
         return None
@@ -1183,7 +1412,8 @@ def _resolve_build_query(question: str) -> Optional[dict]:
 
 def _resolve_special_item_query(question: str) -> Optional[dict]:
     """Riconosce e risponde istantaneamente a come usare gli oggetti iconici e meccaniche di UO Outlands."""
-    q_low = question.lower().strip()
+    q_norm = normalize_uo_speech(question)
+    q_low = q_norm.lower().strip()
     matched_key = None
 
     if any(k in q_low for k in ("mastery chain", "catena della maestria", "catena", "links", "medallions")):
@@ -1233,7 +1463,8 @@ def _resolve_special_item_query(question: str) -> Optional[dict]:
 
 def _resolve_creature_query(question: str, conn: sqlite3.Connection) -> Optional[dict]:
     """Riconosce e restituisce all'istante la scheda tecnica ufficiale di qualsiasi creatura o mostro di Outlands."""
-    q_low = question.lower().strip()
+    q_norm = normalize_uo_speech(question)
+    q_low = q_norm.lower().strip()
     c = conn.cursor()
 
     c.execute("""
@@ -1243,11 +1474,35 @@ def _resolve_creature_query(question: str, conn: sqlite3.Connection) -> Optional
     """, (q_low,))
     row = c.fetchone()
     if not row:
+        # Controllo fuzzy rapido di fallback su nomi creature (es. plurale in -s o lieve disallineamento)
+        tokens = [w.strip(" ,.!?:;-\"'") for w in q_low.split() if len(w.strip(" ,.!?:;-\"'")) >= 4]
+        stopwords = {
+            "cosa", "come", "dove", "quando", "quanta", "quanto", "quali", "quale",
+            "info", "dimmi", "parlami", "spiegami", "statistiche", "scheda", "trova",
+            "trovo", "sono", "serve", "guida", "bestie", "animali", "creature", "dungeon"
+        }
+        cand_tokens = [t for t in tokens if t not in stopwords]
+        if cand_tokens:
+            c.execute("SELECT name FROM creatures WHERE length(name) >= 4")
+            all_names = [r["name"] for r in c.fetchall()]
+            name_map = {n.lower(): n for n in all_names}
+            lower_names = list(name_map.keys())
+            for tok in cand_tokens:
+                tok_sing = tok[:-1] if tok.endswith("s") and len(tok) > 4 else None
+                if tok_sing and tok_sing in name_map:
+                    row = {"name": name_map[tok_sing]}
+                    break
+                close = difflib.get_close_matches(tok, lower_names, n=1, cutoff=0.82)
+                if close:
+                    row = {"name": name_map[close[0]]}
+                    break
+
+    if not row:
         return None
 
     name = row["name"]
-    if not re.search(r'\b' + re.escape(name) + r'\b', question, re.IGNORECASE):
-        if len(name) < len(question) * 0.4:
+    if not re.search(r'\b' + re.escape(name) + r's?\b', q_norm, re.IGNORECASE):
+        if len(name) < len(q_norm) * 0.35:
             return None
 
     c.execute("SELECT * FROM creatures WHERE name = ?", (name,))
@@ -1329,7 +1584,8 @@ def _resolve_creature_query(question: str, conn: sqlite3.Connection) -> Optional
 
 def _resolve_dungeon_query(question: str, conn: sqlite3.Connection) -> Optional[dict]:
     """Riconosce e restituisce all'istante la guida completa a qualsiasi dungeon di Outlands."""
-    q_low = question.lower()
+    q_norm = normalize_uo_speech(question)
+    q_low = q_norm.lower()
     matched = None
     for d in sorted(OUTLANDS_DUNGEONS, key=len, reverse=True):
         short = d.replace("The ", "").split()[0]
@@ -1747,11 +2003,13 @@ async def query_outlands_wiki(question: str) -> Optional[dict]:
 def is_wiki_question(command_part: str) -> Tuple[bool, str]:
     """
     Determina se la frase rivolta a Franchino è una domanda su UO Outlands (https://wiki.uooutlands.com).
-    Riconosce qualsiasi domanda ("cos'è...", "come creare una build...", "come si usa questo oggetto...",
+    Normalizza foneticamente il parlato italiano (es. 'pat' -> 'pet', 'bild' -> 'build', 'temer' -> 'tamer')
+    e riconosce qualsiasi domanda naturale ("cos'è...", "che pet...", "come creare una build...", "come si usa...",
     "dove si trova...", "quanta skill...", "statistiche di...", "spiegami...", ecc.) oppure qualsiasi riferimento
     alle ~2.212 pagine della Wiki, creature o dungeon!
     """
-    cmd = command_part.strip()
+    cmd_norm = normalize_uo_speech(command_part)
+    cmd = cmd_norm.strip()
     cmd_low = cmd.lower().strip(" ?!.,;:")
 
     # Esclude i comandi musicali, DM o Admin espliciti
@@ -1767,35 +2025,74 @@ def is_wiki_question(command_part: str) -> Tuple[bool, str]:
         "espelli ", "banna ", "sbanna ", "trombetta", "sirena", "applausi", "rullo", "fail",
         "vittoria", "laser", "censura", "fischio", "risata", "buuu", "bass boost", "mega bass",
         "nightcore", "slowed", "8d", "karaoke", "vaporwave", "scoiattolo", "voce profonda", "normale",
+        "ripeti", "loop", "shuffle", "mescola", "mischia", "coda", "mostra la coda",
+        "chi canta", "canzone precedente", "torna indietro", "aspetta",
     )
-    if cmd_low.startswith(non_wiki_starts):
+    if cmd_low.startswith(non_wiki_starts) or cmd_low in (
+        "skip", "stop", "pausa", "riprendi", "ripeti", "loop", "shuffle", "coda", "aspetta"
+    ):
         return False, ""
 
-    # Pattern dedicati a Build, Template, Oggetti, Pet, Dungeon e Meccaniche
-    if any(k in cmd_low for k in (
-        "build", "template", "classe", "come buildare", "miglior build", "consigliami una build",
-        "come si usa", "come usare", "a cosa serve", "a che serve", "cosa fa", "come funziona",
-        "come craftare", "come si crafta", "dove farmare", "come fare soldi", "come fare gold",
-        "tamer", "bardo", "dexxer", "ladro", "necro", "aspect", "mastery chain", "codex", "mushrooms",
-        "pet", "bestie", "animali", "taming", "tier list", "slayer", "dungeon", "mostri di", "boss di",
-    )):
+    # Termini chiave specifici di Ultima Online Outlands & Gaming (con word boundary per evitare falsi positivi)
+    uo_single_word_pattern = re.compile(
+        r'\b(?:pet|pets|build|builds|template|tamer|taming|dexxer|aspect|slayer|slayers|'
+        r'drake|ostard|nightmare|bestiario|bestiary|lockpicking|codex|pvm|pvp)\b',
+        re.IGNORECASE
+    )
+    if uo_single_word_pattern.search(cmd_low):
         return True, cmd
 
-    # Dungeons
-    for d in OUTLANDS_DUNGEONS:
-        d_short = d.replace("The ", "").split()[0].lower()
-        if d_short in cmd_low:
-            return True, cmd
+    uo_phrases = (
+        "come buildare", "miglior build", "migliori build", "consigliami una build", "che build mi consigli",
+        "come si usa", "come usare", "a cosa serve", "a che serve", "cosa fa", "come funziona",
+        "come craftare", "come si crafta", "dove farmare", "come fare soldi", "come fare gold",
+        "mastery chain", "animal taming", "taming bestiary", "aspect core", "aspect tome",
+        "corpse worm", "frenzied ostard", "bloodwolf", "hellhound", "tier list",
+        "guida ai pet", "guida pet", "guida tamer", "guida build", "statistiche del pet", "statistiche dei pet",
+        "bardo arciere", "dexxer spada", "tamer mage", "ladro dungeon",
+    )
+    if any(p in cmd_low for p in uo_phrases):
+        return True, cmd
+
+    # Dungeons ufficiali di Outlands
+    # 1. Nomi completi o composti
+    uo_dungeon_full = (
+        "aegis keep", "cavernam", "darkmire temple", "field of souls",
+        "kraul hive", "mount petram", "new player dungeon", "nusero", "omni realm",
+        "ossuary", "pulma", "shadowspire cathedral", "the mausoleum", "tidal tomb",
+        "time dungeon", "undermountain"
+    )
+    if any(df in cmd_low for df in uo_dungeon_full):
+        return True, cmd
+
+    # 2. Nomi singoli univoci di dungeon con word boundary
+    if re.search(r'\b(?:aegis|cavernam|darkmire|petram|nusero|ossuary|pulma|shadowspire|mausoleum)\b', cmd_low):
+        return True, cmd
+
+    # 3. Nomi comuni solo se accompagnati esplicitamente dalla parola 'dungeon'
+    if re.search(r'\b(?:dungeon\s+(?:inferno|ocean|wilderness|time)|(?:inferno|ocean|wilderness|time)\s+dungeon)\b', cmd_low):
+        return True, cmd
+
+    # Termini singoli o diretti del dizionario UO
+    standalone_terms = {
+        "pet", "pets", "taming", "tamer", "build", "template", "drake", "slayer", "dexxer",
+        "aspect", "mastery chain", "codex", "bestiary", "bestiario", "dungeon", "lockpicking"
+    }
+    if cmd_low in standalone_terms or cmd_low in IT_TO_UO_TERMS:
+        return True, cmd
 
     # Pattern di domande naturali in italiano
     question_patterns = (
         r"^(?:wiki|outlands|uo|ultima\s+online)\s+(.+)$",
         r"^(?:cerca\s+sulla\s+wiki|cerca\s+su\s+outlands|chiedi\s+alla\s+wiki)\s+(.+)$",
         r"^(?:che\s+cos'è|che\s+cosa\s+è|cos'è|cosa\s+è|cosa\s+sono|chi\s+è|chi\s+sono)\s+(.+)$",
-        r"^(?:come\s+funziona|come\s+funzionano|come\s+si\s+fa|come\s+si\s+usa|come\s+si\s+sblocca|come\s+si\s+attiva|come\s+si\s+ottiene|come\s+si\s+allena|come\s+alleno|come\s+posso\s+allenare)\s+(.+)$",
-        r"^(?:dove\s+si\s+trova|dove\s+si\s+trovano|dove\s+trovo|dove\s+si\s+allena|dov'è)\s+(.+)$",
-        r"^(?:quanta\s+skill|quanto\s+serve|quali\s+sono|qual\s+è|a\s+cosa\s+serve|a\s+che\s+serve|perché|statistiche\s+di|info\s+su)\s+(.+)$",
-        r"^(?:spiegami|parlami\s+di|raccontami\s+di|dimmi\s+tutto\s+su|dimmi\s+cosa\s+sai\s+su|mi\s+spieghi|mi\s+dici)\s+(.+)$",
+        r"^(?:come\s+funziona|come\s+funzionano|come\s+si\s+fa|come\s+si\s+usa|come\s+si\s+sblocca|come\s+si\s+attiva|come\s+si\s+ottiene|come\s+si\s+allena|come\s+alleno|come\s+posso\s+allenare|come\s+expare|come\s+livellare|come\s+giocare)\s+(.+)$",
+        r"^(?:dove\s+si\s+trova|dove\s+si\s+trovano|dove\s+trovo|dove\s+si\s+allena|dove\s+alleno|dov'è|dove\s+comprare|dove\s+si\s+compra)\s+(.+)$",
+        r"^(?:quanta\s+skill|quanto\s+serve|quali\s+sono|qual\s+è|quale\s+è|a\s+cosa\s+serve|a\s+che\s+serve|perché|statistiche\s+di|stats\s+di|info\s+su)\s+(.+)$",
+        r"^(?:spiegami|parlami\s+di|parlami\s+dei|parlami\s+delle|parlami\s+del|parla\s+dei|parla\s+delle|parla\s+del|parla\s+di|raccontami\s+di|dimmi\s+tutto\s+su|dimmi\s+cosa\s+sai\s+su|mi\s+spieghi|mi\s+dici)\s+(.+)$",
+        r"^(?:che|quale|quali)\s+(?:pet|build|classe|template|arma|dungeon|aspetto|aspect|slayer|creatura|mostro)\b",
+        r"^(?:consigliami|consigli\s+su|consigli\s+per|mi\s+consigli|cosa\s+mi\s+consigli)\s+(.+)$",
+        r"^(?:guida\s+a|guida\s+ai|guida\s+al|guida\s+su|guida\s+per|guida)\s+(.+)$",
     )
 
     for pat in question_patterns:
@@ -1805,17 +2102,26 @@ def is_wiki_question(command_part: str) -> Tuple[bool, str]:
     if "outlands" in cmd_low or "wiki" in cmd_low:
         return True, cmd
 
-    # Se l'utente pronuncia direttamente il nome di una pagina o creatura dell'indice
+    # Se l'utente pronuncia direttamente il nome di una pagina dell'indice MediaWiki
     if _LOWER_TO_TITLE and cmd_low in _LOWER_TO_TITLE:
         return True, cmd
 
-    # Controllo rapido SQLite per nomi creature
+    # Controllo SQLite per creature: match esatto del nome o creatura composta/distintiva
     try:
         conn = get_db_connection()
         if conn:
             c = conn.cursor()
-            c.execute("SELECT name FROM creatures WHERE instr(?, lower(name)) > 0 AND length(name) >= 5 LIMIT 1", (cmd_low,))
+            # 1. Match esatto del nome creatura (singolare o plurale con -s)
+            c.execute("SELECT name FROM creatures WHERE lower(name) = ? OR lower(name) || 's' = ? LIMIT 1", (cmd_low, cmd_low))
             cr = c.fetchone()
+            if not cr and len(cmd_low) >= 8:
+                # 2. Per frasi o nomi lunghi, cerca creature composte (almeno 2 parole o >= 8 caratteri) con boundary
+                c.execute("SELECT name FROM creatures WHERE length(name) >= 8 AND instr(name, ' ') > 0")
+                for r in c.fetchall():
+                    c_name = r["name"].lower()
+                    if re.search(r'\b' + re.escape(c_name) + r's?\b', cmd_low):
+                        cr = r
+                        break
             conn.close()
             if cr:
                 return True, cmd
