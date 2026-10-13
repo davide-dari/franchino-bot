@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import re
+import sqlite3
 import time
 import urllib.parse
 import urllib.request
@@ -19,8 +20,28 @@ logger = logging.getLogger("Franchino.OutlandsWiki")
 WIKI_API_URL = "https://wiki.uooutlands.com/api.php"
 WIKI_BASE_URL = "https://wiki.uooutlands.com/"
 INDEX_CACHE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "outlands_wiki_index.json")
+DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "outlands_knowledge.db")
 
-# Catalogo in memoria di tutte le ~2.140 pagine di wiki.uooutlands.com
+OUTLANDS_DUNGEONS = [
+    "Aegis Keep", "Cavernam", "Darkmire Temple", "Field of Souls", "Inferno",
+    "Kraul Hive", "Mount Petram", "New Player Dungeon", "Nusero", "Omni Realm",
+    "Ossuary", "Pulma", "Shadowspire Cathedral", "The Mausoleum", "Tidal Tomb",
+    "Time Dungeon", "Undermountain", "Ocean", "Wilderness"
+]
+
+def get_db_connection() -> Optional[sqlite3.Connection]:
+    """Restituisce una connessione SQLite ottimizzata al database della conoscenza di Outlands."""
+    if not os.path.isfile(DB_PATH):
+        return None
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        return conn
+    except Exception as e:
+        logger.warning(f"Errore connessione DB outlands_knowledge: {e}")
+        return None
+
+# Catalogo in memoria di tutte le ~2.212 pagine di wiki.uooutlands.com
 _ALL_WIKI_TITLES: List[str] = []
 _LOWER_TO_TITLE: Dict[str, str] = {}
 _INDEX_LOADED: bool = False
@@ -478,7 +499,28 @@ def ensure_wiki_catalog_sync() -> List[str]:
     if _INDEX_LOADED and _ALL_WIKI_TITLES:
         return _ALL_WIKI_TITLES
 
-    # 1. Carica istantaneamente la cache su disco se disponibile
+    # 1. Carica istantaneamente da SQLite data/outlands_knowledge.db se disponibile
+    try:
+        conn = get_db_connection()
+        if conn:
+            c = conn.cursor()
+            c.execute("SELECT title, clean_title FROM pages")
+            rows = c.fetchall()
+            if len(rows) > 500:
+                _ALL_WIKI_TITLES = [r[0] for r in rows]
+                _LOWER_TO_TITLE = {r[1]: r[0] for r in rows}
+                c.execute("SELECT clean_from, to_title FROM redirects")
+                for c_from, t_to in c.fetchall():
+                    _LOWER_TO_TITLE[c_from] = t_to
+                _INDEX_LOADED = True
+                conn.close()
+                logger.info(f"📚 Caricate {len(_ALL_WIKI_TITLES)} pagine ufficiali dal database locale outlands_knowledge.db!")
+                return _ALL_WIKI_TITLES
+            conn.close()
+    except Exception as e:
+        logger.debug(f"Errore lettura DB per catalogo: {e}")
+
+    # 2. Carica istantaneamente la cache su disco se disponibile
     try:
         if os.path.isfile(INDEX_CACHE_FILE):
             with open(INDEX_CACHE_FILE, "r", encoding="utf-8") as f:
@@ -491,7 +533,7 @@ def ensure_wiki_catalog_sync() -> List[str]:
     except Exception as e:
         logger.debug(f"Errore lettura cache indice wiki: {e}")
 
-    # 2. Scarica tutte le pagine da wiki.uooutlands.com via MediaWiki API (allpages)
+    # 3. Scarica tutte le pagine da wiki.uooutlands.com via MediaWiki API (allpages)
     titles: List[str] = []
     apcontinue: Optional[str] = None
     try:
@@ -1189,13 +1231,432 @@ def _resolve_special_item_query(question: str) -> Optional[dict]:
     }
 
 
+def _resolve_creature_query(question: str, conn: sqlite3.Connection) -> Optional[dict]:
+    """Riconosce e restituisce all'istante la scheda tecnica ufficiale di qualsiasi creatura o mostro di Outlands."""
+    q_low = question.lower().strip()
+    c = conn.cursor()
+
+    c.execute("""
+        SELECT name FROM creatures
+        WHERE instr(?, lower(name)) > 0 AND length(name) >= 4
+        ORDER BY length(name) DESC LIMIT 1
+    """, (q_low,))
+    row = c.fetchone()
+    if not row:
+        return None
+
+    name = row["name"]
+    if not re.search(r'\b' + re.escape(name) + r'\b', question, re.IGNORECASE):
+        if len(name) < len(question) * 0.4:
+            return None
+
+    c.execute("SELECT * FROM creatures WHERE name = ?", (name,))
+    cr = dict(c.fetchone())
+
+    is_tame = bool(cr.get("is_tameable"))
+    min_tam = cr.get("min_taming")
+    slots = cr.get("control_slots")
+    hits = cr.get("hits") or 0
+    armor = cr.get("armor") or 0
+    resist = cr.get("magic_resist") or 0
+    min_d = cr.get("min_dmg") or 0
+    max_d = cr.get("max_dmg") or 0
+    slayer = cr.get("slayer") or "Nessuno"
+    gold = cr.get("gold_value") or 0
+    diff = cr.get("difficulty") or 0.0
+    loc = cr.get("location") or "Outlands"
+    abils = cr.get("abilities") or ""
+    c_class = cr.get("creature_class") or "Combattimento"
+    creature_url = cr.get("url") or f"{WIKI_BASE_URL}{name.replace(' ', '_')}"
+
+    if is_tame:
+        embed_title = f"🐾 {name} — Creatura Addomesticabile (Pet)"
+        desc = (
+            f"**🐾 Statistiche di Addomesticamento (Taming)**\n"
+            f"• **Min Taming Richiesto**: `{min_tam or 'N/D'}`\n"
+            f"• **Slot di Controllo**: `{slots or 1} slot`\n"
+            f"• **Ruolo / Classe**: `{c_class}`\n"
+            f"• **Abilità Passive**: `{abils or 'Nessuna'}`\n"
+            f"• **Habitat / Luogo**: `{loc}`\n\n"
+            f"**⚔️ Statistiche di Combattimento**\n"
+            f"• **Punti Vita (Hits)**: `{hits:,}` | **Armatura**: `{armor}`\n"
+            f"• **Danno Melee**: `{min_d} - {max_d}` | **Resistenza Magica**: `{resist}`\n"
+            f"• **Gruppo Slayer**: `{slayer}` | **Valore Oro**: `~{gold:,} gp`"
+        )
+        voice_answer = (
+            f"L'esemplare di {name} richiede {min_tam or 'N/D'} di Animal Taming e occupa {slots or 1} slot di controllo! "
+            f"Ha {hits:,} punti vita" + (f" e l'abilità {abils}" if abils else "") + f". Si trova nei meandri di {loc}! "
+            "Ti ho inviato la scheda tecnica completa nei dettagli! Magia!"
+        )
+    else:
+        embed_title = f"👹 {name} — Mostro di UO Outlands"
+        desc = (
+            f"**👹 Statistiche del Mostro**\n"
+            f"• **Punti Vita (Hits)**: `{hits:,}`\n"
+            f"• **Gruppo Slayer**: `{slayer}` *(usa armi o talismani di questo tipo per fare +danno)*\n"
+            f"• **Danno Melee**: `{min_d} - {max_d}` | **Armatura**: `{armor}`\n"
+            f"• **Resistenza Magica**: `{resist}` | **Difficoltà**: `{diff}`\n"
+            f"• **Bottino Medio in Oro**: `~{gold:,} gp`\n"
+            f"• **Habitat / Dungeon**: `{loc}`"
+        )
+        voice_answer = (
+            f"Il {name} si trova a {loc}! Ha ben {hits:,} punti vita, appartiene allo slayer {slayer} "
+            f"e rilascia circa {gold:,} monete d'oro! Fai molta attenzione nei dungeon ragazzi! "
+            "Ti ho mandato tutti i dati della creatura in messaggio privato! Magia!"
+        )
+
+    embed = discord.Embed(
+        title=embed_title,
+        url=creature_url,
+        description=desc,
+        color=COLOR_FRANCHINO,
+    )
+    embed.add_field(
+        name="🔗 Pagina Wiki Ufficiale",
+        value=f"[Apri la scheda di `{name}` su wiki.uooutlands.com]({creature_url})",
+        inline=False,
+    )
+    embed.set_footer(text="Franchino UO Outlands Bestiary Advisor • wiki.uooutlands.com")
+
+    return {
+        "page_title": name,
+        "section_title": "Statistiche & Proprietà Ufficiali",
+        "section_url": creature_url,
+        "voice_answer": voice_answer,
+        "embed": embed,
+    }
+
+
+def _resolve_dungeon_query(question: str, conn: sqlite3.Connection) -> Optional[dict]:
+    """Riconosce e restituisce all'istante la guida completa a qualsiasi dungeon di Outlands."""
+    q_low = question.lower()
+    matched = None
+    for d in sorted(OUTLANDS_DUNGEONS, key=len, reverse=True):
+        short = d.replace("The ", "").split()[0]
+        if re.search(r'\b' + re.escape(d) + r'\b', q_low, re.IGNORECASE) or re.search(r'\b' + re.escape(short) + r'\b', q_low, re.IGNORECASE):
+            matched = d
+            break
+    if not matched:
+        return None
+
+    c = conn.cursor()
+    c.execute("""
+        SELECT name, slayer, hits, gold_value FROM creatures
+        WHERE location LIKE ?
+        ORDER BY hits DESC LIMIT 6
+    """, (f"%{matched}%",))
+    bosses = [dict(r) for r in c.fetchall()]
+
+    c.execute("""
+        SELECT DISTINCT slayer FROM creatures
+        WHERE location LIKE ? AND slayer != ''
+    """, (f"%{matched}%",))
+    slayers = [r[0] for r in c.fetchall()]
+
+    c.execute("""
+        SELECT name, min_taming, control_slots FROM creatures
+        WHERE location LIKE ? AND is_tameable = 1
+        ORDER BY min_taming DESC LIMIT 4
+    """, (f"%{matched}%",))
+    tames = [dict(r) for r in c.fetchall()]
+
+    dungeon_url = f"{WIKI_BASE_URL}Category:{matched.replace(' ', '_')}"
+    top_boss_names = ", ".join([b["name"] for b in bosses[:3]]) or "creature oscure"
+    slayer_str = ", ".join(slayers[:4]) or "Misti"
+
+    desc = f"**🏰 Esplorazione Dungeon: {matched}**\n\n"
+    if bosses:
+        desc += "**👑 Boss Principali & Creature Pericolose:**\n"
+        for b in bosses:
+            desc += f"• **{b['name']}**: `{b['hits']:,} HP` | Slayer: `{b['slayer']}` | Oro: `~{b['gold_value']:,} gp`\n"
+        desc += "\n"
+
+    if slayers:
+        desc += f"**⚔️ Slayer Consigliati:**\n• " + " | • ".join([f"`{s}`" for s in slayers[:5]]) + "\n\n"
+
+    if tames:
+        desc += "**🐾 Pet Addomesticabili in questo Dungeon:**\n"
+        for t in tames:
+            desc += f"• **{t['name']}** (Min Taming: `{t['min_taming']}`, Slot: `{t['control_slots']}`)\n"
+        desc += "\n"
+
+    voice_answer = (
+        f"Il dungeon {matched} è uno dei più caldi di Outlands! I boss principali sono {top_boss_names}, "
+        f"con mostri di tipo {slayer_str}! Prepara armi con questi slayer e fai scorta di bende ragazzi! "
+        "Ti ho mandato la guida completa e i boss in messaggio privato! Magia!"
+    )
+
+    embed = discord.Embed(
+        title=f"🏰 Dungeon Guide: {matched}",
+        url=dungeon_url,
+        description=desc,
+        color=COLOR_FRANCHINO,
+    )
+    embed.add_field(
+        name="🔗 Pagina Wiki Ufficiale del Dungeon",
+        value=f"[Apri la guida di `{matched}` su wiki.uooutlands.com]({dungeon_url})",
+        inline=False,
+    )
+    embed.set_footer(text="Franchino UO Outlands Dungeon Advisor • wiki.uooutlands.com")
+
+    return {
+        "page_title": f"Dungeon: {matched}",
+        "section_title": "Guida, Boss & Creature",
+        "section_url": dungeon_url,
+        "voice_answer": voice_answer,
+        "embed": embed,
+    }
+
+
+def _resolve_local_knowledge_page(question: str, conn: sqlite3.Connection) -> Optional[dict]:
+    """Cerca e risolve istantaneamente qualsiasi argomento sulle ~2.212 pagine ufficiali di Outlands."""
+    raw_topic, section_keywords = _extract_topic_and_keywords(question)
+    en_topic = translate_text(raw_topic, "it", "en")
+
+    c = conn.cursor()
+    mapped_term = None
+    for it_word, uo_term in IT_TO_UO_TERMS.items():
+        if raw_topic == it_word or f" {it_word} " in f" {raw_topic} ":
+            mapped_term = uo_term
+            break
+
+    candidates = []
+    if mapped_term:
+        candidates.append(mapped_term)
+    if raw_topic and raw_topic not in candidates:
+        candidates.append(raw_topic)
+    if en_topic and en_topic.lower() not in [c.lower() for c in candidates]:
+        candidates.append(en_topic)
+
+    page_row = None
+    for cand in candidates:
+        clean_cand = cand.lower().strip()
+        # 1. Controllo Redirect
+        c.execute("SELECT to_title FROM redirects WHERE clean_from = ?", (clean_cand,))
+        red = c.fetchone()
+        if red:
+            target_title = red[0].replace("Category:", "").strip().lower()
+            c.execute("SELECT * FROM pages WHERE clean_title = ? OR title = ?", (target_title, red[0]))
+            page_row = c.fetchone()
+            if page_row:
+                break
+
+        # 2. Corrispondenza esatta su clean_title o title
+        c.execute("SELECT * FROM pages WHERE clean_title = ? OR title = ?", (clean_cand, cand))
+        page_row = c.fetchone()
+        if page_row:
+            break
+
+        # 3. Match prefisso
+        c.execute("SELECT * FROM pages WHERE clean_title LIKE ? ORDER BY length(clean_title) LIMIT 1", (f"{clean_cand}%",))
+        page_row = c.fetchone()
+        if page_row:
+            break
+
+    # 4. Ricerca Full-Text con FTS5
+    if not page_row:
+        search_str = f"{en_topic} {raw_topic}"
+        words = [
+            w for w in re.findall(r'[a-zA-Z0-9]+', search_str)
+            if len(w) > 2 and w.lower() not in (
+                'come', 'cosa', 'dove', 'perche', 'della', 'delle', 'degli', 'nella', 'nelle',
+                'how', 'what', 'where', 'the', 'and', 'for', 'with', 'outlands', 'wiki'
+            )
+        ]
+        if words:
+            fts_query = ' '.join(words[:4])
+            try:
+                c.execute("""
+                    SELECT p.* FROM pages_fts fts
+                    JOIN pages p ON fts.rowid = p.page_id
+                    WHERE pages_fts MATCH ?
+                    ORDER BY bm25(pages_fts, 10.0, 5.0, 2.0, 1.0, 0.5)
+                    LIMIT 1
+                """, (fts_query,))
+                page_row = c.fetchone()
+            except Exception as e:
+                logger.debug(f"FTS search error: {e}")
+
+    if not page_row:
+        return None
+
+    page_data = dict(page_row)
+    actual_title = page_data["title"]
+    base_page_url = page_data["url"]
+    thumbnail_url = page_data.get("thumbnail_url")
+    sections_json_str = page_data.get("sections_json") or "[]"
+    sections = json.loads(sections_json_str) if sections_json_str else []
+
+    if not sections:
+        content_txt = page_data.get("summary") or page_data.get("content") or ""
+        sections = [{"title": "Panoramica Generale", "anchor": "", "content": content_txt}]
+
+    best_section = sections[0]
+    best_sec_score = -1.0
+    for idx, sec in enumerate(sections):
+        s_title = sec["title"].lower()
+        s_body = sec["content"].lower()
+        score = 0.0
+        for kw in section_keywords:
+            if kw.lower() in s_title:
+                score += 5.0
+            elif kw.lower() in s_body:
+                score += 1.5
+        for cand in candidates:
+            c_low = cand.lower()
+            if c_low in s_title:
+                score += 4.0
+            elif c_low in s_body:
+                score += 1.0
+        if idx == 0:
+            score += 1.2
+        if score > best_sec_score and len(sec["content"]) > 15:
+            best_sec_score = score
+            best_section = sec
+
+    ref_anchor = best_section.get("anchor", "")
+    ref_sec_title = best_section.get("title", "Panoramica")
+    if ref_anchor:
+        ref_sec_url = f"{base_page_url}#{urllib.parse.quote(ref_anchor)}"
+    else:
+        ref_sec_url = base_page_url
+
+    sec_content = best_section["content"][:1200]
+    translated_content = translate_text(sec_content, "en", "it")
+    translated_sec_title = (
+        translate_text(ref_sec_title, "en", "it")
+        if ref_sec_title != "Panoramica Generale"
+        else ref_sec_title
+    )
+
+    spoken_raw = sec_content.replace("• ", "").replace("\n", ". ")
+    spoken_raw = re.sub(r"\.\s*\.+", ".", spoken_raw)
+    spoken_raw = re.sub(r"\s+", " ", spoken_raw).strip()
+    if len(spoken_raw) > 350:
+        cut = spoken_raw[:350].rfind(".")
+        spoken_raw = spoken_raw[: cut + 1] if cut > 120 else spoken_raw[:350] + "..."
+    spoken_it = translate_text(spoken_raw, "en", "it")
+
+    voice_answer = (
+        f"Ecco cosa dice la Wiki di Outlands su {actual_title}: {spoken_it} "
+        "Ti ho inviato la sezione completa con tutti i link in messaggio privato! Magia!"
+    )
+
+    embed = discord.Embed(
+        title=f"📖 {actual_title} — {translated_sec_title}",
+        url=ref_sec_url,
+        description=translated_content[:3500],
+        color=COLOR_FRANCHINO,
+    )
+    embed.add_field(
+        name="🎯 Link Diretto alla Sezione Ufficiale",
+        value=f"🔗 [**Apri `{actual_title} → {ref_sec_title}` su wiki.uooutlands.com**]({ref_sec_url})",
+        inline=False,
+    )
+
+    other_section_links = []
+    for sec in sections[:8]:
+        anc = sec.get("anchor", "")
+        stitle = sec.get("title", "Introduzione")
+        s_url = f"{base_page_url}#{urllib.parse.quote(anc)}" if anc else base_page_url
+        marker = "👉 " if sec is best_section else "• "
+        other_section_links.append(f"{marker}[**{stitle}**]({s_url})")
+
+    if other_section_links:
+        embed.add_field(
+            name="📑 Tutte le Sezioni della Guida",
+            value="\n".join(other_section_links)[:1000],
+            inline=False,
+        )
+
+    if thumbnail_url:
+        embed.set_thumbnail(url=thumbnail_url)
+
+    embed.set_footer(text="Franchino UO Outlands Encyclopedia • wiki.uooutlands.com")
+
+    return {
+        "page_title": actual_title,
+        "section_title": translated_sec_title,
+        "section_url": ref_sec_url,
+        "voice_answer": voice_answer,
+        "embed": embed,
+        "translated_body": translated_content,
+        "thumbnail_url": thumbnail_url,
+    }
+
+
+def get_outlands_rag_context(query: str, max_chars: int = 1200) -> str:
+    """
+    Recupera informazioni di contesto ufficiali da data/outlands_knowledge.db
+    per alimentare il ragionamento AI RAG (Retrieval-Augmented Generation) di Gemma 2 2B.
+    """
+    conn = get_db_connection()
+    if not conn:
+        return ""
+    try:
+        c = conn.cursor()
+        q_low = query.lower()
+
+        c.execute("""
+            SELECT name, is_tameable, min_taming, control_slots, hits, min_dmg, max_dmg,
+                   armor, magic_resist, slayer, gold_value, difficulty, location, abilities
+            FROM creatures
+            WHERE instr(?, lower(name)) > 0 AND length(name) >= 4
+            ORDER BY length(name) DESC LIMIT 1
+        """, (q_low,))
+        cr = c.fetchone()
+        if cr:
+            cr_dict = dict(cr)
+            lines = [f"CREATURA UFFICIALE OUTLANDS: {cr_dict['name']}"]
+            if cr_dict.get("is_tameable"):
+                lines.append(f"Addomesticabile: Sì (Min Taming: {cr_dict['min_taming']}, Slot: {cr_dict['control_slots']})")
+                if cr_dict.get("abilities"):
+                    lines.append(f"Abilità: {cr_dict['abilities']}")
+            else:
+                lines.append("Mostro/Boss selvatico")
+            lines.append(f"Punti Vita: {cr_dict['hits']}, Danno: {cr_dict['min_dmg']}-{cr_dict['max_dmg']}, Armatura: {cr_dict['armor']}")
+            lines.append(f"Slayer: {cr_dict['slayer']}, Oro: ~{cr_dict['gold_value']} gp, Luogo: {cr_dict['location']}")
+            return "\n".join(lines)
+
+        for d in OUTLANDS_DUNGEONS:
+            if d.lower() in q_low or d.split()[0].lower() in q_low:
+                c.execute("""
+                    SELECT name, slayer, hits, gold_value FROM creatures
+                    WHERE location LIKE ? ORDER BY hits DESC LIMIT 4
+                """, (f"%{d}%",))
+                bosses = [f"{r['name']} ({r['hits']} HP, Slayer {r['slayer']})" for r in c.fetchall()]
+                return f"DUNGEON UFFICIALE OUTLANDS: {d}\nBoss principali: {', '.join(bosses)}"
+
+        raw_topic, _ = _extract_topic_and_keywords(query)
+        words = [w for w in re.findall(r'[a-zA-Z0-9]+', raw_topic) if len(w) > 2]
+        if words:
+            fts_q = ' '.join(words[:3])
+            c.execute("""
+                SELECT p.title, p.summary, p.content FROM pages_fts fts
+                JOIN pages p ON fts.rowid = p.page_id
+                WHERE pages_fts MATCH ?
+                ORDER BY bm25(pages_fts, 10.0, 5.0, 2.0, 1.0, 0.5)
+                LIMIT 1
+            """, (fts_q,))
+            row = c.fetchone()
+            if row:
+                txt = row["summary"] or row["content"]
+                return f"GUIDA UFFICIALE OUTLANDS: {row['title']}\n{txt[:max_chars]}"
+    except Exception as e:
+        logger.debug(f"Errore RAG context: {e}")
+    finally:
+        conn.close()
+    return ""
+
+
 async def query_outlands_wiki(question: str) -> Optional[dict]:
     """
-    Interroga la Wiki di UO Outlands:
+    Interroga la conoscenza ufficiale di UO Outlands:
     1. Risponde all'istante alle domande sui Migliori Pet da farmare e Animal Taming.
     2. Risponde all'istante alle domande sulle Build e Template da 700 punti.
     3. Risponde all'istante alle domande su come usare gli oggetti speciali (Mastery Chain, Aspect, Codex, ecc.).
-    4. Cerca dinamicamente tra le 2.140 pagine di wiki.uooutlands.com traducendo la sezione di riferimento.
+    4. Consulta il Database SQLite locale data/outlands_knowledge.db (1.301 creature, 2.212 pagine, sub-millisecond).
+    5. Solo come fallback contatta online wiki.uooutlands.com.
     """
     # 1. Controllo Pet & Animal Taming
     pets_info = _resolve_pets_query(question)
@@ -1212,9 +1673,38 @@ async def query_outlands_wiki(question: str) -> Optional[dict]:
     if item_info:
         return item_info
 
-    # 4. Ricerca Dinamica MediaWiki API su tutto il sito wiki.uooutlands.com
+    # 4. Ricerca Database Locale SQLite ad altissime prestazioni (sub-millisecond!)
+    conn = get_db_connection()
+    if conn:
+        try:
+            # 4a. Controllo Creature & Mostri
+            cr_info = _resolve_creature_query(question, conn)
+            if cr_info:
+                conn.close()
+                return cr_info
+
+            # 4b. Controllo Dungeon & Luoghi
+            dg_info = _resolve_dungeon_query(question, conn)
+            if dg_info:
+                conn.close()
+                return dg_info
+
+            # 4c. Controllo Articoli & Guide delle ~2.212 Pagine
+            pg_info = _resolve_local_knowledge_page(question, conn)
+            if pg_info:
+                conn.close()
+                return pg_info
+        except Exception as e:
+            logger.warning(f"Errore query DB locale Outlands: {e}")
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+    # 5. Fallback Online MediaWiki API su tutto il sito wiki.uooutlands.com
     try:
-        info = await asyncio.wait_for(asyncio.to_thread(_search_outlands_wiki_sync, question), timeout=14.0)
+        info = await asyncio.wait_for(asyncio.to_thread(_search_outlands_wiki_sync, question), timeout=10.0)
     except Exception as e:
         logger.warning(f"Errore o timeout ricerca wiki outlands sync: {e}")
         return None
@@ -1259,7 +1749,7 @@ def is_wiki_question(command_part: str) -> Tuple[bool, str]:
     Determina se la frase rivolta a Franchino è una domanda su UO Outlands (https://wiki.uooutlands.com).
     Riconosce qualsiasi domanda ("cos'è...", "come creare una build...", "come si usa questo oggetto...",
     "dove si trova...", "quanta skill...", "statistiche di...", "spiegami...", ecc.) oppure qualsiasi riferimento
-    alle ~2.140 pagine della Wiki!
+    alle ~2.212 pagine della Wiki, creature o dungeon!
     """
     cmd = command_part.strip()
     cmd_low = cmd.lower().strip(" ?!.,;:")
@@ -1281,15 +1771,21 @@ def is_wiki_question(command_part: str) -> Tuple[bool, str]:
     if cmd_low.startswith(non_wiki_starts):
         return False, ""
 
-    # Pattern dedicati a Build, Template, Oggetti, Pet e Meccaniche
+    # Pattern dedicati a Build, Template, Oggetti, Pet, Dungeon e Meccaniche
     if any(k in cmd_low for k in (
         "build", "template", "classe", "come buildare", "miglior build", "consigliami una build",
         "come si usa", "come usare", "a cosa serve", "a che serve", "cosa fa", "come funziona",
         "come craftare", "come si crafta", "dove farmare", "come fare soldi", "come fare gold",
         "tamer", "bardo", "dexxer", "ladro", "necro", "aspect", "mastery chain", "codex", "mushrooms",
-        "pet", "bestie", "animali", "taming", "tier list",
+        "pet", "bestie", "animali", "taming", "tier list", "slayer", "dungeon", "mostri di", "boss di",
     )):
         return True, cmd
+
+    # Dungeons
+    for d in OUTLANDS_DUNGEONS:
+        d_short = d.replace("The ", "").split()[0].lower()
+        if d_short in cmd_low:
+            return True, cmd
 
     # Pattern di domande naturali in italiano
     question_patterns = (
@@ -1309,9 +1805,22 @@ def is_wiki_question(command_part: str) -> Tuple[bool, str]:
     if "outlands" in cmd_low or "wiki" in cmd_low:
         return True, cmd
 
-    # Se l'utente pronuncia direttamente il nome di una pagina dell'indice di UO Outlands (es. "Franchino Eldritch Drake")
+    # Se l'utente pronuncia direttamente il nome di una pagina o creatura dell'indice
     if _LOWER_TO_TITLE and cmd_low in _LOWER_TO_TITLE:
         return True, cmd
+
+    # Controllo rapido SQLite per nomi creature
+    try:
+        conn = get_db_connection()
+        if conn:
+            c = conn.cursor()
+            c.execute("SELECT name FROM creatures WHERE instr(?, lower(name)) > 0 AND length(name) >= 5 LIMIT 1", (cmd_low,))
+            cr = c.fetchone()
+            conn.close()
+            if cr:
+                return True, cmd
+    except Exception:
+        pass
 
     return False, ""
 

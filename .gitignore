@@ -21,6 +21,7 @@ cookies.txt
 
 # Database locali e cartelle dati persistenti Docker
 data/*.db
+!data/outlands_knowledge.db
 data/*.db-wal
 data/*.db-shm
 data/postgres/

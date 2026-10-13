@@ -128,6 +128,17 @@ class FranchinoBrain:
         if current_song_title:
             prompt += f" (In questo momento sta suonando: '{current_song_title}')"
 
+        # RAG (Retrieval-Augmented Generation) per UO Outlands da SQLite Locale
+        try:
+            from outlands_wiki import is_wiki_question, get_outlands_rag_context
+            is_w, _ = is_wiki_question(text)
+            if is_w:
+                rag_data = get_outlands_rag_context(text, max_chars=800)
+                if rag_data:
+                    prompt += f"\n[DATI UFFICIALI UO OUTLANDS DALLA WIKI]:\n{rag_data}\nUsa questi dati ufficiali per rispondere con la massima precisione!"
+        except Exception as e:
+            logger.debug(f"Errore RAG prompt injection: {e}")
+
         try:
             payload = {
                 "model": self.model,
