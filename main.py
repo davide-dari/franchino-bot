@@ -753,7 +753,6 @@ async def preferiti_cmd(ctx: commands.Context):
     if not fav_songs:
         await ctx.send("⚠️ Nessun brano salvato nei **Preferiti del Server**! Usa `/salva`, il pulsante ❤️ o dì *\"Franchino salva\"* mentre suona una canzone.")
         return
-    import random
     random.shuffle(fav_songs)
     await player.play_now(fav_songs, text_channel=ctx.channel)
     await ctx.send(f"❤️ Avviati i **Preferiti del Server** ({len(fav_songs)} brani in rotazione)!")

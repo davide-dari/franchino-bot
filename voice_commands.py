@@ -1028,7 +1028,6 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
             sport_query = sports_match.group(1).strip(" ,.!?:;-")
             from sports_scraper import sports_scraper
             from central_hub import hub
-            import discord
 
             res = await sports_scraper.search_event(sport_query)
             if res.get("found"):
@@ -1250,7 +1249,6 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
                 )
                 asyncio.create_task(self.player.speak_tts("Non avete ancora salvato canzoni nei preferiti!"))
             else:
-                import random
                 random.shuffle(fav_songs)
                 await self._notify_channel(
                     f"❤️ **{user.display_name}** ha avviato i **Preferiti del Server** ({len(fav_songs)} brani in rotazione)!"
