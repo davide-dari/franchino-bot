@@ -253,7 +253,7 @@ class FranchinoBrain:
         # Chiacchiera generale
         return {
             "intent": "chat",
-            "voice_reply": "Magia ragazzi! Franchino è sempre qui in console con voi!",
+            "voice_reply": "Magia ragazzi! Sono sempre qui in console con voi!",
             "chat_reply": "🎧 **Franchino DJ**: Sempre presente in console! Dimmi cosa ti serve ragazzi!",
         }
 

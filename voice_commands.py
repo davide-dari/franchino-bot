@@ -759,6 +759,15 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
         if not candidates:
             return
 
+        # Anti-Feedback Loop: Se Franchino sta parlando in voce (TTS), ignora l'audio catturato
+        # per evitare che il bot ascolti la propria voce (eco da altoparlanti o microfoni aperti).
+        # Unica eccezione: se l'utente urla "stop" o "basta" per fermare la riproduzione.
+        if getattr(self.player, "_playing_tts", False):
+            first_low = candidates[0].lower()
+            if not any(w in first_low for w in ("stop", "stoppa", "ferma", "basta", "zitto", "silenzio")):
+                logger.debug(f"🔇 Audio da {key} ignorato: Franchino sta parlando in TTS (anti-feedback loop)")
+                return
+
         user = await self._resolve_user_object(key, speaker_obj)
         uid = getattr(user, "id", 0)
         now = time.monotonic()
@@ -899,11 +908,12 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
             if has_w:
                 command_part = cmd
 
-        # Se l'utente aveva detto "Franchino" o "Franchino metti" pochi secondi fa e ora ha detto il nome della canzone:
-        if command_part is None and uid in self._pending_wake:
+        # Se l'utente era in sessione di attesa (aveva detto "Franchino" o "Franchino metti" e ora dice il comando/brano):
+        if uid in self._pending_wake:
             wake_time, pending_prefix = self._pending_wake.pop(uid)
             if now - wake_time <= 10.0:
-                command_part = f"{pending_prefix} {text}".strip() if pending_prefix else text.strip()
+                raw_followup = command_part if command_part else text.strip()
+                command_part = f"{pending_prefix} {raw_followup}".strip() if pending_prefix else raw_followup
                 logger.info(f"🔗 Continuazione comando vocale per {user.display_name}: '{command_part}'")
 
         # NESSUN RICHIAMO A FRANCHINO: Ignora totalmente! Non risponde mai se non viene chiamato per nome.
@@ -1651,66 +1661,24 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
             await self.player.disconnect()
             return
 
-        # 10. Fallback intelligente: usa Gemma Brain per classificare l'intento prima di cercare su YouTube
+        # 10. Fallback su ricerca musicale YouTube
         if command_part:
-            logger.info(f"🎵 Fallback per {user.display_name}: '{command_part}' — classifico con Brain...")
-            try:
-                from brain import brain
-                decision = await asyncio.wait_for(
-                    brain.process_user_speech(
-                        user_name=user.display_name,
-                        user_id=str(getattr(user, "id", 0)),
-                        text=command_part,
-                        current_song_title=self.player.current.title if self.player.current else None,
-                        channel_name=self.player.text_channel.name if self.player.text_channel else None,
-                    ),
-                    timeout=5.0,
-                )
-            except Exception:
-                decision = {"intent": "play_music", "music_query": command_part, "voice_reply": None, "chat_reply": None}
-
-            intent = decision.get("intent", "play_music")
-
-            # Se il Brain ha capito che non è musica, risponde in chat e a voce senza cercare su YouTube
-            if intent == "chat":
-                chat_reply = decision.get("chat_reply") or f"🎧 **Franchino**: Sono qui ragazzi! Dimmi cosa vuoi!"
-                voice_reply = decision.get("voice_reply") or "Magia! Sono qui in console, dimmi tutto!"
-                await self._notify_channel(chat_reply)
-                asyncio.create_task(self.player.speak_tts(voice_reply, wait=False, interrupt_music=True))
-                return
-
-            if intent == "wiki_guide":
-                from outlands_wiki import is_wiki_question, query_outlands_wiki
-                wiki_topic = decision.get("wiki_topic") or command_part
-                # Ricicla la pipeline wiki già esistente
-                is_wiki, wiki_q = is_wiki_question(wiki_topic)
-                if not is_wiki:
-                    wiki_q = wiki_topic
-                await self._notify_channel(
-                    f"📖 **{user.display_name}** ha chiesto su **UO Outlands**: *\"{wiki_q}\"* — Cerco sulla Wiki..."
-                )
-                try:
-                    wiki_res = await asyncio.wait_for(query_outlands_wiki(wiki_q), timeout=18.0)
-                    if wiki_res:
-                        await self._notify_channel(
-                            f"📖 **{user.display_name}**, ecco la guida:",
-                            embed=wiki_res["embed"],
-                        )
-                        asyncio.create_task(self.player.speak_tts(wiki_res["voice_answer"], wait=False, interrupt_music=True))
-                    else:
-                        await self._notify_channel(f"⚠️ Nessun risultato su wiki.uooutlands.com per **\"{wiki_q}\"**.")
-                except Exception as wiki_err:
-                    logger.warning(f"Wiki fallback error: {wiki_err}")
-                return
-
-            # Default: ricerca musicale (intent == play_music o non classificato)
-            music_query = decision.get("music_query") or command_part
-            # Normalizzazione query
+            # Normalizzazione query (rimuove filler tipici del parlato italiano)
             music_query = re.sub(
-                r'^(?:la\s+(?:canzone|musica|traccia)|il\s+(?:brano|pezzo)|un\s+(?:brano|pezzo|po\'\s+di)|una\s+(?:canzone|traccia))\s+',
+                r'^(?:la\s+(?:canzone|canzoni|musica|traccia|bella\s+canzone)|'
+                r'il\s+(?:brano|pezzo)|un\s+(?:brano|pezzo|po\s+di|po\'\s+di)|'
+                r'una\s+(?:canzone|traccia|bella|bella\s+canzone)|'
+                r'qualcosa\s+di|'
+                r'del|della|di|un\s+po\'\s+di|un\s+po\s+di)\s+',
+                '', command_part.strip(), flags=re.IGNORECASE
+            ).strip() or command_part.strip()
+            music_query = re.sub(
+                r'\s+(?:per\s+(?:me|favore|piacere)|adesso|subito|dai|su|please|now|'
+                r'in\s+questo\s+momento|al\s+più\s+presto)\s*$',
                 '', music_query, flags=re.IGNORECASE
             ).strip() or music_query
 
+            logger.info(f"🎵 Fallback ricerca musicale per {user.display_name}: '{music_query}'")
             self.player._manual_stop = False
             await self._notify_channel(
                 f"🎙️ **{user.display_name}**: *\"Franchino {command_part}\"* — Cerco e avvio in console! 🎶"
@@ -1726,11 +1694,14 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
                         text_channel=self.player.text_channel,
                         voice_announce=f"Subito! Metto {music_query}",
                     )
+                else:
+                    await self._notify_channel(
+                        f"⚠️ Non ho trovato una traccia musicale per *\"{music_query}\"*. Dì *\"Franchino comandi\"* per l'elenco comandi!"
+                    )
             except Exception as e:
-
-                logger.warning(f"Fallback ricerca brano fallito per '{command_part}': {e}")
+                logger.warning(f"Fallback ricerca brano fallito per '{music_query}': {e}")
                 await self._notify_channel(
-                    f"⚠️ Non ho trovato una traccia musicale per *\"{command_part}\"*. Dì *\"Franchino comandi\"* per l'elenco comandi!"
+                    f"⚠️ Non sono riuscito a trovare **{music_query}**: `{e}`"
                 )
 
     async def _notify_channel(
