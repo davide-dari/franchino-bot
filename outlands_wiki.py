@@ -2341,7 +2341,12 @@ def is_wiki_question(command_part: str) -> Tuple[bool, str]:
 
     # Escludi quesiti su boost audio / discord server boost a meno che non contengano termini UO Outlands
     if any(b in cmd_low for b in ("boost", "/boost", "bassboost", "bass boost")):
-        return False, ""
+        uo_explicit = (
+            "outlands", "uo", "ultima online", "wiki", "dungeon", "creature", "mostro",
+            "taming", "aspect", "slayer", "dexxer", "bardo", "skill", "tamare", "pet", "pets", "template", "build"
+        )
+        if not any(u in cmd_low for u in uo_explicit):
+            return False, ""
 
     # Escludi quesiti sportivi (match, partite, campionati, motori, tennis, basket)
     # a meno che non contengano termini inequivocabili di Ultima Online Outlands
