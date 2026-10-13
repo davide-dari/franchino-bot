@@ -324,23 +324,54 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
     PREROLL_CHUNKS = 15           # 300ms di pre-roll ring buffer (15 pacchetti da 20ms)
 
     WAKE_PATTERN = re.compile(
-        r'\b('
-        r'franchin[oaie]?|franch[iì]|frankin[oaie]?|francin[oaie]?|franghin[oaie]?'
-        r'|franckin[oaie]?|frannchin[oaie]?|frannkin[oaie]?|franceschin[oaie]?|franchinetto'
-        r'|fran\s+chin[oaie]?|fra[\'\s]+chin[oaie]?|franchi\s+no|fra[\'\s]+inchino|frank\s+in|frankie|franklin'
-        r')\b',
+        r'(?<!\w)('
+        # Varianti canoniche con flessioni finali
+        r'franchin[oaie]?'
+        r'|frankin[oaie]?'          # frankino (k per ch)
+        r'|francin[oaie]?'          # francino (ch→c)
+        r'|franghin[oaie]?'         # franghino
+        r'|franckin[oaie]?'         # franckino
+        r'|frannchin[oaie]?'        # frannchino (nn)
+        r'|frannkin[oaie]?'         # frannkino
+        r'|franceschin[oaie]?'      # franceschino
+        r'|franchinn[oaie]?'        # finale doppia n
+        r'|tranchino'               # tr→fr swap acustico frequente
+        r'|ranchino'                # perdita f iniziale
+        r'|frenchino'               # vowel fold a→e
+        r'|fanchino'                # perdita r (fr→f)
+        r'|fraccino'                # cc per ch
+        r'|franchì'                 # accento alternativo
+        r'|franchini'               # plurale/soprannome
+        r'|franchin'                # senza finale vocalica
+        r'|franchina'               # femminile
+        r'|frankie'                 # variante anglofona
+        r'|franklin'                # mix anglofono
+        r'|franchino'               # forma esatta canonica
+        # Varianti STT con spazio in mezzo
+        r'|fran\s+chin[oaie]?'      # "fran chino"
+        r'|fra\s+chin[oaie]?'       # "fra chino"
+        r'|franchi\s+no'            # "franchi no"
+        r'|frank\s+in[oaie]?'       # "frank ino"
+        r'|franco\s+in[oaie]?'      # "franco ino" (frequente su STT italiana!)
+        r'|fran\s+k[iy]no'          # "fran kino"
+        r'|fran\s+cino'             # "fran cino"
+        r')(?!\w)',
         re.IGNORECASE
     )
 
+    # Solo token identici completi (non blocca il fuzzy su parti come 'franco')
     EXCLUDED_WAKE_WORDS = {
-        'franco', 'francia', 'frangia', 'francesco', 'francobollo',
-        'granchio', 'granchi', 'panchina', 'bianchino'
+        'francia', 'frangia', 'francobollo',
+        'granchio', 'granchi', 'panchina', 'bianchino', 'rancido',
+        'mancino', 'lancino', 'pancino',
     }
 
+    # Lista per il fallback fuzzy token-per-token
     WAKE_WORDS = (
         "franchino", "frankino", "francino", "franchi", "franchì",
         "franchini", "franklin", "frankie", "franchin", "franghino",
-        "franchi no", "tranchino", "franceschino", "franckino", "franchina"
+        "tranchino", "franceschino", "franckino", "franchina",
+        "ranchino", "frenchino", "fanchino", "franchinn", "fraccino",
     )
 
     @classmethod
@@ -348,6 +379,12 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
         """
         Riconosce con la massima accuratezza la wake word 'Franchino' e tutte le sue varianti fonetiche/STT
         in qualsiasi posizione della frase (inizio, centro, fine, con o senza parole di saluto/filler).
+
+        Applica tre livelli di detection in cascata:
+          1. Regex esteso: varianti fonetiche + split-word STT ('franco ino', 'fran chino', ecc.)
+          2. Fuzzy token matching: SequenceMatcher >= 0.72 su token >= 5 caratteri
+          3. Bigram join: unisce coppie adiacenti per catturare 'franco'+'ino' → 'francoino'
+
         Ritorna: (has_wake: bool, command_part: str, matched_wake_token: str)
         """
         if not text or not text.strip():
@@ -363,17 +400,33 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
             wake_matched = m.group(0)
             start, end = m.span()
         else:
-            # Controllo fuzzy token-per-token per recuperare refusi acustici di Google STT
-            tokens = list(re.finditer(r'[a-zA-ZàèéìòùÀÈÉÌÒÙ]{6,}', clean_text, re.IGNORECASE))
+            # --- Livello 2: Fuzzy token-per-token (>= 0.72, token >= 5 chars) ---
+            tokens = list(re.finditer(r'[a-zA-ZàèéìòùÀÈÉÌÒÙ]{5,}', clean_text, re.IGNORECASE))
             for tok_match in tokens:
                 tok = tok_match.group(0).lower()
                 if tok in cls.EXCLUDED_WAKE_WORDS:
                     continue
                 ratio = difflib.SequenceMatcher(None, tok, "franchino").ratio()
-                if ratio >= 0.80:
+                if ratio >= 0.72:
                     wake_matched = tok_match.group(0)
                     start, end = tok_match.span()
                     break
+
+            # --- Livello 3: Bigram join — unisce coppie adiacenti es. "franco"+"ino" → "francoino" ---
+            if not wake_matched:
+                all_tokens = list(re.finditer(r'[a-zA-ZàèéìòùÀÈÉÌÒÙ]+', clean_text, re.IGNORECASE))
+                for i in range(len(all_tokens) - 1):
+                    t1 = all_tokens[i].group(0).lower()
+                    t2 = all_tokens[i + 1].group(0).lower()
+                    joined = t1 + t2  # es. "franco" + "ino" → "francoino"
+                    if joined in cls.EXCLUDED_WAKE_WORDS:
+                        continue
+                    ratio = difflib.SequenceMatcher(None, joined, "franchino").ratio()
+                    if ratio >= 0.74:
+                        wake_matched = all_tokens[i].group(0) + " " + all_tokens[i + 1].group(0)
+                        start = all_tokens[i].start()
+                        end = all_tokens[i + 1].end()
+                        break
 
         if not wake_matched:
             return False, "", ""
@@ -381,9 +434,9 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
         before = clean_text[:start].strip(" ,.!?:;-")
         after = clean_text[end:].strip(" ,.!?:;-")
 
-        # Rimuove parole di saluto/filler all'inizio del comando (es. "Ehi Franchino metti...", "Ciao Franchino ci sei?")
+        # Rimuove parole di saluto/filler all'inizio del comando
         filler_pat = re.compile(
-            r'^(?:ehi|hey|ei|oh|o|ciao|senti|ascolta|allora|ma|vai|grande|caro|dimmi|scusa)\s*',
+            r'^(?:ehi|hey|ei|oh|o|ciao|senti|ascolta|allora|ma|vai|grande|caro|dimmi|scusa|dai|su|amo|ueh|uè|beh|insomma)\s*',
             re.IGNORECASE
         )
         before_clean = filler_pat.sub("", before).strip(" ,.!?:;-")
@@ -398,6 +451,8 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
             cmd = ""
 
         return True, cmd, wake_matched
+
+
 
     def __init__(self, player: "GuildPlayer"):
         super().__init__(None)
@@ -708,24 +763,32 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
         uid = getattr(user, "id", 0)
         now = time.monotonic()
 
-        # Verifica se l'utente ha una sessione attiva (pending wake follow-up di 7s o dettatura DM)
-        in_active_session = (uid in self._pending_wake and now - self._pending_wake[uid][0] <= 7.0) or (uid in self._pending_dm)
+        # Verifica se l'utente ha una sessione attiva (pending wake follow-up di 10s o dettatura DM)
+        in_active_session = (uid in self._pending_wake and now - self._pending_wake[uid][0] <= 10.0) or (uid in self._pending_dm)
 
         selected_text = None
         detected_cmd = None
         matched_wake = None
 
-        # Scansiona tutte le alternative acustiche di Google Speech API per trovare il richiamo a Franchino
+        # Log tutte le alternative STT per facilitare il debug (max 3)
+        if len(candidates) > 1:
+            logger.debug(f"🎙️ STT alternatives [{user.display_name}]: {candidates[:3]}")
+
+        # Scansiona tutte le alternative acustiche di Google Speech API per trovare il richiamo a Franchino.
+        # Se più di un candidato contiene il wake word, sceglie quello con il comando più lungo/ricco.
+        wake_hits: list[tuple[str, str, str]] = []  # (cand, cmd, wake_tok)
         for cand in candidates:
             has_w, cmd, w_tok = self.extract_wake_and_command(cand)
             if has_w:
-                selected_text = cand
-                detected_cmd = cmd
-                matched_wake = w_tok
-                break
+                wake_hits.append((cand, cmd, w_tok))
+
+        if wake_hits:
+            # Preferisce il candidato con il comando più lungo (più informazioni utili)
+            wake_hits.sort(key=lambda x: len(x[1]), reverse=True)
+            selected_text, detected_cmd, matched_wake = wake_hits[0]
 
         if selected_text:
-            logger.info(f"🎙️ [{user.display_name}] ha chiamato Franchino ('{matched_wake}') -> frase: '{selected_text}' | comando: '{detected_cmd}'")
+            logger.info(f"🎙️ [{user.display_name}] ha chiamato Franchino ('{matched_wake}') → frase: '{selected_text}' | comando: '{detected_cmd}'")
         elif in_active_session:
             # L'utente è in sessione attiva (aveva appena chiamato Franchino e sta completando il comando)
             selected_text = candidates[0]
@@ -735,6 +798,7 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
             # NESSUN RICHIAMO A FRANCHINO: Ignora totalmente! Non risponde e non interrompe la conversazione.
             logger.debug(f"🔇 [{user.display_name}] audio ignorato (nessun richiamo a Franchino): '{candidates[0]}'")
             return
+
 
         try:
             await self._handle_transcribed_text(user, selected_text, detected_cmd=detected_cmd)
@@ -838,7 +902,7 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
         # Se l'utente aveva detto "Franchino" o "Franchino metti" pochi secondi fa e ora ha detto il nome della canzone:
         if command_part is None and uid in self._pending_wake:
             wake_time, pending_prefix = self._pending_wake.pop(uid)
-            if now - wake_time <= 7.0:
+            if now - wake_time <= 10.0:
                 command_part = f"{pending_prefix} {text}".strip() if pending_prefix else text.strip()
                 logger.info(f"🔗 Continuazione comando vocale per {user.display_name}: '{command_part}'")
 
@@ -859,8 +923,19 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
                 self.player.speak_tts("Magia! Dimmi tutto, sono qui in console!", wait=False, interrupt_music=False)
             )
             return
-        if cmd_lower in ("metti", "mette", "mettimi", "riproduci", "suona", "suonami", "play", "fammi sentire", "fammi ascoltare", "avvia", "cerca", "cercami", "fai partire"):
+
+        # Comandi parziali che indicano "voglio ascoltare musica" ma non hanno ancora il titolo:
+        _play_triggers = {
+            "metti", "mette", "mettimi", "metti su", "mettimi su",
+            "riproduci", "suona", "suonami",
+            "play", "fammi sentire", "fammi ascoltare",
+            "avvia", "cerca", "cercami", "fai partire",
+            "fai sentire", "metti qualcosa", "metti un po' di musica",
+            "su", "dai su", "andiamo", "su dai", "via",
+        }
+        if cmd_lower in _play_triggers:
             self._pending_wake[uid] = (now, "metti")
+            asyncio.create_task(self.player.speak_tts("Dimmi il titolo!", wait=False, interrupt_music=False))
             return
         if cmd_lower in ("metti in coda", "mette in coda", "mettimi in coda", "aggiungi in coda", "aggiungi", "accoda"):
             self._pending_wake[uid] = (now, "aggiungi")
@@ -1433,6 +1508,22 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
         if play_match:
             query = play_match.group(1).strip()
             if query:
+                # Normalizzazione: rimuove filler italiani che rovinano la ricerca YouTube
+                query = re.sub(
+                    r'^(?:la\s+(?:canzone|canzoni|musica|traccia|bella\s+canzone)|'
+                    r'il\s+(?:brano|pezzo)|un\s+(?:brano|pezzo|po\s+di|po\'\s+di)|'
+                    r'una\s+(?:canzone|traccia|bella|bella\s+canzone)|'
+                    r'qualcosa\s+di|'
+                    r'del|della|di|un\s+po\'\s+di|un\s+po\s+di)\s+',
+                    '', query.strip(), flags=re.IGNORECASE
+                ).strip()
+                # Rimuove suffissi inutili
+                query = re.sub(
+                    r'\s+(?:per\s+(?:me|favore|piacere)|adesso|subito|dai|su|please|now|'
+                    r'in\s+questo\s+momento|al\s+più\s+presto)\s*$',
+                    '', query, flags=re.IGNORECASE
+                ).strip()
+
                 self.player._manual_stop = False
                 # Se è una richiesta descrittiva/mood, Gemma la trasforma nella miglior query YouTube
                 from brain import brain
@@ -1560,25 +1651,83 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
             await self.player.disconnect()
             return
 
-        # 10. Fallback intelligente su ricerca musicale
+        # 10. Fallback intelligente: usa Gemma Brain per classificare l'intento prima di cercare su YouTube
         if command_part:
-            logger.info(f"🎵 Fallback ricerca musicale per {user.display_name}: '{command_part}'")
+            logger.info(f"🎵 Fallback per {user.display_name}: '{command_part}' — classifico con Brain...")
+            try:
+                from brain import brain
+                decision = await asyncio.wait_for(
+                    brain.process_user_speech(
+                        user_name=user.display_name,
+                        user_id=str(getattr(user, "id", 0)),
+                        text=command_part,
+                        current_song_title=self.player.current.title if self.player.current else None,
+                        channel_name=self.player.text_channel.name if self.player.text_channel else None,
+                    ),
+                    timeout=5.0,
+                )
+            except Exception:
+                decision = {"intent": "play_music", "music_query": command_part, "voice_reply": None, "chat_reply": None}
+
+            intent = decision.get("intent", "play_music")
+
+            # Se il Brain ha capito che non è musica, risponde in chat e a voce senza cercare su YouTube
+            if intent == "chat":
+                chat_reply = decision.get("chat_reply") or f"🎧 **Franchino**: Sono qui ragazzi! Dimmi cosa vuoi!"
+                voice_reply = decision.get("voice_reply") or "Magia! Sono qui in console, dimmi tutto!"
+                await self._notify_channel(chat_reply)
+                asyncio.create_task(self.player.speak_tts(voice_reply, wait=False, interrupt_music=True))
+                return
+
+            if intent == "wiki_guide":
+                from outlands_wiki import is_wiki_question, query_outlands_wiki
+                wiki_topic = decision.get("wiki_topic") or command_part
+                # Ricicla la pipeline wiki già esistente
+                is_wiki, wiki_q = is_wiki_question(wiki_topic)
+                if not is_wiki:
+                    wiki_q = wiki_topic
+                await self._notify_channel(
+                    f"📖 **{user.display_name}** ha chiesto su **UO Outlands**: *\"{wiki_q}\"* — Cerco sulla Wiki..."
+                )
+                try:
+                    wiki_res = await asyncio.wait_for(query_outlands_wiki(wiki_q), timeout=18.0)
+                    if wiki_res:
+                        await self._notify_channel(
+                            f"📖 **{user.display_name}**, ecco la guida:",
+                            embed=wiki_res["embed"],
+                        )
+                        asyncio.create_task(self.player.speak_tts(wiki_res["voice_answer"], wait=False, interrupt_music=True))
+                    else:
+                        await self._notify_channel(f"⚠️ Nessun risultato su wiki.uooutlands.com per **\"{wiki_q}\"**.")
+                except Exception as wiki_err:
+                    logger.warning(f"Wiki fallback error: {wiki_err}")
+                return
+
+            # Default: ricerca musicale (intent == play_music o non classificato)
+            music_query = decision.get("music_query") or command_part
+            # Normalizzazione query
+            music_query = re.sub(
+                r'^(?:la\s+(?:canzone|musica|traccia)|il\s+(?:brano|pezzo)|un\s+(?:brano|pezzo|po\'\s+di)|una\s+(?:canzone|traccia))\s+',
+                '', music_query, flags=re.IGNORECASE
+            ).strip() or music_query
+
             self.player._manual_stop = False
             await self._notify_channel(
                 f"🎙️ **{user.display_name}**: *\"Franchino {command_part}\"* — Cerco e avvio in console! 🎶"
             )
             try:
                 songs = await asyncio.wait_for(
-                    self.player.source_manager.resolve_url_or_query(command_part, requester=requester_arg),
+                    self.player.source_manager.resolve_url_or_query(music_query, requester=requester_arg),
                     timeout=25.0,
                 )
                 if songs:
                     await self.player.play_now(
                         songs,
                         text_channel=self.player.text_channel,
-                        voice_announce=f"Subito! Metto {command_part}",
+                        voice_announce=f"Subito! Metto {music_query}",
                     )
             except Exception as e:
+
                 logger.warning(f"Fallback ricerca brano fallito per '{command_part}': {e}")
                 await self._notify_channel(
                     f"⚠️ Non ho trovato una traccia musicale per *\"{command_part}\"*. Dì *\"Franchino comandi\"* per l'elenco comandi!"
