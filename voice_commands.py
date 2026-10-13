@@ -1342,10 +1342,29 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
         if await handle_voice_admin_command(self.player, user, command_part, self._notify_channel):
             return
 
-        # 0C-ter. Domande sulla WIKI DI UO OUTLANDS (https://wiki.uooutlands.com) tradotte e lette a voce in Italiano!
-        from outlands_wiki import is_wiki_question, query_outlands_wiki
+        # 0C-ter. Domande AIUTO/GUIDA su UO OUTLANDS ("cosa puoi fare su outlands", "aiuto outlands", ecc.)
+        from outlands_wiki import is_help_question, is_wiki_question, query_outlands_wiki, get_outlands_help_embed
+        if is_help_question(command_part):
+            logger.info(f"🗺️ Richiesta aiuto Outlands da {user.display_name}: '{command_part}'")
+            help_embed, voice_answer = get_outlands_help_embed()
+            await self._notify_channel(
+                f"🗺️ **{user.display_name}** ha chiesto cosa so fare su **UO Outlands** — Ecco la guida completa!",
+                embed=help_embed,
+            )
+            asyncio.create_task(
+                self.player.speak_tts(
+                    voice_answer,
+                    wait=False,
+                    interrupt_music=True,
+                    keep_paused_after=False,
+                )
+            )
+            return
+
+        # 0C-quater. Domande sulla WIKI DI UO OUTLANDS (https://wiki.uooutlands.com) tradotte e lette a voce in Italiano!
         is_wiki, wiki_q = is_wiki_question(command_part)
         if is_wiki:
+
             logger.info(f"📖 Domanda Wiki Outlands riconosciuta da {user.display_name}: '{wiki_q}'")
             self.player._manual_stop = False
             try:
@@ -1722,9 +1741,131 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
             await self.player.disconnect()
             return
 
-        # 10. Fallback su ricerca musicale YouTube
+        # 10. Fallback: Disambiguazione tra Domande/Outlands e Ricerca Musicale YouTube
         if command_part:
-            # Normalizzazione query (rimuove filler tipici del parlato italiano)
+            # Controllo di sicurezza 1: Richiesta aiuto/guida Outlands
+            from outlands_wiki import is_help_question, is_wiki_question, query_outlands_wiki, get_outlands_help_embed
+            if is_help_question(command_part):
+                logger.info(f"🗺️ Intercettata richiesta aiuto Outlands in fallback da {user.display_name}: '{command_part}'")
+                help_embed, voice_answer = get_outlands_help_embed()
+                await self._notify_channel(
+                    f"🗺️ **{user.display_name}** ha chiesto cosa so fare su **UO Outlands** — Ecco la guida completa!",
+                    embed=help_embed,
+                )
+                asyncio.create_task(
+                    self.player.speak_tts(
+                        voice_answer,
+                        wait=False,
+                        interrupt_music=True,
+                        keep_paused_after=False,
+                    )
+                )
+                return
+
+            # Controllo di sicurezza 2: Domanda esplicita sulla Wiki di Outlands
+            is_wiki, wiki_q = is_wiki_question(command_part)
+            if is_wiki:
+                logger.info(f"📖 Intercettata domanda Wiki Outlands in fallback da {user.display_name}: '{wiki_q}'")
+                self.player._manual_stop = False
+                try:
+                    await self._notify_channel(
+                        f"📖 **{user.display_name}** ha chiesto su **UO Outlands**: *\"{wiki_q}\"* — Cerco sulla Wiki e traduco in italiano..."
+                    )
+                    wiki_res = await asyncio.wait_for(query_outlands_wiki(wiki_q), timeout=18.0)
+                    if wiki_res:
+                        title = wiki_res["page_title"]
+                        sec_title = wiki_res["section_title"]
+                        sec_url = wiki_res["section_url"]
+                        voice_answer = wiki_res["voice_answer"]
+                        wiki_embed = wiki_res["embed"]
+                        await self._notify_channel(
+                            f"📖 **{user.display_name}**, ecco la guida da [**wiki.uooutlands.com** ({title} → {sec_title})]({sec_url}) tradotta in italiano:",
+                            embed=wiki_embed,
+                        )
+                        asyncio.create_task(
+                            self.player.speak_tts(
+                                voice_answer,
+                                wait=False,
+                                interrupt_music=True,
+                                keep_paused_after=False,
+                            )
+                        )
+                        return
+                except Exception as e:
+                    logger.warning(f"Errore gestione fallback wiki: {e}")
+
+            # Controllo di sicurezza 3: Se la frase è chiaramente una domanda o un intento discorsivo
+            # NON inviarla MAI a YouTube come canzone!
+            cmd_strip = command_part.strip().lower()
+            is_question = (
+                cmd_strip.endswith("?")
+                or re.match(
+                    r"^(?:cosa|che|chi|come|dove|quando|perch[eé]|quali|quale|quanto|quanta|quanti|quante|"
+                    r"spiegami|dimmi|parlami|raccontami|sai\s+dirmi|puoi\s+dirmi|mi\s+dici|mi\s+spieghi|"
+                    r"sai\s+cos'è|sai\s+cosa|sai|conosci|esiste|ci\s+sono|si\s+può|posso)\b",
+                    cmd_strip,
+                    re.IGNORECASE,
+                ) is not None
+                or any(q_term in cmd_strip for q_term in (
+                    "outlands", "ultima online", "come funziona", "come si fa", "dove trovo",
+                    "dove si trova", "cosa serve", "a cosa serve", "cosa fa", "cosa fanno",
+                    "perché", "perche"
+                ))
+            )
+
+            if is_question:
+                logger.info(f"❓ Rilevata domanda non-musicale da {user.display_name}: '{command_part}' — Evito ricerca YouTube!")
+                # Tenta prima se c'è un riscontro informativo sulla Wiki di Outlands
+                try:
+                    wiki_res = await asyncio.wait_for(query_outlands_wiki(command_part), timeout=10.0)
+                    if wiki_res:
+                        title = wiki_res["page_title"]
+                        sec_title = wiki_res["section_title"]
+                        sec_url = wiki_res["section_url"]
+                        voice_answer = wiki_res["voice_answer"]
+                        wiki_embed = wiki_res["embed"]
+                        await self._notify_channel(
+                            f"📖 **{user.display_name}**, ecco la guida da [**wiki.uooutlands.com** ({title} → {sec_title})]({sec_url}) tradotta in italiano:",
+                            embed=wiki_embed,
+                        )
+                        asyncio.create_task(
+                            self.player.speak_tts(
+                                voice_answer,
+                                wait=False,
+                                interrupt_music=True,
+                                keep_paused_after=False,
+                            )
+                        )
+                        return
+                except Exception:
+                    pass
+
+                # Fallback con AI / Brain per domande generali
+                from brain import brain
+                decision = await brain.process_user_speech(
+                    user_name=user.display_name,
+                    user_id=str(getattr(user, "id", 0)),
+                    text=command_part,
+                    current_song_title=self.player.current.title if self.player.current else None,
+                    channel_name=self.player.text_channel.name if self.player.text_channel else None,
+                )
+                chat_reply = decision.get("chat_reply")
+                voice_reply = decision.get("voice_reply") or chat_reply
+                if voice_reply:
+                    await self._notify_channel(
+                        f"🎙️ **Franchino** risponde a **{user.display_name}**:\n> *\"{chat_reply or voice_reply}\"*"
+                    )
+                    asyncio.create_task(
+                        self.player.speak_tts(
+                            voice_reply,
+                            wait=False,
+                            interrupt_music=True,
+                            keep_paused_after=False,
+                        )
+                    )
+                    return
+
+            # Normalizzazione query musicale (rimuove filler tipici del parlato italiano)
             music_query = re.sub(
                 r'^(?:la\s+(?:canzone|canzoni|musica|traccia|bella\s+canzone)|'
                 r'il\s+(?:brano|pezzo)|un\s+(?:brano|pezzo|po\s+di|po\'\s+di)|'

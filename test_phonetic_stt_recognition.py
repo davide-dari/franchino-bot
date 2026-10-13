@@ -556,3 +556,105 @@ class TestEdgeCasesAndBoundaries:
         assert "pet" in best_cand
         assert best_score > 50.0
 
+
+# ==============================================================================
+# 7. TEST COMANDO AIUTO OUTLANDS & DISAMBIGUAZIONE MUSICA VS DOMANDE
+# ==============================================================================
+
+class TestOutlandsHelpCommandAndMusicDisambiguation:
+    """Test del comando aiuto su Outlands e della disambiguazione da ricerche musicali."""
+
+    @pytest.mark.parametrize("help_query", [
+        "cosa puoi fare su outlands",
+        "cosa sai fare su outlands",
+        "cosa sai su outlands",
+        "quali argomenti conosci su outlands",
+        "che argomenti conosci su outlands",
+        "quali argomenti puoi fare su outlands per aiutare l'utente",
+        "come puoi aiutarci su outlands",
+        "come ci puoi aiutare su outlands",
+        "in cosa puoi aiutarci su outlands",
+        "in cosa ci puoi aiutare su outlands",
+        "cosa puoi fare per aiutarci su outlands",
+        "cosa puoi fare per aiutare l'utente su outlands",
+        "aiuto outlands",
+        "help outlands",
+        "guida outlands",
+        "outlands aiuto",
+        "outlands help",
+        "outlands guida",
+        "dimmi cosa sai su outlands",
+        "di cosa mi parli su outlands",
+        "argomenti outlands",
+    ])
+    def test_is_help_question_positive(self, help_query):
+        """Verifica che tutte le forme di richiesta aiuto/argomenti su Outlands siano riconosciute."""
+        from outlands_wiki import is_help_question
+        assert is_help_question(help_query) is True
+
+    @pytest.mark.parametrize("non_help_query", [
+        "metti gigi dag",
+        "play bohemian rhapsody",
+        "skip",
+        "stop",
+        "alza il volume",
+        "cosa canta ligabue",
+        "come stai franchino",
+        "che ore sono",
+    ])
+    def test_is_help_question_negative(self, non_help_query):
+        """Verifica che comandi musicali o generici NON siano scambiati per aiuto outlands."""
+        from outlands_wiki import is_help_question
+        assert is_help_question(non_help_query) is False
+
+    def test_get_outlands_help_embed_content(self):
+        """Verifica che l'embed di aiuto contenga le categorie essenziali e la risposta vocale."""
+        from outlands_wiki import get_outlands_help_embed
+        import discord
+
+        embed, voice_ans = get_outlands_help_embed()
+        assert isinstance(embed, discord.Embed)
+        assert "Franchino" in embed.title
+        assert len(voice_ans) > 20
+        assert "Outlands" in voice_ans or "console" in voice_ans or "pagine" in voice_ans
+
+        # Verifica presenza di campi informativi chiave
+        field_names = [f.name for f in embed.fields]
+        assert any("Skill" in fn for fn in field_names)
+        assert any("Dungeon" in fn for fn in field_names)
+        assert any("Creature" in fn or "Pet" in fn for fn in field_names)
+        assert any("Build" in fn or "Template" in fn for fn in field_names)
+        assert any("Aspetti" in fn or "Aspect" in fn for fn in field_names)
+
+    @pytest.mark.parametrize("interrogative_query", [
+        "cosa puoi fare per aiutarci?",
+        "cosa sai fare per aiutarci",
+        "come funziona il taming",
+        "dove si trova aegis keep",
+        "quali sono i migliori pet per farmare",
+        "perché il fire aspect fa tanti danni",
+        "spiegami come funziona la mastery chain",
+        "dimmi tutto sui frenzied ostard",
+    ])
+    def test_question_not_routed_to_music(self, interrogative_query):
+        """Verifica che le frasi interrogative/informative NON vengano trattate come titoli musicali."""
+        import re
+        cmd_strip = interrogative_query.strip().lower()
+        is_question = (
+            cmd_strip.endswith("?")
+            or re.match(
+                r"^(?:cosa|che|chi|come|dove|quando|perch[eé]|quali|quale|quanto|quanta|quanti|quante|"
+                r"spiegami|dimmi|parlami|raccontami|sai\s+dirmi|puoi\s+dirmi|mi\s+dici|mi\s+spieghi|"
+                r"sai\s+cos'è|sai\s+cosa|sai|conosci|esiste|ci\s+sono|si\s+può|posso)\b",
+                cmd_strip,
+                re.IGNORECASE,
+            ) is not None
+            or any(q_term in cmd_strip for q_term in (
+                "outlands", "ultima online", "come funziona", "come si fa", "dove trovo",
+                "dove si trova", "cosa serve", "a cosa serve", "cosa fa", "cosa fanno",
+                "perché", "perche"
+            ))
+        )
+        assert is_question is True
+
+

@@ -46,6 +46,10 @@ _ALL_WIKI_TITLES: List[str] = []
 _LOWER_TO_TITLE: Dict[str, str] = {}
 _INDEX_LOADED: bool = False
 
+# Set di tutti i clean_title della wiki (caricato a runtime dal DB) per rilevamento immediato
+# di qualsiasi pagina ufficiale nominata dall'utente (skill, dungeon, aspetti, ecc.)
+_WIKI_CLEAN_TITLES_SET: set = set()  # es. {"magery", "fishing", "aegis keep", "fire aspect", ...}
+
 # ==============================================================================
 # NORMALIZZAZIONE FONETICA STT ITALIANO (Google Speech-to-Text it-IT)
 # Corregge sistematicamente le trascrizioni fonetiche italianizzate di termini gaming inglesi
@@ -660,7 +664,7 @@ def ensure_wiki_catalog_sync() -> List[str]:
     Scarica e indicizza l'intero catalogo di tutte le ~2.140 pagine di https://wiki.uooutlands.com
     salvandolo su disco in data/outlands_wiki_index.json per ricerche istantanee su tutto il sito.
     """
-    global _ALL_WIKI_TITLES, _LOWER_TO_TITLE, _INDEX_LOADED
+    global _ALL_WIKI_TITLES, _LOWER_TO_TITLE, _INDEX_LOADED, _WIKI_CLEAN_TITLES_SET
 
     if _INDEX_LOADED and _ALL_WIKI_TITLES:
         return _ALL_WIKI_TITLES
@@ -675,16 +679,27 @@ def ensure_wiki_catalog_sync() -> List[str]:
             if len(rows) > 500:
                 _ALL_WIKI_TITLES = [r[0] for r in rows]
                 _LOWER_TO_TITLE = {r[1]: r[0] for r in rows}
+                # Popola il set di clean_title per rilevamento immediato in is_wiki_question
+                _WIKI_CLEAN_TITLES_SET = {r[1] for r in rows if r[1]}
                 c.execute("SELECT clean_from, to_title FROM redirects")
                 for c_from, t_to in c.fetchall():
                     _LOWER_TO_TITLE[c_from] = t_to
+                    _WIKI_CLEAN_TITLES_SET.add(c_from)
+                try:
+                    c.execute("SELECT lower(name) FROM creatures")
+                    for c_row in c.fetchall():
+                        if c_row[0]:
+                            _WIKI_CLEAN_TITLES_SET.add(c_row[0].strip())
+                except Exception:
+                    pass
                 _INDEX_LOADED = True
                 conn.close()
-                logger.info(f"📚 Caricate {len(_ALL_WIKI_TITLES)} pagine ufficiali dal database locale outlands_knowledge.db!")
+                logger.info(f"📚 Caricate {len(_ALL_WIKI_TITLES)} pagine ufficiali e {len(_WIKI_CLEAN_TITLES_SET)} termini nel catalogo locale outlands_knowledge.db!")
                 return _ALL_WIKI_TITLES
             conn.close()
     except Exception as e:
         logger.debug(f"Errore lettura DB per catalogo: {e}")
+
 
     # 2. Carica istantaneamente la cache su disco se disponibile
     try:
@@ -2000,46 +2015,239 @@ async def query_outlands_wiki(question: str) -> Optional[dict]:
     return info
 
 
+def is_help_question(command_part: str) -> bool:
+    """
+    Riconosce le domande di tipo 'aiuto outlands', 'cosa puoi fare su outlands',
+    'quali argomenti conosci su outlands', 'come puoi aiutarci su outlands', 'guida outlands', 'help outlands', ecc.
+    """
+    cmd_low = normalize_uo_speech(command_part).lower().strip(" ?!.,;:")
+
+    # Pattern di richiesta aiuto con 'outlands' o 'uo' presente nella frase
+    help_with_outlands = (
+        r"\b(?:aiuto|help|guida|cosa\s+puoi\s+fare|cosa\s+sai\s+fare|cosa\s+sai|cosa\s+conosci|"
+        r"quali\s+argomenti|che\s+argomenti|quali\s+sono\s+gli\s+argomenti|di\s+cosa\s+sei\s+esperto|"
+        r"cosa\s+puoi\s+dirmi|cosa\s+mi\s+puoi\s+dire|cosa\s+puoi\s+rispondere|"
+        r"cosa\s+puoi\s+aiutarmi|in\s+cosa\s+puoi\s+aiutarmi|in\s+cosa\s+puoi\s+aiutare|"
+        r"in\s+cosa\s+ci\s+puoi\s+aiutare|come\s+puoi\s+aiutarci|come\s+ci\s+puoi\s+aiutare|"
+        r"come\s+puoi\s+aiutare|cosa\s+puoi\s+fare\s+per\s+aiutarci|cosa\s+puoi\s+fare\s+per\s+aiutare|"
+        r"cosa\s+puoi\s+fare\s+per\s+noi|cosa\s+possiamo\s+chiederti|cosa\s+ti\s+posso\s+chiedere|"
+        r"cosa\s+ti\s+possiamo\s+chiedere|cosa\s+posso\s+chiederti|"
+        r"comandi\s+outlands|cosa\s+fai\s+su|come\s+funzioni|spiegami\s+outlands)"
+        r"\b.{0,50}\b(?:outlands|uo|ultima\s+online)\b",
+    )
+    for pat in help_with_outlands:
+        if re.search(pat, cmd_low, re.IGNORECASE):
+            return True
+
+    # Pattern diretti (outlands/uo prima o dopo la parola chiave)
+    direct_patterns = (
+        r"\b(?:outlands|uo)\b.{0,50}\b(?:aiuto|help|guida|comando|comandi|argomenti|argomento|info)\b",
+        r"^(?:aiuto|help)\s+(?:outlands|uo)\b",
+        r"^(?:outlands|uo)\s+(?:aiuto|help|guida)\b",
+        r"^cosa\s+(?:puoi\s+fare|sai\s+fare|sai)\s+su\s+(?:outlands|uo)\b",
+        r"^quali\s+argomenti\s+(?:conosci|sai|puoi\s+fare|tratti)\s+su\s+(?:outlands|uo)\b",
+        r"^dimmi\s+cosa\s+sai\s+(?:di|su)\s+(?:outlands|uo)\b",
+        r"^cosa\s+sai\s+(?:di|su)\s+(?:outlands|uo)\b",
+        r"^di\s+cosa\s+mi\s+parli\s+su\s+(?:outlands|uo)\b",
+        r"^argomenti\s+(?:outlands|uo)\b",
+        r"^come\s+(?:puoi\s+aiutarci|ci\s+puoi\s+aiutare|puoi\s+aiutare)\s+su\s+(?:outlands|uo)\b",
+        r"^in\s+cosa\s+(?:puoi\s+aiutarci|ci\s+puoi\s+aiutare|puoi\s+aiutare)\s+su\s+(?:outlands|uo)\b",
+        r"^cosa\s+puoi\s+fare\s+per\s+(?:aiutarci|aiutare|aiutare\s+gli\s+utenti|noi)\s+su\s+(?:outlands|uo)\b",
+        r"^(?:cosa|quali)\s+argomenti\s+(?:puoi\s+fare|ci\s+sono)\s+su\s+(?:outlands|uo)\b",
+    )
+    for pat in direct_patterns:
+        if re.search(pat, cmd_low, re.IGNORECASE):
+            return True
+
+    return False
+
+
+def get_outlands_help_embed(page_count: int = 2212, creature_count: int = 1301) -> Tuple[discord.Embed, str]:
+    """
+    Genera un Discord Embed ricco con tutte le categorie di domande che Franchino conosce
+    su UO Outlands, con esempi concreti e statistiche reali del database.
+    Ritorna (embed, voice_answer).
+    """
+    # Leggi i conteggi reali dal DB
+    try:
+        conn = get_db_connection()
+        if conn:
+            c = conn.cursor()
+            c.execute("SELECT COUNT(*) FROM pages")
+            page_count = c.fetchone()[0] or page_count
+            c.execute("SELECT COUNT(*) FROM creatures")
+            creature_count = c.fetchone()[0] or creature_count
+            conn.close()
+    except Exception:
+        pass
+
+    embed = discord.Embed(
+        title="\u1f5fa\ufe0f Franchino UO Outlands \u2014 Cosa posso fare per te?",
+        description=(
+            f"Sono Franchino, esperto di **Ultima Online Outlands**! Ho indicizzato "
+            f"**{page_count} pagine ufficiali** e **{creature_count} creature** da "
+            f"[wiki.uooutlands.com](https://wiki.uooutlands.com).\n"
+            "Puoi chiedermi qualsiasi cosa su questi argomenti:"
+        ),
+        color=COLOR_FRANCHINO,
+        url="https://wiki.uooutlands.com",
+    )
+
+    embed.add_field(
+        name="\u2694\ufe0f Skill & Meccaniche di Gioco",
+        value=(
+            "\u2022 *\"Cosa fa la skill Magery?\"*\n"
+            "\u2022 *\"Come si allena Lockpicking?\"*\n"
+            "\u2022 *\"Spiegami la Provocation\"*\n"
+            "\u2022 *\"Come funziona Animal Taming?\"*\n"
+            "\u2022 *\"A cosa serve la skill Fishing?\"*"
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="\U0001f432 Creature & Mostri (1.301 indicizzati)",
+        value=(
+            "\u2022 *\"Statistiche del Drake\"*\n"
+            "\u2022 *\"Dove trovo il Nightmare?\"*\n"
+            "\u2022 *\"Frenzied Ostard \xe8 domabile?\"*\n"
+            "\u2022 *\"Che slayer serve per i demoni?\"*\n"
+            "\u2022 *\"Quanto oro droppa il Bloodwolf?\"*"
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="\U0001f43e Pet & Animal Taming",
+        value=(
+            "\u2022 *\"Quali sono i migliori pet per farmare?\"*\n"
+            "\u2022 *\"Miglior pet per i dungeon?\"*\n"
+            "\u2022 *\"Come funziona il Taming Bestiary?\"*\n"
+            "\u2022 *\"Quanta skill serve per domare un Drake?\"*\n"
+            "\u2022 *\"Top 5 pet per il tamer?\"*"
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="\U0001f3d7\ufe0f Build & Template (700 Punti Skill)",
+        value=(
+            "\u2022 *\"Miglior build per iniziare?\"*\n"
+            "\u2022 *\"Build Tamer Mage spiegata\"*\n"
+            "\u2022 *\"Come buildare il Dexxer Spada?\"*\n"
+            "\u2022 *\"Template Bardo Arciere\"*\n"
+            "\u2022 *\"Build Necromante Summoner\"*"
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="\U0001f52e Aspetti & Mastery Chain",
+        value=(
+            "\u2022 *\"Cos'\xe8 l'Aspect Core?\"*\n"
+            "\u2022 *\"Come si usa la Mastery Chain?\"*\n"
+            "\u2022 *\"Spiegami il Command Aspect\"*\n"
+            "\u2022 *\"Come si sblocca il Fire Aspect?\"*\n"
+            "\u2022 *\"A cosa servono le Aspect Distillations?\"*"
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="\U0001f3f0 Dungeon & Zone",
+        value=(
+            "\u2022 *\"Dimmi tutto su Aegis Keep\"*\n"
+            "\u2022 *\"Come si entra a Nusero?\"*\n"
+            "\u2022 *\"Mostri di Pulma\"*\n"
+            "\u2022 *\"Boss dell'Ossuary\"*\n"
+            "\u2022 *\"Guida al dungeon Inferno\"*"
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="\U0001f5dd\ufe0f Oggetti Speciali & Meccaniche",
+        value=(
+            "\u2022 *\"Come si usa il Rune Codex?\"*\n"
+            "\u2022 *\"Cosa sono i Dungeon Mushrooms?\"*\n"
+            "\u2022 *\"Lockpicks \u2014 come funzionano?\"*\n"
+            "\u2022 *\"Cosa sono gli Echoes?\"*\n"
+            "\u2022 *\"Come usare il Taming Bestiary?\"*"
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="\U0001f4a1 Come chiedermi info (vocale o testuale)",
+        value=(
+            "\U0001f399\ufe0f **Voce**: *\"Franchino [domanda]\"* \u2014 Rispondo a voce!\n"
+            "\u2328\ufe0f **Slash**: `/outlands [domanda]` o `/wiki [domanda]`\n"
+            "\U0001f4d6 **Fonte**: Tutto da [wiki.uooutlands.com](https://wiki.uooutlands.com) tradotto in italiano!"
+        ),
+        inline=False,
+    )
+
+    embed.set_footer(text=f"Franchino UO Outlands Encyclopedia \u2022 {page_count} pagine \u2022 {creature_count} creature \u2022 wiki.uooutlands.com")
+
+    voice_answer = (
+        f"Magia ragazzi! Sono il vostro esperto di Ultima Online Outlands! "
+        f"Ho nel mio archivio {page_count} pagine ufficiali e {creature_count} creature dalla wiki. "
+        "Potete chiedermi tutto su skill, dungeon, creature, build, aspetti, pet e meccaniche del gioco! "
+        "Vi ho mandato la guida completa degli argomenti in chat! Chiudi gli occhi e chiedi qualsiasi cosa... Magia!"
+    )
+
+    return embed, voice_answer
+
+
 def is_wiki_question(command_part: str) -> Tuple[bool, str]:
     """
-    Determina se la frase rivolta a Franchino è una domanda su UO Outlands (https://wiki.uooutlands.com).
-    Normalizza foneticamente il parlato italiano (es. 'pat' -> 'pet', 'bild' -> 'build', 'temer' -> 'tamer')
-    e riconosce qualsiasi domanda naturale ("cos'è...", "che pet...", "come creare una build...", "come si usa...",
-    "dove si trova...", "quanta skill...", "statistiche di...", "spiegami...", ecc.) oppure qualsiasi riferimento
-    alle ~2.212 pagine della Wiki, creature o dungeon!
+    Determina se la frase rivolta a Franchino e' una domanda su UO Outlands.
+    Normalizza foneticamente il parlato italiano e riconosce qualsiasi domanda naturale
+    oppure qualsiasi riferimento alle ~2.212 pagine della Wiki, creature o dungeon!
+
+    Strategia (in ordine di priorita'):
+    1. Normalizzazione fonetica STT italiano -> termini UO
+    2. Esclusione esplicita comandi musicali/admin/DM (con eccezione se dopo il verbo c'e' un termine UO)
+    3. Rilevamento domande aiuto/guida outlands
+    4. DB title-set match: qualsiasi singola parola o coppia di parole che coincide
+       con un clean_title del database wiki (skill, dungeon, aspetti, oggetti, ...)
+    5. Pattern UO (keyword single-word + frasi composte + dungeon)
+    6. Pattern domande naturali in italiano
+    7. Match creature nel DB (solo se il nome e' lungo almeno 8 char)
     """
     cmd_norm = normalize_uo_speech(command_part)
     cmd = cmd_norm.strip()
     cmd_low = cmd.lower().strip(" ?!.,;:")
 
-    # Esclude i comandi musicali, DM o Admin espliciti
+    # --- Esclude i comandi musicali/admin espliciti ---
     non_wiki_starts = (
-        "metti ", "riproduci ", "suona ", "play ", "aggiungi ", "accoda ", "salta", "skip",
-        "pausa", "riprendi", "stop", "basta", "ferma", "zitto", "alza", "abbassa", "volume",
-        "salva", "preferiti", "attiva radio", "disattiva radio", "riavvia", "sblocca", "reset",
-        "esci", "disconnetti", "comandi", "dimmi i comandi", "manda messaggio", "manda un messaggio",
-        "invia messaggio", "scrivi a ", "sposta ", "porta ", "caccia ", "scollega ", "muta ", "smuta ",
-        "togli il ruolo", "dai il ruolo", "metti il ruolo", "assegna il ruolo", "crea il ruolo",
-        "cambia soprannome", "rinomina ", "resetta soprannome", "metti in timeout", "timeout a ",
-        "pulisci la chat", "cancella ", "crea stanza", "crea canale", "chiudi la stanza", "apri la stanza",
-        "espelli ", "banna ", "sbanna ", "trombetta", "sirena", "applausi", "rullo", "fail",
-        "vittoria", "laser", "censura", "fischio", "risata", "buuu", "bass boost", "mega bass",
-        "nightcore", "slowed", "8d", "karaoke", "vaporwave", "scoiattolo", "voce profonda", "normale",
-        "ripeti", "loop", "shuffle", "mescola", "mischia", "coda", "mostra la coda",
+        "metti ", "riproduci ", "suona ", "play ", "aggiungi ", "accoda ", "salta",
+        "skip", "pausa", "riprendi", "stop", "basta", "ferma", "zitto", "alza",
+        "abbassa", "volume", "salva", "preferiti", "attiva radio", "disattiva radio",
+        "riavvia", "sblocca", "reset", "esci", "disconnetti", "dimmi i comandi",
+        "manda messaggio", "manda un messaggio", "invia messaggio", "scrivi a ",
+        "sposta ", "porta ", "caccia ", "scollega ", "muta ", "smuta ",
+        "togli il ruolo", "dai il ruolo", "metti il ruolo", "assegna il ruolo",
+        "crea il ruolo", "cambia soprannome", "rinomina ", "resetta soprannome",
+        "metti in timeout", "timeout a ", "pulisci la chat", "cancella ",
+        "crea stanza", "crea canale", "chiudi la stanza", "apri la stanza",
+        "espelli ", "banna ", "sbanna ", "trombetta", "sirena", "applausi",
+        "rullo", "fail", "vittoria", "laser", "censura", "fischio", "risata",
+        "buuu", "bass boost", "mega bass", "nightcore", "slowed", "8d", "karaoke",
+        "vaporwave", "scoiattolo", "voce profonda", "normale", "ripeti", "loop",
+        "shuffle", "mescola", "mischia", "coda", "mostra la coda",
         "chi canta", "canzone precedente", "torna indietro", "aspetta",
     )
+
     if cmd_low.startswith(non_wiki_starts) or cmd_low in (
         "skip", "stop", "pausa", "riprendi", "ripeti", "loop", "shuffle", "coda", "aspetta"
     ):
         return False, ""
 
-    # Termini chiave specifici di Ultima Online Outlands & Gaming (con word boundary per evitare falsi positivi)
-    uo_single_word_pattern = re.compile(
-        r'\b(?:pet|pets|build|builds|template|tamer|taming|dexxer|aspect|slayer|slayers|'
-        r'drake|ostard|nightmare|bestiario|bestiary|lockpicking|codex|pvm|pvp)\b',
-        re.IGNORECASE
+    # --- 0. Domanda di aiuto/guida outlands ---
+    if is_help_question(cmd_low):
+        return True, cmd
+
+    # --- 1. Termini chiave UO Outlands con word boundary (alta priorita') ---
+    uo_kw = re.compile(
+        r"\b(?:pet|pets|build|builds|template|tamer|taming|dexxer|aspect|slayer|slayers|"
+        r"drake|ostard|nightmare|bestiario|bestiary|lockpicking|codex|pvm|pvp)\b",
+        re.IGNORECASE,
     )
-    if uo_single_word_pattern.search(cmd_low):
+    if uo_kw.search(cmd_low):
         return True, cmd
 
     uo_phrases = (
@@ -2054,47 +2262,73 @@ def is_wiki_question(command_part: str) -> Tuple[bool, str]:
     if any(p in cmd_low for p in uo_phrases):
         return True, cmd
 
-    # Dungeons ufficiali di Outlands
-    # 1. Nomi completi o composti
+    # --- 2. DB title-set match (qualsiasi clean_title della wiki) ---
+    if _WIKI_CLEAN_TITLES_SET:
+        _generic_single_words = {
+            "il", "lo", "la", "i", "gli", "le", "un", "uno", "una", "e", "o",
+            "di", "da", "in", "con", "su", "per", "tra", "fra", "del", "della",
+            "dei", "degli", "delle", "al", "alla", "ai", "agli", "a", "che",
+            "chi", "cosa", "come", "dove", "quando", "se", "ma", "anche", "non",
+            "mi", "ti", "si", "ci", "vi", "bird", "bull", "wolf", "ocean",
+            "time", "fire", "eyes", "star", "cold", "tree", "gold", "iron",
+            "wood", "ship", "song", "love", "night", "dark", "light", "house",
+            "city", "moon", "sun", "wind", "water", "bear", "boar", "frog",
+            "goat", "hare", "hawk", "lion", "pig", "rat", "stag", "toad",
+            "cat", "dog", "cow", "snake", "fish", "deer", "sheep", "horse",
+            "blue", "green", "red", "black", "white", "gray", "grey", "free",
+            "play", "stop", "back", "more", "live", "game", "book", "band",
+            "rock", "head", "face", "hand", "mind", "life", "baby", "girl", "boy",
+        }
+        # Se l'intera frase corrisponde esattamente a un titolo wiki
+        if cmd_low in _WIKI_CLEAN_TITLES_SET and cmd_low not in _generic_single_words:
+            return True, cmd
+
+        words = cmd_low.split()
+        # Se è una parola singola distintiva di almeno 5 caratteri
+        if len(words) == 1 and words[0] in _WIKI_CLEAN_TITLES_SET and words[0] not in _generic_single_words and len(words[0]) >= 5:
+            return True, cmd
+
+        # Match su bigrammi esatti nel DB (es. "aegis keep", "darkmire temple", "fire aspect")
+        for i in range(len(words) - 1):
+            bigram = f"{words[i]} {words[i+1]}"
+            if bigram in _WIKI_CLEAN_TITLES_SET and (words[i] not in _generic_single_words or words[i+1] not in _generic_single_words):
+                return True, cmd
+
+    # --- 3. Dungeons ufficiali di Outlands ---
     uo_dungeon_full = (
         "aegis keep", "cavernam", "darkmire temple", "field of souls",
         "kraul hive", "mount petram", "new player dungeon", "nusero", "omni realm",
         "ossuary", "pulma", "shadowspire cathedral", "the mausoleum", "tidal tomb",
-        "time dungeon", "undermountain"
+        "time dungeon", "undermountain",
     )
     if any(df in cmd_low for df in uo_dungeon_full):
         return True, cmd
-
-    # 2. Nomi singoli univoci di dungeon con word boundary
-    if re.search(r'\b(?:aegis|cavernam|darkmire|petram|nusero|ossuary|pulma|shadowspire|mausoleum)\b', cmd_low):
+    if re.search(r"\b(?:aegis|cavernam|darkmire|petram|nusero|ossuary|pulma|shadowspire|mausoleum)\b", cmd_low):
+        return True, cmd
+    if re.search(r"\b(?:dungeon\s+(?:inferno|ocean|wilderness|time)|(?:inferno|ocean|wilderness|time)\s+dungeon)\b", cmd_low):
         return True, cmd
 
-    # 3. Nomi comuni solo se accompagnati esplicitamente dalla parola 'dungeon'
-    if re.search(r'\b(?:dungeon\s+(?:inferno|ocean|wilderness|time)|(?:inferno|ocean|wilderness|time)\s+dungeon)\b', cmd_low):
-        return True, cmd
-
-    # Termini singoli o diretti del dizionario UO
+    # --- 4. Termini singoli diretti ---
     standalone_terms = {
         "pet", "pets", "taming", "tamer", "build", "template", "drake", "slayer", "dexxer",
-        "aspect", "mastery chain", "codex", "bestiary", "bestiario", "dungeon", "lockpicking"
+        "aspect", "mastery chain", "codex", "bestiary", "bestiario", "dungeon", "lockpicking",
     }
     if cmd_low in standalone_terms or cmd_low in IT_TO_UO_TERMS:
         return True, cmd
 
-    # Pattern di domande naturali in italiano
+    # --- 5. Pattern domande naturali in italiano ---
     question_patterns = (
         r"^(?:wiki|outlands|uo|ultima\s+online)\s+(.+)$",
         r"^(?:cerca\s+sulla\s+wiki|cerca\s+su\s+outlands|chiedi\s+alla\s+wiki)\s+(.+)$",
-        r"^(?:che\s+cos'è|che\s+cosa\s+è|cos'è|cosa\s+è|cosa\s+sono|chi\s+è|chi\s+sono)\s+(.+)$",
+        r"^(?:che\s+cos'\xe8|che\s+cosa\s+\xe8|cos'\xe8|cosa\s+\xe8|cosa\s+sono|chi\s+\xe8|chi\s+sono)\s+(.+)$",
         r"^(?:come\s+funziona|come\s+funzionano|come\s+si\s+fa|come\s+si\s+usa|come\s+si\s+sblocca|come\s+si\s+attiva|come\s+si\s+ottiene|come\s+si\s+allena|come\s+alleno|come\s+posso\s+allenare|come\s+expare|come\s+livellare|come\s+giocare)\s+(.+)$",
-        r"^(?:dove\s+si\s+trova|dove\s+si\s+trovano|dove\s+trovo|dove\s+si\s+allena|dove\s+alleno|dov'è|dove\s+comprare|dove\s+si\s+compra)\s+(.+)$",
-        r"^(?:quanta\s+skill|quanto\s+serve|quali\s+sono|qual\s+è|quale\s+è|a\s+cosa\s+serve|a\s+che\s+serve|perché|statistiche\s+di|stats\s+di|info\s+su)\s+(.+)$",
+        r"^(?:dove\s+si\s+trova|dove\s+si\s+trovano|dove\s+trovo|dove\s+si\s+allena|dove\s+alleno|dov'\xe8|dove\s+comprare|dove\s+si\s+compra)\s+(.+)$",
+        r"^(?:quanta\s+skill|quanto\s+serve|quali\s+sono|qual\s+\xe8|quale\s+\xe8|a\s+cosa\s+serve|a\s+che\s+serve|perch\xe9|statistiche\s+di|stats\s+di|info\s+su)\s+(.+)$",
         r"^(?:spiegami|parlami\s+di|parlami\s+dei|parlami\s+delle|parlami\s+del|parla\s+dei|parla\s+delle|parla\s+del|parla\s+di|raccontami\s+di|dimmi\s+tutto\s+su|dimmi\s+cosa\s+sai\s+su|mi\s+spieghi|mi\s+dici)\s+(.+)$",
         r"^(?:che|quale|quali)\s+(?:pet|build|classe|template|arma|dungeon|aspetto|aspect|slayer|creatura|mostro)\b",
         r"^(?:consigliami|consigli\s+su|consigli\s+per|mi\s+consigli|cosa\s+mi\s+consigli)\s+(.+)$",
         r"^(?:guida\s+a|guida\s+ai|guida\s+al|guida\s+su|guida\s+per|guida)\s+(.+)$",
     )
-
     for pat in question_patterns:
         if re.match(pat, cmd, flags=re.IGNORECASE):
             return True, cmd
@@ -2102,24 +2336,22 @@ def is_wiki_question(command_part: str) -> Tuple[bool, str]:
     if "outlands" in cmd_low or "wiki" in cmd_low:
         return True, cmd
 
-    # Se l'utente pronuncia direttamente il nome di una pagina dell'indice MediaWiki
+    # --- 6. Match diretto sul catalogo completo ---
     if _LOWER_TO_TITLE and cmd_low in _LOWER_TO_TITLE:
         return True, cmd
 
-    # Controllo SQLite per creature: match esatto del nome o creatura composta/distintiva
+    # --- 7. Controllo SQLite per creature ---
     try:
         conn = get_db_connection()
         if conn:
             c = conn.cursor()
-            # 1. Match esatto del nome creatura (singolare o plurale con -s)
             c.execute("SELECT name FROM creatures WHERE lower(name) = ? OR lower(name) || 's' = ? LIMIT 1", (cmd_low, cmd_low))
             cr = c.fetchone()
             if not cr and len(cmd_low) >= 8:
-                # 2. Per frasi o nomi lunghi, cerca creature composte (almeno 2 parole o >= 8 caratteri) con boundary
                 c.execute("SELECT name FROM creatures WHERE length(name) >= 8 AND instr(name, ' ') > 0")
                 for r in c.fetchall():
                     c_name = r["name"].lower()
-                    if re.search(r'\b' + re.escape(c_name) + r's?\b', cmd_low):
+                    if re.search(r"\b" + re.escape(c_name) + r"s?\b", cmd_low):
                         cr = r
                         break
             conn.close()
@@ -2130,3 +2362,9 @@ def is_wiki_question(command_part: str) -> Tuple[bool, str]:
 
     return False, ""
 
+
+# Inizializza automaticamente la cache del catalogo all'importazione
+try:
+    ensure_wiki_catalog_sync()
+except Exception:
+    pass

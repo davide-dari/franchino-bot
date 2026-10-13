@@ -221,8 +221,16 @@ class FranchinoBrain:
         """Regole euristiche veloci se Ollama non è raggiungibile."""
         t_low = text.lower().strip()
 
-        # UO Outlands
-        from outlands_wiki import is_wiki_question
+        # UO Outlands Aiuto / Guida
+        from outlands_wiki import is_help_question, is_wiki_question
+        if is_help_question(t_low):
+            return {
+                "intent": "outlands_help",
+                "voice_reply": "Sono Franchino, esperto di Ultima Online Outlands! Ho indicizzato oltre duemila pagine della wiki e milleduecento creature. Chiedimi di dungeon, skill, pet, build e aspetti!",
+                "chat_reply": "🗺️ **Franchino UO Outlands**: Ecco cosa posso fare per te su Ultima Online Outlands! Dì *\"Franchino aiuto outlands\"* per la guida completa.",
+            }
+
+        # UO Outlands Wiki
         is_w, w_q = is_wiki_question(t_low)
         if is_w:
             return {

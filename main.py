@@ -780,8 +780,25 @@ async def help_cmd(ctx: commands.Context):
 
 async def _handle_outlands_query(ctx: commands.Context, domanda: str):
     await ctx.defer()
-    from outlands_wiki import query_outlands_wiki
+    from outlands_wiki import query_outlands_wiki, is_help_question, get_outlands_help_embed
     from central_hub import hub
+
+    # Riconosce "aiuto", "help", "guida", "cosa puoi fare su outlands", ecc.
+    domanda_low = domanda.lower().strip()
+    if domanda_low in ("aiuto", "help", "guida", "argomenti", "comandi", "cosa puoi fare", "cosa sai") \
+            or is_help_question(domanda_low):
+        help_embed, voice_answer = get_outlands_help_embed()
+        await ctx.send(
+            content=f"🗺️ **{ctx.author.display_name}**, ecco tutto quello che puoi chiedermi su **UO Outlands**!",
+            embed=help_embed,
+        )
+        player = player_manager.get_player(ctx.guild)
+        if player.voice_client and player.voice_client.is_connected():
+            asyncio.create_task(
+                player.speak_tts(voice_answer, wait=False, interrupt_music=True, keep_paused_after=False)
+            )
+        return
+
     try:
         res = await asyncio.wait_for(query_outlands_wiki(domanda), timeout=18.0)
     except asyncio.TimeoutError:
@@ -848,17 +865,40 @@ async def _handle_outlands_query(ctx: commands.Context, domanda: str):
 @bot.hybrid_command(
     name="outlands",
     aliases=["uo", "outland"],
-    description="Cerca build, dungeon, boss o meccaniche su wiki.uooutlands.com e ottieni la guida in italiano!"
+    description="Cerca build, dungeon, boss o meccaniche su wiki.uooutlands.com e ottieni la guida in italiano! Usa senza argomenti o 'aiuto' per vedere tutti gli argomenti."
 )
-async def outlands_cmd(ctx: commands.Context, *, domanda: str):
+async def outlands_cmd(ctx: commands.Context, *, domanda: str = "aiuto"):
     await _handle_outlands_query(ctx, domanda)
 
 
 @bot.hybrid_command(
-    name="wiki",
-    description="Alias per cercare informazioni sulla wiki di Ultima Online Outlands"
+    name="outlands_aiuto",
+    aliases=["uo_aiuto", "outlands_help", "uo_help"],
+    description="Mostra tutti gli argomenti che Franchino conosce su UO Outlands (skill, dungeon, creature, build, aspetti, ecc.)"
 )
-async def wiki_cmd(ctx: commands.Context, *, domanda: str):
+async def outlands_aiuto_cmd(ctx: commands.Context):
+    """Mostra l'elenco completo degli argomenti Outlands che Franchino conosce."""
+    await ctx.defer()
+    from outlands_wiki import get_outlands_help_embed
+    help_embed, voice_answer = get_outlands_help_embed()
+    await ctx.send(
+        content=f"🗺️ **{ctx.author.display_name}**, ecco tutto quello che puoi chiedermi su **UO Outlands**!",
+        embed=help_embed,
+    )
+    player = player_manager.get_player(ctx.guild)
+    if player.voice_client and player.voice_client.is_connected():
+        asyncio.create_task(
+            player.speak_tts(voice_answer, wait=False, interrupt_music=True, keep_paused_after=False)
+        )
+
+
+
+
+@bot.hybrid_command(
+    name="wiki",
+    description="Alias per cercare informazioni sulla wiki di Ultima Online Outlands (o 'aiuto' per gli argomenti)"
+)
+async def wiki_cmd(ctx: commands.Context, *, domanda: str = "aiuto"):
     await _handle_outlands_query(ctx, domanda)
 
 
