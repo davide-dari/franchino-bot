@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import random
+import re
 import sys
 from typing import Optional, Literal
 import discord
@@ -70,7 +71,7 @@ intents.voice_states = True
 intents.guilds = True
 
 bot = commands.Bot(
-    command_prefix=COMMAND_PREFIX,
+    command_prefix=commands.when_mentioned_or(COMMAND_PREFIX),
     intents=intents,
     help_command=None  # Utilizziamo il comando /help personalizzato
 )
@@ -310,19 +311,48 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
 
 @bot.event
 async def on_message(message: discord.Message):
-    """Intercetta messaggi diretti a Franchino in chat e gestisce comandi con prefisso."""
+    """Intercetta messaggi diretti a Franchino in chat e gestisce comandi con prefisso o menzione."""
     if message.author.bot:
         return
 
-    content_lower = message.content.lower().strip()
-    # Se l'utente scrive in chat una domanda di presenza diretta a Franchino:
-    # es: "franchino ci sei?", "franchino ci senti?", "franchino sei vivo?", "ci sei franchino?"
-    if any(w in content_lower for w in ("franchino", "frankino")) and any(
-        q in content_lower for q in ("ci sei", "ci senti", "sei vivo", "mi senti", "ci siete", "rispondi", "batti un colpo", "sei sveglio")
-    ):
-        ctx = await bot.get_context(message)
-        await cisei_cmd(ctx)
+    ctx = await bot.get_context(message)
+    if ctx.command is not None:
+        await bot.invoke(ctx)
         return
+
+    content_lower = message.content.lower().strip()
+    clean_lower = message.clean_content.lower().strip() if hasattr(message, "clean_content") else content_lower
+
+    is_bot_mentioned = (bot.user and bot.user in message.mentions) or any(
+        w in content_lower or w in clean_lower
+        for w in (
+            "franchino", "frankino", "francino", "franchì",
+            "franchi no", "fra chi no", "frankie no", "franki no",
+            "fran chino", "franco ino", "frank ino", "franc ino", "franck ino"
+        )
+    )
+
+    # Se l'utente scrive in chat una domanda di presenza diretta a Franchino o lo menziona/saluta:
+    # es: "franchino ci sei?", "franchino ci senti?", "franchino sei vivo?", "ci sei franchino?", "@Franchino"
+    if is_bot_mentioned:
+        liveness_triggers = (
+            "ci sei", "ci senti", "sei vivo", "mi senti", "ci siete", "rispondi",
+            "batti un colpo", "sei sveglio", "funzioni", "funziona", "tutto bene",
+            "come va", "sei online", "online", "ping"
+        )
+        is_liveness = any(q in content_lower or q in clean_lower for q in liveness_triggers)
+
+        stripped = re.sub(
+            r'<@!?\d+>|@?\b(?:franchin[oaie]|frankin[oaie]|francin[oaie]|franchì|franchi\s*,?\s*n[oaie]|fra\s+chi\s*,?\s*n[oaie]|frankie\s*,?\s*n[oaie]|franki\s*,?\s*n[oaie]|fran\s+chin[oaie]|franco\s+in[oaie]|frank\s+in[oaie]|franc\s+in[oaie]|franck\s+in[oaie])\b',
+            '',
+            clean_lower,
+            flags=re.IGNORECASE
+        )
+        stripped = re.sub(r'<@!?\d+>', '', stripped).strip(" @,.!?:;-")
+
+        if is_liveness or not stripped or stripped in ("ciao", "salve", "buongiorno", "buonasera", "ehi", "hey"):
+            await cisei_cmd(ctx)
+            return
 
     await bot.process_commands(message)
 
@@ -428,7 +458,7 @@ async def cisei_cmd(ctx: commands.Context):
 
 @bot.hybrid_command(
     name="play",
-    aliases=["p"],
+    aliases=["p", "metti", "suona"],
     description="Riproduce un brano o playlist da YouTube o Spotify"
 )
 async def play(ctx: commands.Context, *, brano: str):

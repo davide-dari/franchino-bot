@@ -290,6 +290,11 @@ class GuildPlayer:
         self._manual_stop = False
         self._restarting = False
         self._playing_tts = False
+        self._is_tts_source: bool = False
+        self._current_tts_id: int = 0
+        self._tts_start_time: float = 0.0
+        self._tts_max_duration: float = 25.0
+        self._tts_lock = asyncio.Lock()
         self._track_start_monotonic: float = 0.0
         self._interrupted_song: Optional[SongInfo] = None
         self._interrupted_elapsed: int = 0
@@ -301,8 +306,28 @@ class GuildPlayer:
         self._last_entrance_greeting_time: float = 0.0
 
     @property
+    def is_speaking_tts(self) -> bool:
+        """Verifica se Franchino sta effettivamente parlando in vocale, auto-resettando flag bloccati."""
+        if not self._playing_tts:
+            return False
+        if not (self.voice_client and self.voice_client.is_connected() and self.voice_client.is_playing()):
+            self._playing_tts = False
+            self._is_tts_source = False
+            return False
+        # Se la musica è in corso e non è una sorgente TTS dedicata, allora sta suonando una canzone, non TTS!
+        if self.current and self._interrupted_song is None and not self._is_tts_source:
+            self._playing_tts = False
+            return False
+        # Timeout di sicurezza: nessun messaggio TTS dura più di _tts_max_duration (default 30s)
+        if time.monotonic() - getattr(self, "_tts_start_time", 0) > getattr(self, "_tts_max_duration", 30.0):
+            self._playing_tts = False
+            self._is_tts_source = False
+            return False
+        return True
+
+    @property
     def is_active(self) -> bool:
-        return (self.is_playing() or self.is_paused()) and not self._playing_tts
+        return (self.is_playing() or self.is_paused()) and not self.is_speaking_tts
 
     @property
     def is_busy(self) -> bool:
@@ -310,7 +335,7 @@ class GuildPlayer:
         return (
             self.is_playing()
             or self.is_paused()
-            or self._playing_tts
+            or self.is_speaking_tts
             or bool(self.queue)
             or bool(self.current)
             or bool(self._interrupted_song)
@@ -363,7 +388,7 @@ class GuildPlayer:
         self,
         text: str,
         wait: bool = False,
-        interrupt_music: bool = False,
+        interrupt_music: bool = True,
         keep_paused_after: bool = False,
         dramatic_fable: bool = False,
     ):
@@ -446,92 +471,116 @@ class GuildPlayer:
             logger.error(f"❌ Impossibile generare l'audio vocale per la frase: '{text}'")
             return
 
-        if not self.voice_client or not self.voice_client.is_connected():
-            return
-
-        # Se c'è musica in corso e vogliamo che Franchino parli chiaramente
-        if (self.is_playing() or self.is_paused()) and not self._playing_tts:
-            if not interrupt_music:
+        async with self._tts_lock:
+            if not self.voice_client or not self.voice_client.is_connected():
                 return
-            if self.current and self.current.stream_url and self._interrupted_song is None:
-                self._interrupted_song = self.current
-                self._interrupted_elapsed = max(0, int(time.monotonic() - self._track_start_monotonic))
+
+            self._current_tts_id += 1
+            tts_id = self._current_tts_id
+
+            # Se c'è musica o un TTS/audio precedente in corso, ferma la riproduzione in sicurezza
+            if self.voice_client and (self.voice_client.is_playing() or self.voice_client.is_paused()):
+                if not interrupt_music:
+                    return
+                # Salva il brano musicale solo se è effettivamente musica e non un TTS precedente
+                if self.current and self.current.stream_url and self._interrupted_song is None and not self._is_tts_source:
+                    self._interrupted_song = self.current
+                    self._interrupted_elapsed = max(0, int(time.monotonic() - self._track_start_monotonic))
+                self._playing_tts = True
+                self._is_tts_source = True
+                try:
+                    if hasattr(self.voice_client, "stop_playing"):
+                        self.voice_client.stop_playing()
+                    else:
+                        self.voice_client.stop()
+                except Exception:
+                    pass
+                # Attende fino a 350ms che il player si fermi completamente per evitare ClientException("Already playing audio")
+                for _ in range(7):
+                    if not self.voice_client.is_playing() and not self.voice_client.is_paused():
+                        break
+                    await asyncio.sleep(0.05)
+
+            done_ev = asyncio.Event()
+            self._tts_done_event = done_ev
             self._playing_tts = True
-            if hasattr(self.voice_client, "stop_playing"):
-                self.voice_client.stop_playing()
-            else:
-                self.voice_client.stop()
-            # Attende fino a 300ms che il player si fermi completamente per evitare ClientException
-            for _ in range(6):
-                if not self.voice_client.is_playing() and not self.voice_client.is_paused():
-                    break
-                await asyncio.sleep(0.05)
+            self._is_tts_source = True
+            self._tts_start_time = time.monotonic()
+            self._tts_max_duration = min(35.0, max(6.0, len(text) / 12.0 + 3.0))
 
-        done_ev = asyncio.Event()
-        self._tts_done_event = done_ev
-        self._playing_tts = True
+            def _after_tts(err):
+                if err:
+                    logger.error(f"❌ Errore callback after_tts: {err}")
+                if self._current_tts_id == tts_id:
+                    self._playing_tts = False
+                    self._is_tts_source = False
+                self.bot.loop.call_soon_threadsafe(done_ev.set)
 
-        def _after_tts(err):
-            if err:
-                logger.error(f"❌ Errore callback after_tts: {err}")
-            self._playing_tts = False
-            self.bot.loop.call_soon_threadsafe(done_ev.set)
+            try:
+                # Catena DSP "Franchino il Vocalist":
+                # - Calore ed effetto prossimità da microfono club a condensatore (140Hz a +5dB)
+                # - Taglio inscatolamento e risonanza medio-bassa (450Hz a -2.5dB)
+                # - Presenza e graffio microfonico da console DJ (3200Hz a +4dB)
+                # - Brillantezza ed aria sulle alte frequenze (9500Hz a +2dB)
+                # - Compressore/Limiter analogico broadcast (voce solida, presente e mai saturata)
+                # - Eco/Delay ritmico da console live (Franchino signature club delay)
+                filters = []
+                if used_gtts_fallback:
+                    filters.append("asetrate=24000*0.78,aresample=48000,atempo=1.22")
 
-        try:
-            # Catena DSP "Franchino il Vocalist":
-            # - Calore ed effetto prossimità da microfono club a condensatore (140Hz a +5dB)
-            # - Taglio inscatolamento e risonanza medio-bassa (450Hz a -2.5dB)
-            # - Presenza e graffio microfonico da console DJ (3200Hz a +4dB)
-            # - Brillantezza ed aria sulle alte frequenze (9500Hz a +2dB)
-            # - Compressore/Limiter analogico broadcast (voce solida, presente e mai saturata)
-            # - Eco/Delay ritmico da console live (Franchino signature club delay)
-            filters = []
-            if used_gtts_fallback:
-                filters.append("asetrate=24000*0.78,aresample=48000,atempo=1.22")
+                # Equalizzatore da console vocalist
+                filters.append("equalizer=f=140:t=q:w=1.2:g=5")
+                filters.append("equalizer=f=450:t=q:w=1.5:g=-2.5")
+                filters.append("equalizer=f=3200:t=q:w=1.3:g=4")
+                filters.append("equalizer=f=9500:t=q:w=1.0:g=2")
 
-            # Equalizzatore da console vocalist
-            filters.append("equalizer=f=140:t=q:w=1.2:g=5")
-            filters.append("equalizer=f=450:t=q:w=1.5:g=-2.5")
-            filters.append("equalizer=f=3200:t=q:w=1.3:g=4")
-            filters.append("equalizer=f=9500:t=q:w=1.0:g=2")
+                # Compressore analogico broadcast live
+                filters.append("acompressor=threshold=-16dB:ratio=4:attack=5:release=50:makeup=3")
 
-            # Compressore analogico broadcast live
-            filters.append("acompressor=threshold=-16dB:ratio=4:attack=5:release=50:makeup=3")
+                if getattr(self, "vocalist_mode", True):
+                    if dramatic_fable:
+                        filters.append("aecho=0.8:0.75:165|330:0.36|0.18")
+                    else:
+                        filters.append("aecho=0.8:0.75:140|280:0.28|0.14")
+                filters.append("volume=1.4")
+                af_chain = ",".join(filters)
 
-            if getattr(self, "vocalist_mode", True):
-                if dramatic_fable:
-                    filters.append("aecho=0.8:0.75:165|330:0.36|0.18")
-                else:
-                    filters.append("aecho=0.8:0.75:140|280:0.28|0.14")
-            filters.append("volume=1.4")
-            af_chain = ",".join(filters)
+                source = discord.FFmpegPCMAudio(tts_file, options=f'-vn -af "{af_chain}"')
+                transformed = discord.PCMVolumeTransformer(source, volume=min(1.0, self.volume + 0.35))
+                logger.info(f"🗣️ Avvio riproduzione audio TTS nella stanza vocale: '{text[:50]}'")
+                self.voice_client.play(transformed, after=_after_tts)
 
-            source = discord.FFmpegPCMAudio(tts_file, options=f'-vn -af "{af_chain}"')
-            transformed = discord.PCMVolumeTransformer(source, volume=min(1.0, self.volume + 0.35))
-            logger.info(f"🗣️ Avvio riproduzione audio TTS nella stanza vocale: '{text[:50]}'")
-            self.voice_client.play(transformed, after=_after_tts)
-            if wait:
-                await asyncio.wait_for(done_ev.wait(), timeout=55.0)
-                if self._interrupted_song and not keep_paused_after and not self._manual_stop:
-                    await self.resume_interrupted_song()
-            elif self._interrupted_song and not keep_paused_after:
-                async def _resume_later():
+                async def _tts_completion_monitor():
                     try:
-                        await asyncio.wait_for(done_ev.wait(), timeout=60.0)
-                        if self._interrupted_song and not keep_paused_after and not self._manual_stop:
-                            await self.resume_interrupted_song()
-                    except Exception as ex:
-                        logger.debug(f"Errore ripresa musica post-TTS in background: {ex}")
-                asyncio.create_task(_resume_later())
-        except asyncio.CancelledError:
-            self._playing_tts = False
-            raise
-        except Exception as e:
-            self._playing_tts = False
-            logger.error(f"❌ Errore durante la riproduzione audio TTS: {e}", exc_info=True)
-        finally:
-            if wait:
-                self._playing_tts = False
+                        timeout_dur = getattr(self, "_tts_max_duration", 25.0) + 4.0
+                        await asyncio.wait_for(done_ev.wait(), timeout=timeout_dur)
+                    except Exception as te:
+                        logger.debug(f"Timeout o interruzione monitoraggio TTS: {te}")
+                    finally:
+                        if self._current_tts_id == tts_id:
+                            self._playing_tts = False
+                            self._is_tts_source = False
+                            if self._interrupted_song and not keep_paused_after and not self._manual_stop:
+                                await self.resume_interrupted_song()
+
+                if wait:
+                    await _tts_completion_monitor()
+                else:
+                    asyncio.create_task(_tts_completion_monitor())
+            except asyncio.CancelledError:
+                if self._current_tts_id == tts_id:
+                    self._playing_tts = False
+                    self._is_tts_source = False
+                raise
+            except Exception as e:
+                if self._current_tts_id == tts_id:
+                    self._playing_tts = False
+                    self._is_tts_source = False
+                logger.error(f"❌ Errore durante la riproduzione audio TTS: {e}", exc_info=True)
+            finally:
+                if wait and self._current_tts_id == tts_id:
+                    self._playing_tts = False
+                    self._is_tts_source = False
 
     async def resume_interrupted_song(self):
         """Riprende il brano musicale esattamente dal secondo in cui Franchino lo aveva sospeso per parlare."""
@@ -547,6 +596,8 @@ class GuildPlayer:
 
         try:
             self.current = song
+            self._playing_tts = False
+            self._is_tts_source = False
             transformed_source = self._build_ffmpeg_audio_source(song.stream_url, seek_seconds=elapsed)
 
             def after_playback(error):
@@ -900,8 +951,17 @@ class GuildPlayer:
                     and hasattr(reader, "packet_router")
                     and not reader.packet_router.is_alive()
                 )
+                sink = getattr(reader, "sink", None) if reader else None
+                sink_dead = bool(
+                    reader
+                    and (
+                        sink is None
+                        or not getattr(sink, "_running", False)
+                        or (hasattr(sink, "_monitor_task") and sink._monitor_task and sink._monitor_task.done())
+                    )
+                )
                 not_listening = hasattr(self.voice_client, "is_listening") and not self.voice_client.is_listening()
-                if not_listening or router_dead:
+                if not_listening or router_dead or sink_dead:
                     logger.info("🔄 Riattivazione automatica del listener vocale di Franchino (sempre in ascolto)...")
                     from voice_commands import FranchinoVoiceSink
                     try:
@@ -933,13 +993,16 @@ class GuildPlayer:
                         break
 
             self.play_lock = asyncio.Lock()
+            self._tts_lock = asyncio.Lock()
             self.queue.clear()
             self.current = None
             self.loop_mode = "off"
             self.audio_effect = "off"
             self._is_ducked = False
             self._playing_tts = False
+            self._is_tts_source = False
             self._interrupted_song = None
+            self._interrupted_elapsed = 0
 
             vc = self.voice_client or self.guild.voice_client
             if vc and vc.is_connected():

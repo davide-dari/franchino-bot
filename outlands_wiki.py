@@ -152,6 +152,9 @@ UO_PHONETIC_REPLACEMENTS: List[Tuple[re.Pattern, str]] = [
     (re.compile(r'\b(?:plei|pley)\b', re.IGNORECASE), 'play'),
     (re.compile(r'\b(?:sciaffol|shuffol|shuffel)\b', re.IGNORECASE), 'shuffle'),
     (re.compile(r'\b(?:lup)\b', re.IGNORECASE), 'loop'),
+
+    # --- 17. WAKE WORD FRANCHINO & SPLIT STT IT-IT ---
+    (re.compile(r'\b(?:franchi\s*,?\s*n[oaie]|fra\s+chi\s*,?\s*n[oaie]|frankie\s*,?\s*n[oaie]|franki\s*,?\s*n[oaie]|fran\s+chin[oaie]|franco\s+in[oaie]|frank\s+in[oaie]|franc\s+in[oaie]|franck\s+in[oaie])\b', re.IGNORECASE), 'franchino'),
 ]
 
 

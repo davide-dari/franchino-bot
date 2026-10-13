@@ -321,8 +321,8 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
     SILENCE_THRESHOLD_SEC = 0.65  # Rileva la fine della frase in soli 650ms per risposte ultra-veloci!
     MIN_PHRASE_SEC = 0.45         # 450ms minimi per eliminare rumori brevi di microfono, respiri e colpi di tosse
     MAX_PHRASE_SEC = 10.0         # Fino a 10 secondi per titoli lunghi + nome artista
-    START_RMS_ENERGY = 120        # Più reattivo grazie al pre-roll buffer da 300ms
-    CONTINUE_RMS_ENERGY = 50      # Sensibile per catturare anche l'ultima sillaba debole o sospiro
+    START_RMS_ENERGY = 60         # Più reattivo grazie al pre-roll buffer da 300ms (cattura anche voci dolci/basse)
+    CONTINUE_RMS_ENERGY = 35      # Sensibile per catturare anche l'ultima sillaba debole o sospiro
     PREROLL_CHUNKS = 15           # 300ms di pre-roll ring buffer (15 pacchetti da 20ms)
 
     WAKE_PATTERN = re.compile(
@@ -345,6 +345,12 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
         r'|franco\s+in[oaie]'       # "franco ino" (frequente su STT italiana)
         r'|fran\s+k[iy]n[oaie]'     # "fran kino"
         r'|fran\s+cin[oaie]'        # "fran cino"
+        r'|franchi\s*,?\s*n[oaie]'   # "franchi no", "franchi, no"
+        r'|fra\s+chi\s*,?\s*n[oaie]'  # "fra chi no", "fra chi, no"
+        r'|frankie\s*,?\s*n[oaie]'   # "frankie no"
+        r'|franki\s*,?\s*n[oaie]'    # "franki no"
+        r'|franc\s+in[oaie]'         # "franc ino"
+        r'|franck\s+in[oaie]'        # "franck ino"
         r')(?!\w)',
         re.IGNORECASE
     )
@@ -468,7 +474,14 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
         """
         if not text:
             return ""
-        return normalize_uo_speech(text)
+        norm = normalize_uo_speech(text)
+        norm = re.sub(
+            r'\b(?:franchi\s*,?\s*n[oaie]|fra\s+chi\s*,?\s*n[oaie]|frankie\s*,?\s*n[oaie]|franki\s*,?\s*n[oaie]|fran\s+chin[oaie]|franco\s+in[oaie]|frank\s+in[oaie]|franc\s+in[oaie]|franck\s+in[oaie])\b',
+            'franchino',
+            norm,
+            flags=re.IGNORECASE
+        )
+        return norm
 
     def __init__(self, player: "GuildPlayer"):
         super().__init__(None)
@@ -714,33 +727,39 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
         """Controlla continuamente i buffer vocali di tutti i partecipanti nel canale con ciclo rapido a 40ms."""
         try:
             while self._running:
-                await asyncio.sleep(0.04)
-                now = time.monotonic()
+                try:
+                    await asyncio.sleep(0.04)
+                    now = time.monotonic()
 
-                self._loop_tick = (self._loop_tick + 1) % 50
-                if self._loop_tick == 0:
-                    self._prune_stale_buffers(now)
+                    self._loop_tick = (self._loop_tick + 1) % 50
+                    if self._loop_tick == 0:
+                        self._prune_stale_buffers(now)
 
-                for key in list(self._buffers.keys()):
-                    buf = self._buffers.get(key)
-                    if not buf:
-                        continue
+                    for key in list(self._buffers.keys()):
+                        buf = self._buffers.get(key)
+                        if not buf:
+                            continue
 
-                    last_t = self._last_packet_time.get(key, now)
-                    silence_dur = now - last_t
-                    phrase_dur = len(buf) / self.BYTES_PER_SECOND
+                        last_t = self._last_packet_time.get(key, now)
+                        silence_dur = now - last_t
+                        phrase_dur = len(buf) / self.BYTES_PER_SECOND
 
-                    if silence_dur >= self.SILENCE_THRESHOLD_SEC or phrase_dur >= self.MAX_PHRASE_SEC:
-                        raw_pcm = bytes(buf)
-                        self._buffers.pop(key, None)
-                        self._last_packet_time.pop(key, None)
-                        speaker_obj = self._users.get(key)
+                        if silence_dur >= self.SILENCE_THRESHOLD_SEC or phrase_dur >= self.MAX_PHRASE_SEC:
+                            raw_pcm = bytes(buf)
+                            self._buffers.pop(key, None)
+                            self._last_packet_time.pop(key, None)
+                            speaker_obj = self._users.get(key)
 
-                        if not self._buffers:
-                            self.player.restore_duck_volume()
+                            if not self._buffers:
+                                self.player.restore_duck_volume()
 
-                        if phrase_dur >= self.MIN_PHRASE_SEC:
-                            asyncio.create_task(self._process_utterance(key, speaker_obj, raw_pcm))
+                            if phrase_dur >= self.MIN_PHRASE_SEC:
+                                asyncio.create_task(self._process_utterance(key, speaker_obj, raw_pcm))
+                except asyncio.CancelledError:
+                    break
+                except Exception as inner_err:
+                    logger.debug(f"Errore iterazione monitor vocale (recupero automatico): {inner_err}")
+                    await asyncio.sleep(0.05)
         except asyncio.CancelledError:
             pass
         except Exception as e:
@@ -749,7 +768,7 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
     async def _process_utterance(self, key: int, speaker_obj: object, stereo_pcm_48k: bytes):
         """
         Elabora l'audio catturato con la massima efficienza hardware e precisione:
-        1. VAD Gate RMS: scarta immediatamente frasi silenziose, fruscii o respiri (evita CPU e chiamate Google STT inutili).
+        1. VAD Gate: scarta esclusivamente rumori di fondo impercettibili o silenzio puro senza mai tagliare la voce umana.
         2. Mixdown stereo mono nativo a 48kHz.
         3. Downsample a 16kHz ad alta efficienza: riduce del 66% RAM, CPU FLAC e payload di rete verso Google Speech API.
         4. Rimozione DC Bias e Soft AGC ottimizzati su campioni a 16kHz.
@@ -758,10 +777,11 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
         7. Valutazione intelligente delle ipotesi STT per evitare attivazioni spurie.
         """
         try:
-            # 1. VAD Gate / Controllo soglia energetica media della frase
+            # 1. VAD Gate / Controllo silenzio puro e fruscii (soglia a 35 RMS e 250 peak per non tagliare mai la voce umana)
             avg_rms = audioop.rms(stereo_pcm_48k, self.SAMPLE_WIDTH)
-            if avg_rms < 120:
-                logger.debug(f"🔇 Audio da {key} ignorato: energia media troppo bassa ({avg_rms} RMS < 120)")
+            max_amp = audioop.max(stereo_pcm_48k, self.SAMPLE_WIDTH)
+            if avg_rms < 35 and max_amp < 250:
+                logger.debug(f"🔇 Audio da {key} ignorato: silenzio o rumore impercettibile ({avg_rms} RMS, {max_amp} max amp)")
                 return
 
             # 2. Mixdown stereo -> mono
@@ -831,21 +851,46 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
             if clean_cand and clean_cand not in all_candidates:
                 all_candidates.append(clean_cand)
 
-        # Anti-Feedback Loop: Se Franchino sta parlando in voce (TTS), ignora l'audio catturato
-        # per evitare che il bot ascolti la propria voce (eco da altoparlanti o microfoni aperti).
-        # Unica eccezione: se l'utente urla "stop" o "basta" per fermare la riproduzione.
-        if getattr(self.player, "_playing_tts", False):
-            first_low = all_candidates[0].lower()
-            if not any(w in first_low for w in ("stop", "stoppa", "ferma", "basta", "zitto", "silenzio")):
-                logger.debug(f"🔇 Audio da {key} ignorato: Franchino sta parlando in TTS (anti-feedback loop)")
-                return
-
         user = await self._resolve_user_object(key, speaker_obj)
         uid = getattr(user, "id", 0)
         now = time.monotonic()
 
         # Verifica se l'utente ha una sessione attiva (pending wake follow-up di 10s o dettatura DM)
         in_active_session = (uid in self._pending_wake and now - self._pending_wake[uid][0] <= 10.0) or (uid in self._pending_dm)
+
+        # Anti-Feedback Loop: Se Franchino sta parlando in voce (TTS), ignora solo se è una vera eco priva di comandi e del nome Franchino.
+        # Se l'utente chiama Franchino (es. "Franchino ..."), impartisce un comando di interruzione, o è in sessione attiva: interrompi subito il TTS ed esegui!
+        is_bot_speaking = getattr(self.player, "is_speaking_tts", False)
+        if callable(is_bot_speaking):
+            try:
+                is_bot_speaking = bool(is_bot_speaking())
+            except Exception:
+                is_bot_speaking = False
+        else:
+            is_bot_speaking = bool(is_bot_speaking)
+
+        if is_bot_speaking:
+            has_wake = any(self.extract_wake_and_command(c)[0] for c in all_candidates)
+            interrupt_terms = (
+                "stop", "stoppa", "ferma", "fermati", "basta", "zitto", "silenzio",
+                "pausa", "skip", "salta", "riavviati", "riavvia", "reset", "sbloccati"
+            )
+            has_interrupt = any(
+                any(w in c.lower() for w in interrupt_terms)
+                for c in all_candidates
+            )
+            if has_wake or has_interrupt or in_active_session:
+                try:
+                    if self.player.voice_client:
+                        if hasattr(self.player.voice_client, "stop_playing"):
+                            self.player.voice_client.stop_playing()
+                        else:
+                            self.player.voice_client.stop()
+                except Exception:
+                    pass
+            else:
+                logger.debug(f"🔇 Audio da {key} ignorato: Franchino sta parlando in TTS (anti-feedback loop)")
+                return
 
         selected_text = None
         detected_cmd = None
@@ -879,14 +924,16 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
         primary_has_wake = top_has_wake or top_clean_has_wake
 
         # Se l'ipotesi primaria è un tipico intercalare colloquiale non rivolto a Franchino
-        # (es. "Fra chi...", "Fra, chi ha il boost", "Fra chi c'è", "ho cento franchi"),
-        # blocca categoricamente qualsiasi allucinazione fonetica dei candidati secondari!
+        # (es. "Fra chi...", "Fra, chi ha il boost", "Fra chi gioca"), e NESSUN candidato alternativo contiene Franchino,
+        # blocca i candidati secondari per evitare false attivazioni.
         colloquial_anti_wake = re.compile(
-            r'\b(?:fra\s*,?\s*chi|ho\s+(?:cento|\d+)\s+franchi|i\s+franchi)\b',
+            r'\b(?:fra\s*,?\s*chi\s+(?:ha|c[\x27\']è|gioca|vuole|viene|va|sa|dice|sta|è|prende|serve|boosta|lo|la|li|le)\b|ho\s+(?:cento|\d+)\s+franchi|i\s+franchi\s+svizzeri)\b',
             re.IGNORECASE
         )
         if not primary_has_wake and colloquial_anti_wake.search(top_cand):
-            all_candidates = []
+            has_any_wake = any(self.extract_wake_and_command(c)[0] for c in all_candidates)
+            if not has_any_wake:
+                all_candidates = []
 
         for idx, cand in enumerate(all_candidates):
             has_w, cmd, w_tok = self.extract_wake_and_command(cand)
@@ -907,25 +954,41 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
                     score += 20.0
 
                 # Se l'ipotesi primaria NON conteneva wake word, le alternative successive
-                # sono ammesse solo se provengono dai primi 2 candidati e hanno un CHIARO COMANDO IMPERATIVO
+                # sono ammesse solo se provengono dai primi candidati e hanno un intento legittimo verso il bot
                 if not primary_has_wake:
                     cmd_clean_low = norm_cmd.lower().strip()
                     has_command_intent = (
-                        uo_priority_terms.search(norm_cmd)
+                        not norm_cmd  # Richiamo diretto al solo nome "Franchino"
+                        or uo_priority_terms.search(norm_cmd)
                         or music_bot_terms.search(norm_cmd)
                         or question_terms.search(norm_cmd)
-                        or cmd_clean_low in ("boost", "/boost", "bassboost", "bass boost", "comandi", "favola", "partita", "stop", "salta", "pausa", "riprendi")
-                        or cmd_clean_low.startswith(("metti ", "suona ", "play ", "attiva boost", "attiva il boost", "alza i bassi", "togli boost", "togli effetti", "disattiva "))
+                        or any(w in cmd_clean_low for w in (
+                            "ci sei", "ci senti", "mi senti", "rispondi", "sei vivo", "sei sveglio", "batti un colpo",
+                            "funzioni", "funziona", "tutto bene", "come va",
+                            "ciao", "salve", "buongiorno", "buonasera", "grazie", "grande", "ti voglio bene",
+                            "comandi", "aiuto", "help", "favola", "storia", "partita", "partite", "sport",
+                            "boost", "/boost", "bassboost", "bassi", "effetto", "suono",
+                            "stop", "salta", "skip", "pausa", "riprendi", "volume", "riavviati", "reset",
+                            "non ti sento", "si sente male", "ti sento a scatti", "parla più forte", "alza la voce",
+                            "bacio", "bacia", "saluta", "brindisi", "abbraccia", "carica", "auguri", "buonanotte", "cinque", "troll",
+                            "sposta", "caccia", "muta", "smuta", "ruolo", "soprannome", "timeout", "libera", "pulisci", "cancella",
+                            "vorrei", "puoi", "canta", "fammi", "radio", "preferiti", "salva"
+                        ))
+                        or bool(re.search(
+                            r'^(?:cosa|che|chi|come|dove|quando|perch[eé]|quali|quale|quanto|spiegami|dimmi|parlami|raccontami|metti|suona|play|attiva|alza|abbassa|togli|fammi|puoi|fammi\s+sentire)\b|\?$',
+                            cmd_clean_low
+                        ))
                     )
                     # Escludi categoricamente frasi conversazionali o chiacchiere che contengono 'boost' o 'bassi'
-                    is_boost_chatter = bool(re.search(
-                        r'\b(?:chi\s+(?:ha|c\'ha|usa|fa|prende|vuole|boosta)|avete|hai|abbiamo|hanno|ha\s+il\s+boost|'
-                        r'del\s+server|al\s+server|per\s+il\s+boost|grazie|come\s+funziona|cos\'[eè]|'
-                        r'a\s+cosa\s+serve|spiegami|perch[eé]|serve\s+il\s+boost|prezzi\s+bassi|volumi\s+bassi|toni\s+bassi)\b',
-                        norm_cmd,
-                        re.IGNORECASE
-                    ))
-                    if idx > 2 or not has_command_intent or is_boost_chatter:
+                    is_boost_chatter = False
+                    if re.search(r'\b(?:boost(?:a|are|ato)?|bass[io])\b', norm_cmd, re.IGNORECASE):
+                        is_boost_chatter = bool(re.search(
+                            r'\b(?:chi\s+(?:ha|c\'ha|usa|fa|prende|vuole|boosta)|avete|hai|abbiamo|hanno|'
+                            r'del\s+server|al\s+server|per\s+il|serve\s+il|prezzi|volumi|toni)\b',
+                            norm_cmd,
+                            re.IGNORECASE
+                        ))
+                    if not has_command_intent or is_boost_chatter:
                         continue
                     score += 10.0
 
@@ -1056,7 +1119,7 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
                     await self.player.resume_interrupted_song()
                 return
 
-        command_part = self._clean_transcription(detected_cmd) if detected_cmd else None
+        command_part = self._clean_transcription(detected_cmd) if detected_cmd is not None else None
 
         if command_part is None:
             has_w, cmd, _ = self.extract_wake_and_command(text)
@@ -1079,29 +1142,18 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
 
         cmd_lower = command_part.lower().strip()
 
-        # 0. Controllo discorso in terza persona: se gli utenti stanno parlando *di* Franchino tra loro
-        # anziché rivolgersi a lui direttamente (es. "secondo me Franchino non funziona", "anche Franchino lagga")
-        is_direct_action = any(
-            cmd_lower.startswith(p)
-            for p in (
-                "metti", "suona", "play", "stop", "stoppa", "ferma", "pausa", "comandi",
-                "cosa", "come", "dove", "chi", "perch", "salva", "esci", "dimmi", "spiegami",
-                "boost", "/boost", "bassi", "favola", "partita", "bacio", "saluta", "brindisi", "script"
+        # 1. Se l'utente ha detto solo "Franchino" (per testare la presenza o prima del comando):
+        if not cmd_lower:
+            self._pending_wake[uid] = (now, "")
+            await self._notify_channel(
+                f"🎙️✨ **{user.display_name}** ha chiamato Franchino in console! *(Microfono aperto, chiedimi un brano o una domanda!)*"
             )
-        )
-        if not is_direct_action:
-            third_person_pat = re.compile(
-                r'\b(?:parlavo\s+di|dicevo\s+di|si\s+parla\s+di)\s+(?:franchino|frankino|francino)\b|'
-                r'\b(?:secondo\s+me|anche|pure|credo\s+che|penso\s+che|dicevo\s+che)?\s*'
-                r'(?:franchino|frankino|francino)\s+'
-                r'(?:è|ha|fa|non|sembra|era|dice|va|lagga|crasha|funziona|esiste)\b',
-                re.IGNORECASE
+            asyncio.create_task(
+                self.player.speak_tts("Magia! Dimmi tutto, sono qui in console!", wait=False, interrupt_music=True)
             )
-            if third_person_pat.search(lower_text) or third_person_pat.search(cmd_lower):
-                logger.info(f"🗣️ Rilevata conversazione in terza persona su Franchino da {user.display_name}: '{lower_text}' — Nessuna falsa attivazione.")
-                return
+            return
 
-        # 0-bis. Annullamento / Cancellazione / "Lascia stare"
+        # 2. Annullamento / Cancellazione / "Lascia stare"
         if cmd_lower in (
             "lascia stare", "lascia perdere", "niente", "non fa niente",
             "fa niente", "annulla", "come non detto", "lascia", "nessuna", "nulla"
@@ -1109,37 +1161,34 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
             await self._notify_channel(
                 f"🎙️ **Franchino**: Ricevuto **{user.display_name}**, nessun problema! Sono sempre qui in console quando vuoi. ✨"
             )
-            asyncio.create_task(self.player.speak_tts("Va bene, sono sempre qui se hai bisogno!", wait=False, interrupt_music=False))
+            asyncio.create_task(self.player.speak_tts("Va bene, sono sempre qui se hai bisogno!", wait=False, interrupt_music=True))
             return
 
-        # 0-ter. Ringraziamenti e saluti amichevoli
+        # 3. Ringraziamenti e saluti amichevoli
         if re.match(r'^(?:grazie(?:\s+mille|\s+franchino|\s+mille\s+franchino)?|grande\s+franchino|ti\s+ringrazio|bravo\s+franchino|ottimo\s+franchino)$', cmd_lower):
             await self._notify_channel(
                 f"🎙️✨ **Franchino**: Prego **{user.display_name}**! Sempre un piacere farvi divertire in console! 🚀"
             )
-            asyncio.create_task(self.player.speak_tts(f"Prego {user.display_name}! La magia della notte è sempre accesa!", wait=False, interrupt_music=False))
+            asyncio.create_task(self.player.speak_tts(f"Prego {user.display_name}! La magia della notte è sempre accesa!", wait=False, interrupt_music=True))
             return
 
-        # 0-quater. Feedback audio / qualità connessione
-        if re.search(r'\b(?:non\s+(?:ti|si)\s+sente|si\s+sente\s+male|lagghi|ti\s+sento\s+a\s+scatti|audio\s+a\s+scatti|non\s+ti\s+sentiamo|balbetti)\b', cmd_lower):
+        # 4. Feedback audio / microfono / qualità connessione
+        audio_feedback_pat = re.compile(
+            r'\b(?:non\s+(?:ti|si)\s+sente|si\s+sente\s+(?:male|basso|piano)|lagghi|'
+            r'ti\s+sento\s+(?:a\s+scatti|male|piano|basso)|non\s+ti\s+sento|non\s+ti\s+sentiamo|'
+            r'audio\s+a\s+scatti|non\s+va\s+(?:l[\x27\']audio|la\s+musica|niente)|'
+            r'non\s+sento\s+(?:niente|nulla|la\s+musica)|'
+            r'parla\s+più\s+forte|alza\s+la\s+voce|balbetti)\b',
+            re.IGNORECASE
+        )
+        if audio_feedback_pat.search(cmd_lower):
             await self._notify_channel(
                 f"🎙️ **Franchino**: Ricevuto **{user.display_name}**! Se l'audio balbetta o lagga, dì pure *\"Franchino riavviati\"* per resettare la console in un attimo! 🔄"
             )
-            asyncio.create_task(self.player.speak_tts("Se mi senti a scatti, dimmi pure Franchino riavviati!", wait=False, interrupt_music=False))
+            asyncio.create_task(self.player.speak_tts("Ti sento forte e chiaro! Se mi senti a scatti, dimmi pure Franchino riavviati!", wait=False, interrupt_music=True))
             return
 
-        # Se l'utente ha detto solo "Franchino" (per testare la presenza o prima del comando):
-        if not cmd_lower:
-            self._pending_wake[uid] = (now, "")
-            await self._notify_channel(
-                f"🎙️✨ **{user.display_name}** ha chiamato Franchino in console! *(Microfono aperto, chiedimi un brano o una domanda!)*"
-            )
-            asyncio.create_task(
-                self.player.speak_tts("Magia! Dimmi tutto, sono qui in console!", wait=False, interrupt_music=False)
-            )
-            return
-
-        # Comandi parziali che indicano "voglio ascoltare musica" ma non hanno ancora il titolo:
+        # 5. Comandi parziali che indicano "voglio ascoltare musica" ma non hanno ancora il titolo:
         _play_triggers = {
             "metti", "mette", "mettimi", "metti su", "mettimi su",
             "riproduci", "suona", "suonami",
@@ -1150,7 +1199,7 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
         }
         if cmd_lower in _play_triggers:
             self._pending_wake[uid] = (now, "metti")
-            asyncio.create_task(self.player.speak_tts("Dimmi il titolo!", wait=False, interrupt_music=False))
+            asyncio.create_task(self.player.speak_tts("Dimmi il titolo!", wait=False, interrupt_music=True))
             return
         if cmd_lower in ("metti in coda", "mette in coda", "mettimi in coda", "aggiungi in coda", "aggiungi", "accoda"):
             self._pending_wake[uid] = (now, "aggiungi")
@@ -1174,7 +1223,7 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
         requester_arg = user if isinstance(user, (discord.Member, discord.User)) else None
         logger.info(f"✨ Comando vocale rilevato da {user.display_name}: '{command_part}'")
 
-        # 0. Comando LIVENESS / PRESENZA VOCALE ("ci senti?", "ci sei?", "sei vivo?", "mi senti?", "rispondi", "batti un colpo")
+        # 6. Comando LIVENESS / PRESENZA VOCALE ("ci senti?", "ci sei?", "sei vivo?", "mi senti?", "rispondi", "batti un colpo")
         liveness_triggers = (
             "ci senti", "ci sentite", "mi senti", "mi sentite", "puoi sentirmi", "puoi sentirci",
             "ci sei", "ci siete", "ci sei o ci fai", "ci sei ancora", "sei li", "sei lì", "sei qui",
@@ -1226,6 +1275,37 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
                 )
             )
             return
+
+        # 7. Controllo discorso in terza persona: se gli utenti stanno parlando *di* Franchino tra loro
+        # anziché rivolgersi a lui direttamente (es. "secondo me Franchino non funziona", "anche Franchino lagga")
+        is_direct_action = any(
+            cmd_lower.startswith(p)
+            for p in (
+                "metti", "suona", "play", "stop", "stoppa", "ferma", "pausa", "comandi",
+                "cosa", "che", "chi", "come", "dove", "quando", "perch", "quanto", "quale", "quali",
+                "salva", "esci", "dimmi", "spiegami", "parlami", "racconta",
+                "boost", "/boost", "bassi", "favola", "partita", "partite", "sport", "bacio",
+                "saluta", "brindisi", "script", "razor", "wiki", "guida", "volume", "alza", "abbassa",
+                "riavviati", "riavvia", "reset", "sbloccati", "svegliati", "non", "rispondi", "funziona",
+                "funzioni", "batti", "fatti", "di", "dì", "prova",
+                "sposta", "porta", "caccia", "scollega", "muta", "smuta", "ruolo", "timeout", "libera",
+                "pulisci", "cancella", "crea", "chiudi", "apri", "espelli", "banna", "sbanna",
+                "bacia", "abbraccia", "carica", "auguri", "buonanotte", "cinque", "troll",
+                "manda", "invia", "scrivi", "canta", "ascolta", "fammi", "posso", "puoi", "radio", "preferiti"
+            )
+        ) or cmd_lower.endswith("?") or bool(re.search(r'\b(?:ti|te|tu|mi|ci|noi|vi)\b', cmd_lower))
+
+        if not is_direct_action:
+            third_person_pat = re.compile(
+                r'\b(?:parlavo\s+di|dicevo\s+di|si\s+parla\s+di)\s+(?:franchino|frankino|francino)\b|'
+                r'\b(?:secondo\s+me|anche|pure|credo\s+che|penso\s+che|dicevo\s+che|dicono\s+che|dice\s+che)\s+'
+                r'(?:franchino|frankino|francino)\s+'
+                r'(?:è|ha|fa|non|sembra|era|dice|va|lagga|crasha|funziona|esiste)\b',
+                re.IGNORECASE
+            )
+            if third_person_pat.search(lower_text) or third_person_pat.search(cmd_lower):
+                logger.info(f"🗣️ Rilevata conversazione in terza persona su Franchino da {user.display_name}: '{lower_text}' — Nessuna falsa attivazione.")
+                return
 
         # 0A. Comando RIAVVIATI / SBLOCCATI / RESET (solo comando diretto, non "come si sblocca un aspect"!)
         if cmd_lower in (
@@ -1800,7 +1880,7 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
 
         # 1B. Comando RIPRODUCI SUBITO ("metti...", "riproduci...", "suona...", "play...", "fammi sentire...")
         play_match = re.match(
-            r"^(?:metti|mette|mettimi|riproduci|riproduce|suona|suonami|play|fammi sentire|fammi ascoltare|avvia|cerca|cercami|fai partire)\s+(.+)$",
+            r"^(?:metti(?:\s+su)?|mette(?:\s+su)?|mettimi(?:\s+su)?|riproduci|riproduce|suona|suonami|play|fammi sentire|fammi ascoltare|avvia|cerca|cercami|fai partire)\s+(.+)$",
             command_part,
             re.IGNORECASE,
         )
@@ -1809,7 +1889,7 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
             if query:
                 # Normalizzazione: rimuove filler italiani che rovinano la ricerca YouTube
                 query = re.sub(
-                    r'^(?:la\s+(?:canzone|canzoni|musica|traccia|bella\s+canzone)|'
+                    r'^(?:su\s+|la\s+(?:canzone|canzoni|musica|traccia|bella\s+canzone)|'
                     r'il\s+(?:brano|pezzo)|un\s+(?:brano|pezzo|po\s+di|po\'\s+di)|'
                     r'una\s+(?:canzone|traccia|bella|bella\s+canzone)|'
                     r'qualcosa\s+di|'
@@ -2052,14 +2132,14 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
                 ]
                 v_msg = random.choice(vocalist_greetings)
                 await self._notify_channel(f"🎙️ **Franchino**: *\"{v_msg}\"*")
-                asyncio.create_task(self.player.speak_tts(v_msg, wait=False, interrupt_music=False))
+                asyncio.create_task(self.player.speak_tts(v_msg, wait=False, interrupt_music=True))
                 return
 
             # Feedback audio o microfono
             if re.match(r'^(?:non\s+ti\s+sento|ti\s+sento\s+piano|parla\s+più\s+forte|alza\s+la\s+voce|si\s+sente\s+basso)\b', cmd_strip):
                 v_fb = "Ti sento forte e chiaro! Regola il mio volume dal tuo Discord o dì 'Franchino volume a 100'!"
                 await self._notify_channel(f"🎙️ **Franchino**: *\"{v_fb}\"*")
-                asyncio.create_task(self.player.speak_tts(v_fb, wait=False, interrupt_music=False))
+                asyncio.create_task(self.player.speak_tts(v_fb, wait=False, interrupt_music=True))
                 return
 
             if is_question:
@@ -2094,13 +2174,21 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
 
                 # Fallback con AI / Brain per domande generali o quesiti sul bot/boost
                 from brain import brain
-                decision = await brain.process_user_speech(
-                    user_name=user.display_name,
-                    user_id=str(getattr(user, "id", 0)),
-                    text=command_part,
-                    current_song_title=self.player.current.title if self.player.current else None,
-                    channel_name=self.player.text_channel.name if self.player.text_channel else None,
-                )
+                try:
+                    decision = await asyncio.wait_for(
+                        brain.process_user_speech(
+                            user_name=user.display_name,
+                            user_id=str(getattr(user, "id", 0)),
+                            text=command_part,
+                            current_song_title=self.player.current.title if self.player.current else None,
+                            channel_name=self.player.text_channel.name if self.player.text_channel else None,
+                        ),
+                        timeout=5.0,
+                    )
+                except Exception as be:
+                    logger.debug(f"Brain timeout o errore fallback euristico: {be}")
+                    decision = brain._fallback_heuristic_intent(command_part, user.display_name)
+
                 if await self._dispatch_brain_decision(user, decision, command_part):
                     return
 
