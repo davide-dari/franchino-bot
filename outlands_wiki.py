@@ -288,6 +288,34 @@ OUTLANDS_BUILDS: Dict[str, dict] = {
 
 
 # ==============================================================================
+# DATABASE DEI MIGLIORI PET & ANIMAL TAMING DI UO OUTLANDS
+# ==============================================================================
+OUTLANDS_BEST_PETS: dict = {
+    "title": "I Migliori Pet per Farmare (Animal Taming Tier List)",
+    "wiki_page": "Taming Bestiary",
+    "wiki_url": "https://wiki.uooutlands.com/Taming_Bestiary",
+    "role": "I Pet più forti ed efficienti per farmare Dungeon, Boss e Mostri Paragon",
+    "top_pets": [
+        "🦖 **Frenzied Ostard (Pack da 5 - 1 slot cad.)**: Il miglior DPS iniziale e per farm veloce nei primi dungeon. Altissima velocità di corsa e colpi rapidissimi in sciame.",
+        "🐉 **Drake / Eldritch Drake (2-3 slot)**: Il pet all-round più solido per dungeon intermedi e avanzati. Respiro di fuoco (Fire Breath), tanti punti vita e resistenza elevata per tankare.",
+        "🔥 **Fire Steed / Nightmare (2 slot)**: Ottimo compromesso tra danno magico ad area, mobilità e velocità di ingaggio.",
+        "🦂 **Giant Scorpion / Corpse Worm (1-2 slot)**: Infliggono veleno letale continuo (Deadly/Lethal Poison) e debuff, devastanti per logorare boss con armatura alta.",
+        "🦅 **Phoenix / Colossal / Dragon (3 slot - End-game)**: I giganti del PvM, adatti a reggere i boss e i paragon più brutali di Outlands.",
+    ],
+    "key_tips": (
+        "• **Taming Bestiary**: Fai doppio click sul libro del Bestiario per sbloccare le abilità passive dei tuoi pet fino al Tier 10.\n"
+        "• **Command Aspect**: L'Aspetto obbligatorio per i Tamer, aumenta del 100%+ i danni e la sopravvivenza dei pet.\n"
+        "• **Macro All Kill**: Imposta su Razor una macro veloce per mandare tutti i pet sul bersaglio stando a distanza di sicurezza per curarli con bende (Veterinary) e Greater Heal."
+    ),
+    "voice_summary": (
+        "Per farmare su Outlands i migliori pet sono: 5 Frenzied Ostard per velocità e danni altissimi all'inizio; "
+        "Drake o Eldritch Drake per tankare mostri pesanti nei dungeon; oppure Scorpioni e Corpse Worm per il veleno letale sui boss. "
+        "Potenziali sempre con il Taming Bestiary e il Command Aspect! Ti ho mandato tutti i dettagli in messaggio privato!"
+    ),
+}
+
+
+# ==============================================================================
 # DATABASE DEGLI OGGETTI SPECIALI & MECCANICHE DI UO OUTLANDS
 # ==============================================================================
 OUTLANDS_SPECIAL_ITEMS: Dict[str, dict] = {
@@ -431,7 +459,7 @@ OUTLANDS_SPECIAL_ITEMS: Dict[str, dict] = {
 }
 
 
-def _http_get_json(url: str, timeout: float = 10.0) -> dict:
+def _http_get_json(url: str, timeout: float = 7.0) -> dict:
     req = urllib.request.Request(
         url,
         headers={"User-Agent": "Mozilla/5.0 (FranchinoBot/2.0; +https://wiki.uooutlands.com)"},
@@ -450,18 +478,16 @@ def ensure_wiki_catalog_sync() -> List[str]:
     if _INDEX_LOADED and _ALL_WIKI_TITLES:
         return _ALL_WIKI_TITLES
 
-    # 1. Prova a caricare la cache su disco se aggiornata nelle ultime 24 ore
+    # 1. Carica istantaneamente la cache su disco se disponibile
     try:
         if os.path.isfile(INDEX_CACHE_FILE):
-            mtime = os.path.getmtime(INDEX_CACHE_FILE)
             with open(INDEX_CACHE_FILE, "r", encoding="utf-8") as f:
                 cached = json.load(f)
             if isinstance(cached, list) and len(cached) > 500:
                 _ALL_WIKI_TITLES = cached
                 _LOWER_TO_TITLE = {t.lower(): t for t in _ALL_WIKI_TITLES}
                 _INDEX_LOADED = True
-                if time.time() - mtime < 86400:
-                    return _ALL_WIKI_TITLES
+                return _ALL_WIKI_TITLES
     except Exception as e:
         logger.debug(f"Errore lettura cache indice wiki: {e}")
 
@@ -542,7 +568,7 @@ def translate_text(text: str, source_lang: str = "en", target_lang: str = "it") 
             "q": clean_in,
         })
         req = urllib.request.Request(f"https://clients5.google.com/translate_a/t?{params}", headers=headers)
-        with urllib.request.urlopen(req, timeout=8.0) as resp:
+        with urllib.request.urlopen(req, timeout=4.0) as resp:
             data = json.loads(resp.read().decode("utf-8"))
             if isinstance(data, list) and data:
                 first = data[0]
@@ -563,7 +589,7 @@ def translate_text(text: str, source_lang: str = "en", target_lang: str = "it") 
             "q": clean_in,
         })
         req = urllib.request.Request(f"https://translate.googleapis.com/translate_a/single?{params}", headers=headers)
-        with urllib.request.urlopen(req, timeout=8.0) as resp:
+        with urllib.request.urlopen(req, timeout=4.0) as resp:
             data = json.loads(resp.read().decode("utf-8"))
             if data and isinstance(data, list) and data[0]:
                 out = "".join(seg[0] for seg in data[0] if seg and seg[0]).strip()
@@ -580,7 +606,7 @@ def translate_text(text: str, source_lang: str = "en", target_lang: str = "it") 
             "langpair": f"{source_lang}|{target_lang}",
         })
         req = urllib.request.Request(f"https://api.mymemory.translated.net/get?{params}", headers=headers)
-        with urllib.request.urlopen(req, timeout=8.0) as resp:
+        with urllib.request.urlopen(req, timeout=4.0) as resp:
             data = json.loads(resp.read().decode("utf-8"))
             out = data.get("responseData", {}).get("translatedText", "").strip()
             if out:
@@ -830,7 +856,22 @@ def _find_best_page_in_catalog(raw_topic: str, en_topic: str, full_question: str
             if f"{c_low}s" in _LOWER_TO_TITLE:
                 return _LOWER_TO_TITLE[f"{c_low}s"]
 
-    # 3. Ricerca tramite MediaWiki API (title + full-text)
+    # 3. Fuzzy match rapido in memoria sull'indice completo (istantaneo, <0.01s)
+    if _LOWER_TO_TITLE:
+        best_title = None
+        best_ratio = 0.0
+        for cand in candidates:
+            c_low = cand.lower().strip()
+            matches = difflib.get_close_matches(c_low, list(_LOWER_TO_TITLE.keys()), n=1, cutoff=0.72)
+            if matches:
+                ratio = difflib.SequenceMatcher(None, c_low, matches[0]).ratio()
+                if ratio > best_ratio:
+                    best_ratio = ratio
+                    best_title = _LOWER_TO_TITLE[matches[0]]
+        if best_title:
+            return best_title
+
+    # 4. Ricerca online tramite MediaWiki API (title + full-text) solo se non trovato in locale
     for query_str in candidates:
         for srwhat in ("text", "title"):
             try:
@@ -842,7 +883,7 @@ def _find_best_page_in_catalog(raw_topic: str, en_topic: str, full_question: str
                     "srlimit": 8,
                     "format": "json",
                 })
-                data = _http_get_json(f"{WIKI_API_URL}?{params}")
+                data = _http_get_json(f"{WIKI_API_URL}?{params}", timeout=5.0)
                 hits = data.get("query", {}).get("search", [])
                 if hits:
                     q_clean = query_str.lower().strip()
@@ -853,21 +894,6 @@ def _find_best_page_in_catalog(raw_topic: str, en_topic: str, full_question: str
                     return starts or hits[0]["title"]
             except Exception as e:
                 logger.debug(f"Errore API search '{query_str}': {e}")
-
-    # 4. Fuzzy match fonetico/ortografico sull'intero catalogo di 2.139 pagine (es. pronuncia italiana di nomi inglesi!)
-    if catalog:
-        best_title = None
-        best_ratio = 0.0
-        for cand in candidates:
-            c_low = cand.lower().strip()
-            matches = difflib.get_close_matches(c_low, list(_LOWER_TO_TITLE.keys()), n=1, cutoff=0.68)
-            if matches:
-                ratio = difflib.SequenceMatcher(None, c_low, matches[0]).ratio()
-                if ratio > best_ratio:
-                    best_ratio = ratio
-                    best_title = _LOWER_TO_TITLE[matches[0]]
-        if best_title:
-            return best_title
 
     # 5. Ultimo fallback: ricerca full-text sulla domanda intera tradotta in inglese
     en_full = translate_text(full_question, "it", "en")
@@ -1034,6 +1060,36 @@ def _search_outlands_wiki_sync(question: str) -> Optional[dict]:
     }
 
 
+def _resolve_pets_query(question: str) -> Optional[dict]:
+    """Riconosce e risponde istantaneamente alle domande sui migliori pet per farmare su UO Outlands."""
+    q_low = question.lower().strip()
+    has_pet_word = any(k in q_low for k in ("pet", "bestie", "animali", "creature", "tamer", "taming"))
+    has_farm_or_best = any(k in q_low for k in ("miglior", "migliori", "farmare", "farm", "forte", "forti", "top", "consigli", "consiglia", "usare", "scegliere", "quali", "quale", "tier", "livello"))
+    if has_pet_word and has_farm_or_best:
+        b = OUTLANDS_BEST_PETS
+        embed = discord.Embed(
+            title=f"🐾 {b['title']}",
+            url=b["wiki_url"],
+            description=f"**Ruolo**: {b['role']}\n\n**🏆 I Migliori Pet Consigliati:**\n" + "\n\n".join(b["top_pets"]),
+            color=COLOR_FRANCHINO,
+        )
+        embed.add_field(name="💡 Consigli Fondamentali per il Farm", value=b["key_tips"], inline=False)
+        embed.add_field(
+            name="🔗 Approfondisci sul Taming Bestiary",
+            value=f"[Apri la guida `{b['wiki_page']}` su wiki.uooutlands.com]({b['wiki_url']})",
+            inline=False,
+        )
+        embed.set_footer(text="Franchino UO Outlands Pet Advisor • wiki.uooutlands.com")
+        return {
+            "page_title": b["title"],
+            "section_title": "Top Farming Pets & Bestiary Guide",
+            "section_url": b["wiki_url"],
+            "voice_answer": b["voice_summary"],
+            "embed": embed,
+        }
+    return None
+
+
 def _resolve_build_query(question: str) -> Optional[dict]:
     """Riconosce e risponde istantaneamente alle domande sulle build e template meta di UO Outlands."""
     q_low = question.lower().strip()
@@ -1136,22 +1192,32 @@ def _resolve_special_item_query(question: str) -> Optional[dict]:
 async def query_outlands_wiki(question: str) -> Optional[dict]:
     """
     Interroga la Wiki di UO Outlands:
-    1. Risponde all'istante alle domande sulle Build e Template da 700 punti.
-    2. Risponde all'istante alle domande su come usare gli oggetti speciali (Mastery Chain, Aspect, Codex, ecc.).
-    3. Cerca dinamicamente tra le 2.140 pagine di wiki.uooutlands.com traducendo la sezione di riferimento.
+    1. Risponde all'istante alle domande sui Migliori Pet da farmare e Animal Taming.
+    2. Risponde all'istante alle domande sulle Build e Template da 700 punti.
+    3. Risponde all'istante alle domande su come usare gli oggetti speciali (Mastery Chain, Aspect, Codex, ecc.).
+    4. Cerca dinamicamente tra le 2.140 pagine di wiki.uooutlands.com traducendo la sezione di riferimento.
     """
-    # 1. Controllo Build / Template
+    # 1. Controllo Pet & Animal Taming
+    pets_info = _resolve_pets_query(question)
+    if pets_info:
+        return pets_info
+
+    # 2. Controllo Build / Template
     build_info = _resolve_build_query(question)
     if build_info:
         return build_info
 
-    # 2. Controllo Oggetti Speciali & Meccaniche
+    # 3. Controllo Oggetti Speciali & Meccaniche
     item_info = _resolve_special_item_query(question)
     if item_info:
         return item_info
 
-    # 3. Ricerca Dinamica MediaWiki API su tutto il sito wiki.uooutlands.com
-    info = await asyncio.to_thread(_search_outlands_wiki_sync, question)
+    # 4. Ricerca Dinamica MediaWiki API su tutto il sito wiki.uooutlands.com
+    try:
+        info = await asyncio.wait_for(asyncio.to_thread(_search_outlands_wiki_sync, question), timeout=14.0)
+    except Exception as e:
+        logger.warning(f"Errore o timeout ricerca wiki outlands sync: {e}")
+        return None
     if not info:
         return None
 
@@ -1215,12 +1281,13 @@ def is_wiki_question(command_part: str) -> Tuple[bool, str]:
     if cmd_low.startswith(non_wiki_starts):
         return False, ""
 
-    # Pattern dedicati a Build, Template, Oggetti e Meccaniche
+    # Pattern dedicati a Build, Template, Oggetti, Pet e Meccaniche
     if any(k in cmd_low for k in (
         "build", "template", "classe", "come buildare", "miglior build", "consigliami una build",
         "come si usa", "come usare", "a cosa serve", "a che serve", "cosa fa", "come funziona",
         "come craftare", "come si crafta", "dove farmare", "come fare soldi", "come fare gold",
         "tamer", "bardo", "dexxer", "ladro", "necro", "aspect", "mastery chain", "codex", "mushrooms",
+        "pet", "bestie", "animali", "taming", "tier list",
     )):
         return True, cmd
 

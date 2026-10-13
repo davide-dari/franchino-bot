@@ -382,7 +382,7 @@ class GuildPlayer:
                     pitch=pitch_val,
                     rate=rate_val,
                 )
-                await communicate.save(tts_file)
+                await asyncio.wait_for(communicate.save(tts_file), timeout=12.0)
                 generated_ok = os.path.isfile(tts_file) and os.path.getsize(tts_file) > 100
                 if generated_ok:
                     logger.info(f"🔊 Audio generato con successo tramite edge-tts per: '{text[:45]}'")
@@ -401,7 +401,11 @@ class GuildPlayer:
                     logger.error(f"❌ Errore generazione anche con gTTS: {ge}")
                     return False
 
-            generated_ok = await asyncio.to_thread(_generate_gtts, text)
+            try:
+                generated_ok = await asyncio.wait_for(asyncio.to_thread(_generate_gtts, text), timeout=10.0)
+            except Exception as ge:
+                logger.warning(f"⚠️ Timeout o errore fallback gTTS: {ge}")
+                generated_ok = False
             used_gtts_fallback = True
 
         if not generated_ok or not os.path.isfile(tts_file):
@@ -459,8 +463,19 @@ class GuildPlayer:
             transformed = discord.PCMVolumeTransformer(source, volume=min(1.0, self.volume + 0.35))
             logger.info(f"🗣️ Avvio riproduzione audio TTS nella stanza vocale: '{text[:50]}'")
             self.voice_client.play(transformed, after=_after_tts)
-            if wait or (self._interrupted_song and not keep_paused_after):
+            if wait:
                 await asyncio.wait_for(done_ev.wait(), timeout=55.0)
+                if self._interrupted_song and not keep_paused_after and not self._manual_stop:
+                    await self.resume_interrupted_song()
+            elif self._interrupted_song and not keep_paused_after:
+                async def _resume_later():
+                    try:
+                        await asyncio.wait_for(done_ev.wait(), timeout=60.0)
+                        if self._interrupted_song and not keep_paused_after and not self._manual_stop:
+                            await self.resume_interrupted_song()
+                    except Exception as ex:
+                        logger.debug(f"Errore ripresa musica post-TTS in background: {ex}")
+                asyncio.create_task(_resume_later())
         except asyncio.CancelledError:
             self._playing_tts = False
             raise
@@ -468,11 +483,8 @@ class GuildPlayer:
             self._playing_tts = False
             logger.error(f"❌ Errore durante la riproduzione audio TTS: {e}", exc_info=True)
         finally:
-            self._playing_tts = False
-
-
-        if self._interrupted_song and not keep_paused_after and not self._manual_stop:
-            await self.resume_interrupted_song()
+            if wait:
+                self._playing_tts = False
 
     async def resume_interrupted_song(self):
         """Riprende il brano musicale esattamente dal secondo in cui Franchino lo aveva sospeso per parlare."""

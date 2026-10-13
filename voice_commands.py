@@ -1142,23 +1142,25 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
         from outlands_wiki import is_wiki_question, query_outlands_wiki
         is_wiki, wiki_q = is_wiki_question(command_part)
         if is_wiki:
+            logger.info(f"📖 Domanda Wiki Outlands riconosciuta da {user.display_name}: '{wiki_q}'")
+            self.player._manual_stop = False
             try:
                 await self._notify_channel(
                     f"📖 **{user.display_name}** ha chiesto su **UO Outlands**: *\"{wiki_q}\"* — Cerco sulla Wiki e traduco in italiano..."
                 )
-                wiki_res = await query_outlands_wiki(wiki_q)
-                if self.player._manual_stop:
-                    return
+                wiki_res = await asyncio.wait_for(query_outlands_wiki(wiki_q), timeout=18.0)
 
                 if not wiki_res:
                     await self._notify_channel(
                         f"⚠️ Non ho trovato risultati su `wiki.uooutlands.com` per **\"{wiki_q}\"**."
                     )
-                    await self.player.speak_tts(
-                        "Mi dispiace, non ho trovato questa informazione sulla Wiki di Outlands!",
-                        wait=True,
-                        interrupt_music=True,
-                        keep_paused_after=False,
+                    asyncio.create_task(
+                        self.player.speak_tts(
+                            "Mi dispiace, non ho trovato questa informazione sulla Wiki di Outlands!",
+                            wait=False,
+                            interrupt_music=True,
+                            keep_paused_after=False,
+                        )
                     )
                     return
 
@@ -1167,34 +1169,30 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
                 sec_url = wiki_res["section_url"]
                 voice_answer = wiki_res["voice_answer"]
                 wiki_embed = wiki_res["embed"]
+                logger.info(f"✅ Wiki Outlands: trovata risposta '{title} → {sec_title}'")
 
-                # Invia il link diretto alla sezione di riferimento + la guida tradotta in MESSAGGIO PRIVATO (DM) a chi ha fatto la domanda!
-                sent_dm = False
-                if hasattr(user, "send"):
-                    try:
-                        await user.send(
-                            content=(
-                                f"📖 Ciao **{user.display_name}**! Ecco il link diretto alla sezione di riferimento per la tua domanda "
-                                f"(*\"{wiki_q}\"*):\n🔗 **{title} → {sec_title}**: {sec_url}"
-                            ),
-                            embed=wiki_embed,
-                        )
-                        sent_dm = True
-                    except Exception as e:
-                        logger.warning(f"Impossibile inviare DM Wiki a {user.display_name}: {e}")
+                # Invia subito l'embed nel canale del server per tutta la stanza
+                await self._notify_channel(
+                    f"📖 **{user.display_name}**, ecco la guida da [**wiki.uooutlands.com** ({title} → {sec_title})]({sec_url}) tradotta in italiano:",
+                    embed=wiki_embed,
+                )
 
-                if sent_dm:
-                    await self._notify_channel(
-                        f"📖 **{user.display_name}**, ti ho risposto a voce e ti ho mandato in **messaggio privato** il link diretto alla sezione "
-                        f"[**{title} → {sec_title}**]({sec_url})!",
-                        embed=wiki_embed,
-                    )
-                else:
-                    await self._notify_channel(
-                        f"📖 **{user.display_name}**, ecco la sezione di riferimento [**{title} → {sec_title}**]({sec_url}) tradotta da **wiki.uooutlands.com**:",
-                        embed=wiki_embed,
-                    )
+                # Invia anche in privato (DM) in background senza attendere
+                async def _send_dm_bg():
+                    if hasattr(user, "send"):
+                        try:
+                            await user.send(
+                                content=(
+                                    f"📖 Ciao **{user.display_name}**! Ecco il link diretto alla sezione di riferimento per la tua domanda "
+                                    f"(*\"{wiki_q}\"*):\n🔗 **{title} → {sec_title}**: {sec_url}"
+                                ),
+                                embed=wiki_embed,
+                            )
+                        except Exception as e:
+                            logger.warning(f"Impossibile inviare DM Wiki a {user.display_name}: {e}")
+                asyncio.create_task(_send_dm_bg())
 
+                # Archivia l'interazione nell'Hub centrale
                 from central_hub import hub
                 asyncio.create_task(
                     hub.archive_interaction(
@@ -1209,15 +1207,32 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
                     )
                 )
 
-                if not self.player._manual_stop:
-                    await self.player.speak_tts(
+                # Parla nel canale vocale con la voce di Franchino (asincrono!)
+                asyncio.create_task(
+                    self.player.speak_tts(
                         voice_answer,
-                        wait=True,
+                        wait=False,
                         interrupt_music=True,
                         keep_paused_after=False,
                     )
+                )
+            except asyncio.TimeoutError:
+                logger.warning(f"⏰ Timeout ricerca Wiki Outlands per '{wiki_q}'")
+                await self._notify_channel(
+                    f"⚠️ La ricerca su `wiki.uooutlands.com` per **\"{wiki_q}\"** ha impiegato troppo tempo. Riprova tra poco!"
+                )
+                asyncio.create_task(
+                    self.player.speak_tts(
+                        "Ci ho messo troppo tempo a consultare la Wiki di Outlands, riprova tra poco!",
+                        wait=False,
+                        interrupt_music=True,
+                    )
+                )
             except Exception as e:
                 logger.error(f"Errore gestione domanda Wiki Outlands '{wiki_q}': {e}", exc_info=True)
+                await self._notify_channel(
+                    f"⚠️ Si è verificato un errore durante la ricerca sulla Wiki di Outlands: {e}"
+                )
             return
 
         # 0D. Comando SALVA NEI PREFERITI ("salva", "salva questa canzone", "aggiungi ai preferiti")

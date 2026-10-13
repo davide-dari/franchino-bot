@@ -782,7 +782,15 @@ async def _handle_outlands_query(ctx: commands.Context, domanda: str):
     await ctx.defer()
     from outlands_wiki import query_outlands_wiki
     from central_hub import hub
-    res = await query_outlands_wiki(domanda)
+    try:
+        res = await asyncio.wait_for(query_outlands_wiki(domanda), timeout=18.0)
+    except asyncio.TimeoutError:
+        await ctx.send(f"⚠️ La ricerca su `wiki.uooutlands.com` per **\"{domanda}\"** ha impiegato troppo tempo. Riprova tra poco!")
+        return
+    except Exception as e:
+        await ctx.send(f"⚠️ Errore durante la ricerca su Outlands Wiki: {e}")
+        return
+
     if not res:
         await ctx.send(f"⚠️ Non ho trovato nulla su `wiki.uooutlands.com` per: **{domanda}**")
         return
@@ -827,11 +835,13 @@ async def _handle_outlands_query(ctx: commands.Context, domanda: str):
     )
     player = player_manager.get_player(ctx.guild)
     if player.voice_client and player.voice_client.is_connected():
-        await player.speak_tts(
-            voice_answer,
-            wait=True,
-            interrupt_music=True,
-            keep_paused_after=False,
+        asyncio.create_task(
+            player.speak_tts(
+                voice_answer,
+                wait=False,
+                interrupt_music=True,
+                keep_paused_after=False,
+            )
         )
 
 
