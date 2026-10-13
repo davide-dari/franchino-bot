@@ -1224,15 +1224,6 @@ async def saluta_cmd(ctx: commands.Context, *, utente: Optional[str] = None):
 
 
 @bot.hybrid_command(
-    name="bacio",
-    aliases=["baciami", "smack"],
-    description="Chiedi a Franchino di mandare un bacio a qualcuno o a tutta la stanza"
-)
-async def bacio_cmd(ctx: commands.Context, *, utente: Optional[str] = None):
-    await _handle_text_interaction(ctx, "bacio", utente)
-
-
-@bot.hybrid_command(
     name="brindisi",
     aliases=["brinda", "cincin"],
     description="Fai un brindisi speciale con Franchino per un amico o per tutta la console"

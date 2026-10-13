@@ -275,7 +275,7 @@ class TestJackIntelligenceFormula(unittest.TestCase):
             ("Franchino ci senti?", "liveness_check"),
             ("Franchino come stai fratello?", "chat"),
             ("Franchino sposta Marco in Stanza Relax", "admin_control"),
-            ("Franchino manda un bacio a Giulia", "social_interaction"),
+            ("Franchino fai un brindisi per Giulia", "social_interaction"),
         ]
         for query, expected_intent in test_cases:
             res = jack_engine.classify(query)

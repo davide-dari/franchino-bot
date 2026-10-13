@@ -1,6 +1,5 @@
 """
 Interazioni vocali e testuali di Franchino con gli utenti del canale Discord:
-- Manda un bacio (💋)
 - Fai un saluto speciale (🎙️)
 - Fai un brindisi / Cin cin (🥂)
 - Manda un abbraccio (🫂)
@@ -29,29 +28,6 @@ logger = logging.getLogger("Franchino.Interactions")
 
 
 INTERACTION_CONFIG: Dict[str, dict] = {
-    "bacio": {
-        "title": "Un Bacio Magico dalla Console!",
-        "emoji": "💋",
-        "color": 0xFF69B4,
-        "sfx": "applause",
-        "action_label": "ha mandato un bacio a",
-        "self_quotes": [
-            "Un bacio magico da tutta la console per te, grande {target}! Sentilo nell'aria della notte... Smack! Sei pura magia! 💋✨",
-            "Smack! Un bacio stellare dritto al tuo cuore, {target}! Continua a volare alto e a brillare con noi! 💋🎧",
-            "Per il nostro mitico {target}: un bacio caldo come la notte dell'Insomnia! Ti vogliamo un bene dell'anima! 💋❤️",
-        ],
-        "all_quotes": [
-            "Un bacio immenso da Franchino per tutti quanti in console! Sentite l'energia della notte... Smack! Vi voglio bene ragazzi, siete fantastici! 💋✨",
-            "Smack a tutta la sala! Un bacio collettivo che vola sopra le casse e abbraccia tutti i presenti! Continuate a ballare con il cuore! 💋🎉",
-            "Ragazzi, un bacio magico per ognuno di voi! Senza di voi la notte non avrebbe questa magia! Smack! 💋🎧",
-        ],
-        "quotes": [
-            "{user} manda un bacio magico a {target}! Sentilo volare sopra le casse... Smack! C'è pura magia nell'aria stasera! 💋✨",
-            "Smack! Un bacio stellare da parte di {user} per il nostro mitico {target}! Apri il cuore e lasciati cullare dal ritmo della notte! 💋🎧",
-            "Per il meraviglioso {target}, un bacio caldo e speciale dedicato da {user}! Continua a splendere, sei unico! 💋❤️",
-            "Chiudi gli occhi {target}... Smack! Questo bacio da parte di {user} arriva con tutta l'energia dell'Insomnia! Sei speciale! 💋✨",
-        ],
-    },
     "saluto": {
         "title": "Saluto Speciale dalla Console!",
         "emoji": "🎙️",
@@ -245,12 +221,7 @@ INTERACTION_CONFIG: Dict[str, dict] = {
 
 
 INTERACTION_PATTERNS: List[Tuple[str, str]] = [
-    # 1. Bacio
-    (
-        "bacio",
-        r"^(?:manda(?:mi)?\s+(?:un\s+)?bacio|dai(?:mi)?\s+(?:un\s+)?bacio|fai\s+(?:un\s+)?bacio|(?:un\s+)?bacio|baciami|bacia|smack|limone)\b(?:\s+(?:a|ad|per|con))?\s*(.*)$"
-    ),
-    # 2. Saluto
+    # 1. Saluto
     (
         "saluto",
         r"^(?:fai\s+(?:un\s+)?saluto|(?:un\s+)?saluto|manda(?:mi)?\s+(?:un\s+)?saluto|saluta(?:mi)?)\b(?:\s+(?:a|ad|per))?\s*(.*)$"
@@ -332,7 +303,7 @@ def resolve_target_info(
     """
     clean_target = raw_target.lower().strip(" ,.!?:;-") if raw_target else ""
 
-    # Caso 1: se stesso (es. "mandami un bacio", "salutami", "abbracciami")
+    # Caso 1: se stesso (es. "fai un brindisi per me", "salutami", "abbracciami")
     if not clean_target or clean_target in ("me", "a me", "me stesso", "me stessa", "io", "mio"):
         return requester.display_name, requester, True, False
 
@@ -507,7 +478,7 @@ async def execute_interaction(
 async def handle_voice_interaction(player, user: discord.Member, command_part: str, notify_channel_func) -> bool:
     """
     Riconosce e gestisce le interazioni vocali con gli utenti del canale Discord:
-    es. "Franchino manda un bacio a Marco", "Franchino fai un brindisi per Giulia", "Franchino saluta tutti"
+    es. "Franchino fai un brindisi per Giulia", "Franchino saluta tutti", "Franchino dai la carica a Marco"
     """
     itype, raw_target = parse_interaction_command(command_part)
     if not itype:

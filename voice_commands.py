@@ -970,7 +970,7 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
                             "boost", "/boost", "bassboost", "bassi", "effetto", "suono",
                             "stop", "salta", "skip", "pausa", "riprendi", "volume", "riavviati", "reset",
                             "non ti sento", "si sente male", "ti sento a scatti", "parla più forte", "alza la voce",
-                            "bacio", "bacia", "saluta", "brindisi", "abbraccia", "carica", "auguri", "buonanotte", "cinque", "troll",
+                            "saluta", "brindisi", "abbraccia", "carica", "auguri", "buonanotte", "cinque", "troll",
                             "sposta", "caccia", "muta", "smuta", "ruolo", "soprannome", "timeout", "libera", "pulisci", "cancella",
                             "vorrei", "puoi", "canta", "fammi", "radio", "preferiti", "salva"
                         ))
@@ -1284,13 +1284,13 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
                 "metti", "suona", "play", "stop", "stoppa", "ferma", "pausa", "comandi",
                 "cosa", "che", "chi", "come", "dove", "quando", "perch", "quanto", "quale", "quali",
                 "salva", "esci", "dimmi", "spiegami", "parlami", "racconta",
-                "boost", "/boost", "bassi", "favola", "partita", "partite", "sport", "bacio",
+                "boost", "/boost", "bassi", "favola", "partita", "partite", "sport",
                 "saluta", "brindisi", "script", "razor", "wiki", "guida", "volume", "alza", "abbassa",
                 "riavviati", "riavvia", "reset", "sbloccati", "svegliati", "non", "rispondi", "funziona",
                 "funzioni", "batti", "fatti", "di", "dì", "prova",
                 "sposta", "porta", "caccia", "scollega", "muta", "smuta", "ruolo", "timeout", "libera",
                 "pulisci", "cancella", "crea", "chiudi", "apri", "espelli", "banna", "sbanna",
-                "bacia", "abbraccia", "carica", "auguri", "buonanotte", "cinque", "troll",
+                "abbraccia", "carica", "auguri", "buonanotte", "cinque", "troll",
                 "manda", "invia", "scrivi", "canta", "ascolta", "fammi", "posso", "puoi", "radio", "preferiti",
                 "ora", "orario", "meteo", "tempo", "timer", "promemoria", "sveglia", "calcola", "lancia", "tira", "testa", "barzelletta", "battuta"
             )
@@ -1502,8 +1502,8 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
             return
 
         # 0B-septies. INTERAZIONI SOCIALI CON GLI UTENTI DEL CANALE
-        # (Bacio, Saluto, Brindisi, Abbraccio, Carica, Cinque, Auguri, Buonanotte, Benvenuto, Troll, Amore)
-        # Esempi: "Franchino manda un bacio a Giulia", "Franchino fai un brindisi per Luca", "Franchino saluta tutti"
+        # (Saluto, Brindisi, Abbraccio, Carica, Cinque, Auguri, Buonanotte, Benvenuto, Troll, Amore)
+        # Esempi: "Franchino fai un brindisi per Giulia", "Franchino dai la carica a Luca", "Franchino saluta tutti"
         from interactions import handle_voice_interaction
         if await handle_voice_interaction(self.player, user, command_part, self._notify_channel):
             return

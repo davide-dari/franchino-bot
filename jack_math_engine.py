@@ -101,7 +101,7 @@ DOMAIN_CORPUS: Dict[str, List[str]] = {
         "crea stanza", "chiudi stanza", "stanza", "moderazione", "admin"
     ],
     "social_interaction": [
-        "bacio", "bacia", "manda un bacio", "abbraccio", "abbraccia", "brindisi",
+        "abbraccio", "abbraccia", "brindisi",
         "cin cin", "auguri", "buonanotte", "cinque", "batti cinque", "saluta",
         "ti voglio bene", "troll", "amore", "amico", "salutami"
     ],
@@ -168,7 +168,7 @@ ACTION_SYNTAX_PATTERNS = {
         re.IGNORECASE,
     ),
     "social_interaction": re.compile(
-        r"^(?:manda\s+un\s+bacio|bacia|fai\s+un\s+brindisi|brindisi|abbraccia|abbraccio|batti\s+cinque|saluta)\b",
+        r"^(?:fai\s+un\s+brindisi|brindisi|abbraccia|abbraccio|batti\s+cinque|saluta)\b",
         re.IGNORECASE,
     ),
     "live_fable": re.compile(

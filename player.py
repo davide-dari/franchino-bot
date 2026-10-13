@@ -229,7 +229,6 @@ def build_commands_embed() -> discord.Embed:
         name="💖 Interazioni Sociali con gli Utenti (Vocali & Slash)",
         value=(
             "Dì a Franchino di interagire con chi è nella stanza vocale con te o con tutta la chat:\n"
-            "• **\"Franchino manda un bacio a `<nome>`\"** / **\"baciami\"** — 💋 Smack con affetto e applausi!\n"
             "• **\"Franchino saluta `<nome>`\"** / **\"saluta tutti\"** — 🎙️ Saluto da vocalist con trombetta DJ\n"
             "• **\"Franchino fai un brindisi per `<nome>`\"** / **\"brindiamo a tutti\"** — 🥂 Cin cin ed energia Insomnia!\n"
             "• **\"Franchino abbraccia `<nome>`\"** — 🫂 Caloroso abbraccio dalla console\n"
@@ -238,7 +237,7 @@ def build_commands_embed() -> discord.Embed:
             "• **\"Franchino dai la buonanotte a `<nome>`\"** — 🌙 Sogni d'oro e atmosfera notturna\n"
             "• **\"Franchino batti il cinque a `<nome>`\"** — ✋ High five al volo dalla console!\n"
             "• **\"Franchino prendi in giro `<nome>`\"** — 😜 Sfottò amichevole con trombone fail!\n"
-            "*(Disponibili anche via Slash:* `/bacio`, `/saluta`, `/brindisi`, `/abbraccio`, `/carica`, `/auguri`, `/buonanotte`, `/cinque`, `/troll`*)*"
+            "*(Disponibili anche via Slash:* `/saluta`, `/brindisi`, `/abbraccio`, `/carica`, `/auguri`, `/buonanotte`, `/cinque`, `/troll`*)*"
         ),
         inline=False
     )
@@ -262,7 +261,7 @@ def build_commands_embed() -> discord.Embed:
         value=(
             f"`/ora` • `/meteo [citta]` • `/timer <tempo> [motivo]` • `/calcola <operazione>` • `/lancia [dado|moneta]` • `/barzelletta`\n"
             f"`/cisei` (`/ping`, `/cisenti`, `/seivivo`) • `/play <brano>` • `/pause` • `/resume` • `/skip` • `/stop` • `/queue` • `/volume <1-100>`\n"
-            f"`/saluta` • `/bacio` • `/brindisi` • `/abbraccio` • `/carica` • `/auguri` • `/buonanotte` • `/cinque` • `/troll`\n"
+            f"`/saluta` • `/brindisi` • `/abbraccio` • `/carica` • `/auguri` • `/buonanotte` • `/cinque` • `/troll`\n"
             f"`/partita <squadra>` • `/wiki <domanda>` (`/outlands`) • `/effetto <filtro>` • `/suono <effetto>` • `/radio` • `/salva` • `/preferiti` • `/riavvia` • `/comandi`\n"
             f"**Admin:** `/sposta` • `/spostatutti` • `/scollega` • `/muta` • `/smuta` • `/ruolo` • `/soprannome` • `/timeout` • `/pulisci` • `/kick` • `/ban`"
         ),
