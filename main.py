@@ -940,6 +940,109 @@ async def partita_cmd(ctx: commands.Context, *, squadra_o_evento: str):
 
 
 # ==========================================
+# INTERAZIONI SOCIALI CON GLI UTENTI DISCORD
+# ==========================================
+async def _handle_text_interaction(ctx: commands.Context, itype: str, utente: Optional[str] = None):
+    await ctx.defer()
+    from interactions import execute_interaction
+    player = player_manager.get_player(ctx.guild)
+    target_str = utente or ""
+
+    async def _notify(message=None, embed=None, view=None):
+        kwargs = {}
+        if message:
+            kwargs["content"] = message
+        if embed:
+            kwargs["embed"] = embed
+        if view:
+            kwargs["view"] = view
+        await ctx.send(**kwargs)
+
+    await execute_interaction(player, ctx.author, itype, target_str, _notify)
+
+
+@bot.hybrid_command(
+    name="saluta",
+    aliases=["saluto"],
+    description="Chiedi a Franchino di salutare qualcuno nel canale o tutti i presenti"
+)
+async def saluta_cmd(ctx: commands.Context, *, utente: Optional[str] = None):
+    await _handle_text_interaction(ctx, "saluto", utente)
+
+
+@bot.hybrid_command(
+    name="bacio",
+    aliases=["baciami", "smack"],
+    description="Chiedi a Franchino di mandare un bacio a qualcuno o a tutta la stanza"
+)
+async def bacio_cmd(ctx: commands.Context, *, utente: Optional[str] = None):
+    await _handle_text_interaction(ctx, "bacio", utente)
+
+
+@bot.hybrid_command(
+    name="brindisi",
+    aliases=["brinda", "cincin"],
+    description="Fai un brindisi speciale con Franchino per un amico o per tutta la console"
+)
+async def brindisi_cmd(ctx: commands.Context, *, utente: Optional[str] = None):
+    await _handle_text_interaction(ctx, "brindisi", utente)
+
+
+@bot.hybrid_command(
+    name="abbraccio",
+    aliases=["abbraccia"],
+    description="Manda un caloroso abbraccio dalla console a un amico o a tutti"
+)
+async def abbraccio_cmd(ctx: commands.Context, *, utente: Optional[str] = None):
+    await _handle_text_interaction(ctx, "abbraccio", utente)
+
+
+@bot.hybrid_command(
+    name="carica",
+    aliases=["hype", "motiva"],
+    description="Chiedi a Franchino di caricare al massimo qualcuno o la stanza intera"
+)
+async def carica_cmd(ctx: commands.Context, *, utente: Optional[str] = None):
+    await _handle_text_interaction(ctx, "carica", utente)
+
+
+@bot.hybrid_command(
+    name="auguri",
+    aliases=["compleanno", "buoncompleanno"],
+    description="Fai fare gli auguri di buon compleanno a Franchino con fanfara DJ"
+)
+async def auguri_cmd(ctx: commands.Context, *, utente: Optional[str] = None):
+    await _handle_text_interaction(ctx, "auguri", utente)
+
+
+@bot.hybrid_command(
+    name="buonanotte",
+    aliases=["sognidoro"],
+    description="Fai dare la buonanotte e i sogni d'oro da Franchino"
+)
+async def buonanotte_cmd(ctx: commands.Context, *, utente: Optional[str] = None):
+    await _handle_text_interaction(ctx, "buonanotte", utente)
+
+
+@bot.hybrid_command(
+    name="cinque",
+    aliases=["highfive", "battiilcinque"],
+    description="Batti il cinque con Franchino o fallo battere a un amico"
+)
+async def cinque_cmd(ctx: commands.Context, *, utente: Optional[str] = None):
+    await _handle_text_interaction(ctx, "cinque", utente)
+
+
+@bot.hybrid_command(
+    name="troll",
+    aliases=["sfotti", "scherza"],
+    description="Chiedi a Franchino di prendere in giro bonariamente qualcuno"
+)
+async def troll_cmd(ctx: commands.Context, *, utente: Optional[str] = None):
+    await _handle_text_interaction(ctx, "troll", utente)
+
+
+# ==========================================
 # COMANDI DA ADMIN & MODERATORE DISCORD
 # ==========================================
 @bot.hybrid_command(name="sposta", description="[Admin] Sposta un utente in un altro canale vocale")

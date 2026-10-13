@@ -1140,6 +1140,13 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
                 asyncio.create_task(self.player.speak_tts(voice_fail, wait=False, interrupt_music=True))
                 return
 
+        # 0B-septies. INTERAZIONI SOCIALI CON GLI UTENTI DEL CANALE
+        # (Bacio, Saluto, Brindisi, Abbraccio, Carica, Cinque, Auguri, Buonanotte, Benvenuto, Troll, Amore)
+        # Esempi: "Franchino manda un bacio a Giulia", "Franchino fai un brindisi per Luca", "Franchino saluta tutti"
+        from interactions import handle_voice_interaction
+        if await handle_voice_interaction(self.player, user, command_part, self._notify_channel):
+            return
+
         # 0C. Comando MANDA MESSAGGIO PRIVATO A <PERSONA NELLA STANZA>
         # Esempio: "Franchino manda messaggio ad Ema", "Franchino scrivi a Luca", "Franchino manda un messaggio a Marco"
         dm_match = re.match(
