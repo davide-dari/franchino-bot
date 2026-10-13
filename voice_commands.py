@@ -323,12 +323,81 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
     CONTINUE_RMS_ENERGY = 50      # Sensibile per catturare anche l'ultima sillaba debole o sospiro
     PREROLL_CHUNKS = 15           # 300ms di pre-roll ring buffer (15 pacchetti da 20ms)
 
+    WAKE_PATTERN = re.compile(
+        r'\b('
+        r'franchin[oaie]?|franch[iì]|frankin[oaie]?|francin[oaie]?|franghin[oaie]?'
+        r'|franckin[oaie]?|frannchin[oaie]?|frannkin[oaie]?|franceschin[oaie]?|franchinetto'
+        r'|fran\s+chin[oaie]?|fra[\'\s]+chin[oaie]?|franchi\s+no|fra[\'\s]+inchino|frank\s+in|frankie|franklin'
+        r')\b',
+        re.IGNORECASE
+    )
+
+    EXCLUDED_WAKE_WORDS = {
+        'franco', 'francia', 'frangia', 'francesco', 'francobollo',
+        'granchio', 'granchi', 'panchina', 'bianchino'
+    }
+
     WAKE_WORDS = (
         "franchino", "frankino", "francino", "franchi", "franchì",
-        "franchini", "franklin", "frankie", "franci", "franchin",
-        "franchi no", "tranchino", "franceschino", "franco", "francesco",
-        "frank", "fra", "panchino", "fanchino", "banchino", "chino", "franchina"
+        "franchini", "franklin", "frankie", "franchin", "franghino",
+        "franchi no", "tranchino", "franceschino", "franckino", "franchina"
     )
+
+    @classmethod
+    def extract_wake_and_command(cls, text: str) -> tuple[bool, str, str]:
+        """
+        Riconosce con la massima accuratezza la wake word 'Franchino' e tutte le sue varianti fonetiche/STT
+        in qualsiasi posizione della frase (inizio, centro, fine, con o senza parole di saluto/filler).
+        Ritorna: (has_wake: bool, command_part: str, matched_wake_token: str)
+        """
+        if not text or not text.strip():
+            return False, "", ""
+
+        clean_text = text.strip()
+        m = cls.WAKE_PATTERN.search(clean_text)
+        wake_matched = None
+        start = -1
+        end = -1
+
+        if m:
+            wake_matched = m.group(0)
+            start, end = m.span()
+        else:
+            # Controllo fuzzy token-per-token per recuperare refusi acustici di Google STT
+            tokens = list(re.finditer(r'[a-zA-ZàèéìòùÀÈÉÌÒÙ]{6,}', clean_text, re.IGNORECASE))
+            for tok_match in tokens:
+                tok = tok_match.group(0).lower()
+                if tok in cls.EXCLUDED_WAKE_WORDS:
+                    continue
+                ratio = difflib.SequenceMatcher(None, tok, "franchino").ratio()
+                if ratio >= 0.80:
+                    wake_matched = tok_match.group(0)
+                    start, end = tok_match.span()
+                    break
+
+        if not wake_matched:
+            return False, "", ""
+
+        before = clean_text[:start].strip(" ,.!?:;-")
+        after = clean_text[end:].strip(" ,.!?:;-")
+
+        # Rimuove parole di saluto/filler all'inizio del comando (es. "Ehi Franchino metti...", "Ciao Franchino ci sei?")
+        filler_pat = re.compile(
+            r'^(?:ehi|hey|ei|oh|o|ciao|senti|ascolta|allora|ma|vai|grande|caro|dimmi|scusa)\s*',
+            re.IGNORECASE
+        )
+        before_clean = filler_pat.sub("", before).strip(" ,.!?:;-")
+
+        if before_clean and after:
+            cmd = f"{before_clean} {after}".strip(" ,.!?:;-")
+        elif after:
+            cmd = after
+        elif before_clean:
+            cmd = before_clean
+        else:
+            cmd = ""
+
+        return True, cmd, wake_matched
 
     def __init__(self, player: "GuildPlayer"):
         super().__init__(None)
@@ -635,29 +704,46 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
         if not candidates:
             return
 
-        # Selezione intelligente:
-        # Se il primo candidato contiene già la wake word, usalo.
-        # Altrimenti, se una delle alternative include la wake word, seleziona l'alternativa migliore!
-        selected_text = candidates[0]
-        has_wake = any(w in selected_text.lower() for w in self.WAKE_WORDS)
-        if not has_wake:
-            for alt in candidates[1:]:
-                alt_lower = alt.lower()
-                if any(w in alt_lower for w in self.WAKE_WORDS):
-                    selected_text = alt
-                    logger.info(f"🎯 Alternativa acustica selezionata con successo: '{selected_text}' (invece di '{candidates[0]}')")
-                    break
-
         user = await self._resolve_user_object(key, speaker_obj)
-        logger.info(f"🎙️ [{user.display_name}] ha detto: '{selected_text}'")
+        uid = getattr(user, "id", 0)
+        now = time.monotonic()
+
+        # Verifica se l'utente ha una sessione attiva (pending wake follow-up di 7s o dettatura DM)
+        in_active_session = (uid in self._pending_wake and now - self._pending_wake[uid][0] <= 7.0) or (uid in self._pending_dm)
+
+        selected_text = None
+        detected_cmd = None
+        matched_wake = None
+
+        # Scansiona tutte le alternative acustiche di Google Speech API per trovare il richiamo a Franchino
+        for cand in candidates:
+            has_w, cmd, w_tok = self.extract_wake_and_command(cand)
+            if has_w:
+                selected_text = cand
+                detected_cmd = cmd
+                matched_wake = w_tok
+                break
+
+        if selected_text:
+            logger.info(f"🎙️ [{user.display_name}] ha chiamato Franchino ('{matched_wake}') -> frase: '{selected_text}' | comando: '{detected_cmd}'")
+        elif in_active_session:
+            # L'utente è in sessione attiva (aveva appena chiamato Franchino e sta completando il comando)
+            selected_text = candidates[0]
+            detected_cmd = selected_text.strip()
+            logger.info(f"🔗 [{user.display_name}] sessione attiva (completamento comando): '{selected_text}'")
+        else:
+            # NESSUN RICHIAMO A FRANCHINO: Ignora totalmente! Non risponde e non interrompe la conversazione.
+            logger.debug(f"🔇 [{user.display_name}] audio ignorato (nessun richiamo a Franchino): '{candidates[0]}'")
+            return
+
         try:
-            await self._handle_transcribed_text(user, selected_text)
+            await self._handle_transcribed_text(user, selected_text, detected_cmd=detected_cmd)
         except Exception as e:
             logger.error(f"❌ Errore critico gestione comando vocale '{selected_text}' da {user.display_name}: {e}", exc_info=True)
             await self._notify_channel(f"⚠️ Si è verificato un errore durante l'elaborazione del comando: `{e}`")
 
-    async def _handle_transcribed_text(self, user, text: str):
-        """Analizza il testo trascritto ed esegue il comando per qualsiasi utente del canale."""
+    async def _handle_transcribed_text(self, user, text: str, detected_cmd: Optional[str] = None):
+        """Analizza il testo trascritto ed esegue il comando per qualsiasi utente del canale, SOLTANTO se è stato chiamato Franchino."""
         from player import resolve_preferred_text_channel, build_commands_embed, COLOR_FRANCHINO
 
         lower_text = text.lower().strip()
@@ -672,11 +758,10 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
             self._cancel_dm_timeout(uid)
             if now - dm_time <= 35.0:
                 msg_body = text.strip()
-                # Se l'utente ha ripetuto "Franchino..." o "scrivi..." o "digli...", puliamo il prefisso
-                for wake in self.WAKE_WORDS:
-                    if msg_body.lower().startswith(wake):
-                        msg_body = msg_body[len(wake):].strip(" ,.!?:;-")
-                        break
+                # Se l'utente ha ripetuto "Franchino...", puliamo il wake word
+                has_w, w_cmd, _ = self.extract_wake_and_command(msg_body)
+                if has_w:
+                    msg_body = w_cmd
                 msg_body = re.sub(
                     r"^(?:scrivi|scrivigli|scrivile|digli|dille|manda|mandagli|che)\s+",
                     "",
@@ -743,19 +828,12 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
                     await self.player.resume_interrupted_song()
                 return
 
-        command_part = None
-        for wake in self.WAKE_WORDS:
-            idx = lower_text.find(wake)
-            if idx != -1:
-                after_wake = text[idx + len(wake):].strip(" ,.!?:;-")
-                before_wake = text[:idx].strip(" ,.!?:;-")
-                if after_wake:
-                    command_part = after_wake
-                elif before_wake:
-                    command_part = before_wake
-                else:
-                    command_part = ""
-                break
+        command_part = detected_cmd
+
+        if command_part is None:
+            has_w, cmd, _ = self.extract_wake_and_command(text)
+            if has_w:
+                command_part = cmd
 
         # Se l'utente aveva detto "Franchino" o "Franchino metti" pochi secondi fa e ora ha detto il nome della canzone:
         if command_part is None and uid in self._pending_wake:
@@ -764,36 +842,9 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
                 command_part = f"{pending_prefix} {text}".strip() if pending_prefix else text.strip()
                 logger.info(f"🔗 Continuazione comando vocale per {user.display_name}: '{command_part}'")
 
-        # Se non è stata detta la wake word esplicita, controlla se è un comando vocale diretto nella stanza:
+        # NESSUN RICHIAMO A FRANCHINO: Ignora totalmente! Non risponde mai se non viene chiamato per nome.
         if command_part is None:
-            direct_triggers = (
-                # Liveness & presenza
-                "ci senti", "ci sentite", "mi senti", "mi sentite",
-                "ci sei", "ci siete", "sei vivo", "sei sveglio",
-                "batti un colpo", "mi ascolti", "ci ascolti", "rispondi",
-                # Musica
-                "metti ", "mette ", "mettimi ", "riproduci ", "suona ", "suonami ", "play ",
-                "fammi sentire ", "fammi ascoltare ", "avvia ", "cerca ", "cercami ", "fai partire ",
-                "aggiungi ", "accoda ", "metti in coda ",
-                # Controlli player
-                "stop", "stoppa", "ferma", "fermati", "basta", "zitto", "silenzio", "muto", "spegni",
-                "pausa", "riprendi", "continua", "salta", "skip", "skippa", "prossima", "cambia",
-                "alza il volume", "abbassa il volume", "volume a ", "volume al ",
-                # Funzionalità
-                "raccontami una favola", "racconta una favola", "dimmi una favola", "favola",
-                "chi canta", "che canzone è", "partita", "streaming",
-                "riavviati", "sbloccati", "reset", "comandi", "aiuto"
-            )
-            clean_l = re.sub(r"[^\w\s]", " ", lower_text).strip()
-            for trig in direct_triggers:
-                trig_clean = trig.strip()
-                if clean_l == trig_clean or clean_l.startswith(trig) or (len(trig_clean) >= 4 and trig_clean in clean_l):
-                    command_part = text.strip()
-                    logger.info(f"🎯 Comando diretto senza wake word rilevato da {user.display_name}: '{command_part}'")
-                    break
-
-        if command_part is None:
-            logger.info(f"ℹ️ Nessun comando vocale riconosciuto in: '{text}' (da {user.display_name})")
+            logger.debug(f"🔇 Ignorato comando vocale senza richiamo Franchino da {user.display_name}: '{text}'")
             return
 
         cmd_lower = command_part.lower().strip()
