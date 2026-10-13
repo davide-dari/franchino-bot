@@ -196,11 +196,25 @@ async def on_ready():
     # 3. Sincronizza i comandi slash in background (così eventuali rate-limit Discord non bloccano mai la voce)
     asyncio.create_task(_sync_slash_commands_bg())
 
-    # 4. Avvia in background l'indicizzazione completa delle ~2.140 pagine di wiki.uooutlands.com
-    from outlands_wiki import preload_outlands_wiki_index
-    asyncio.create_task(preload_outlands_wiki_index())
+    # 4. Ottimizzazione Hardware per server ARM 2 vCPU (ThreadPool limitato a 4 workers & GC ARM tuning)
+    import concurrent.futures
+    from jack_math_engine import hardware_optimizer
+    try:
+        hardware_optimizer.configure_for_arm()
+        loop = asyncio.get_running_loop()
+        bounded_pool = concurrent.futures.ThreadPoolExecutor(max_workers=4, thread_name_prefix="FranchinoARM")
+        loop.set_default_executor(bounded_pool)
+        logger.info("⚡ ThreadPoolExecutor ottimizzato per 2 core ARM (max_workers=4, low memory footprint).")
+    except Exception as e:
+        logger.debug(f"ThreadPool setup: {e}")
 
-    # 5. Inizializza l'Hub Centrale di Conoscenza e il Cervello AI Gemma 2 2B
+    # 5. Avvia in background l'indicizzazione completa della wiki e sincronizzazione catalogo Razor Scripts
+    from outlands_wiki import preload_outlands_wiki_index
+    from scripts.scrape_razor_scripts import sync_razor_scripts
+    asyncio.create_task(preload_outlands_wiki_index())
+    asyncio.create_task(asyncio.to_thread(sync_razor_scripts))
+
+    # 6. Inizializza l'Hub Centrale di Conoscenza e il Cervello AI Gemma 2 2B
     from central_hub import hub
     from brain import brain
     asyncio.create_task(hub.initialize())
@@ -774,10 +788,52 @@ async def effetto_cmd(
 @bot.hybrid_command(
     name="boost",
     aliases=["bassboost"],
-    description="Attiva o disattiva al volo l'effetto DJ Bass Boost (Club) sulla musica in corso"
+    description="Attiva/disattiva Bass Boost DJ oppure consulta la Formula Matematica Jack (/boost jack)"
 )
-async def boost_cmd(ctx: commands.Context):
+async def boost_cmd(ctx: commands.Context, modo: Optional[str] = None):
     await ctx.defer()
+    clean_mode = (modo or "").strip().lower()
+    if clean_mode in ("jack", "math", "formula", "status", "info", "hardware"):
+        from jack_math_engine import jack_engine, hardware_optimizer
+        telem = hardware_optimizer.get_hardware_telemetry()
+        embed = discord.Embed(
+            title="🧠 Formula Matematica Jack & Ottimizzazione Hardware ARM",
+            description=(
+                "Franchino opera con il motore di intelligenza analitica **Super Matematico Jack**:\n\n"
+                "$$\\mathcal{S}(\\text{Intent}, q) = w_{\\text{wake}} \\cdot \\phi_{\\text{wake}} + "
+                "w_{\\text{phonetic}} \\cdot \\sigma_{\\text{jaro}} + w_{\\text{domain}} \\cdot \\text{BM25}(q, D) + "
+                "w_{\\text{action}} \\cdot \\alpha_{\\text{syntax}} - \\lambda_{\\text{noise}}$$\n\n"
+                "**Distribuzione Probabilistica:**\n"
+                "$$\\mathcal{P}(\\text{Intent} \\mid q) = \\frac{e^{\\beta \\cdot \\mathcal{S}(\\text{Intent}, q)}}{\\sum_k e^{\\beta \\cdot \\mathcal{S}(k, q)}}$$"
+            ),
+            color=0xF1C40F,
+        )
+        embed.add_field(
+            name="⚖️ Pesi & Parametri della Formula",
+            value=(
+                "• $w_{\\text{wake}}$: `0.15` (Riconoscimento vocale diretto)\n"
+                "• $w_{\\text{phonetic}}$: `0.25` (Jaro-Winkler tolleranza STT)\n"
+                "• $w_{\\text{domain}}$: `0.35` (Okapi BM25 pertinenza ontologica)\n"
+                "• $w_{\\text{action}}$: `0.25` (Sintassi imperativa grammaticale)\n"
+                "• $\\beta$ Softmax: `3.0` (Contrasto netto decisionale)"
+            ),
+            inline=False,
+        )
+        embed.add_field(
+            name="☁️ Ottimizzazione Hardware Server Oracle ARM",
+            value=(
+                f"• **Architettura:** `{telem['server_arch']}`\n"
+                f"• **vCPU:** Target `2 vCPU ARM` (Disponibili: `{telem['cpu_cores_available']}`)\n"
+                f"• **RAM Sistema:** Target `12 GB` (Processo Python: `{telem['process_ram_mb']} MB`)\n"
+                f"• **Disco:** `{telem['disk_used_gb']} GB` usati su `{telem['disk_total_gb']} GB` max ({telem['disk_free_gb']} GB liberi)\n"
+                f"• **Efficienza Risorse:** `{telem['target_efficiency']}`"
+            ),
+            inline=False,
+        )
+        embed.set_footer(text="Franchino Bot • Super Matematico Jack Intelligence")
+        await ctx.send(embed=embed)
+        return
+
     player = player_manager.get_player(ctx.guild)
     target = "off" if player.audio_effect == "bassboost" else "bassboost"
     label = await player.set_effect(target)
@@ -992,24 +1048,36 @@ async def wiki_cmd(ctx: commands.Context, *, domanda: str = "aiuto"):
     aliases=["scripts", "razor", "razorscript", "razor_script"],
     description="Cerca e scarica script Razor per UO Outlands da outlands.uorazorscripts.com per qualsiasi skill!"
 )
-async def script_cmd(ctx: commands.Context, skill: str, numero: Optional[int] = None):
+async def script_cmd(ctx: commands.Context, skill: Optional[str] = "lista", numero: Optional[int] = None):
     """Mostra tutti gli script Razor per una skill e permette di scaricare il file .razor pronto da usare."""
     await ctx.defer()
-    from razor_scripts import build_razor_scripts_response
-    embed, view, script_file, voice_answer, code = build_razor_scripts_response(skill, requested_idx=numero)
+    from razor_scripts import build_razor_scripts_response, build_razor_skills_list_response
+
+    target_skill = (skill or "lista").strip()
+    embed, view, script_file, voice_answer, code = build_razor_scripts_response(target_skill, requested_idx=numero)
     if not embed:
-        await ctx.send(f"⚠️ Non ho trovato script Razor per **{skill}** su `outlands.uorazorscripts.com`.")
-        return
+        embed, view, script_file, voice_answer, code = build_razor_skills_list_response()
 
     code_block = ""
     if code:
-        if len(code) <= 1700:
-            code_block = f"\n```razor\n{code}\n```"
+        clean_code = code.replace("```", "'''")
+        if len(clean_code) <= 1400:
+            code_block = f"\n```razor\n{clean_code}\n```"
         else:
-            code_block = f"\n```razor\n{code[:1500]}\n# ... [Codice completo nel file allegato sotto!] ...\n```"
+            code_block = f"\n```razor\n{clean_code[:1300]}\n# ... [Codice completo nel file allegato sotto!] ...\n```"
+
+    if target_skill.lower() in ("lista", "all", "skills", "aiuto", "catalogo", "list"):
+        content_text = f"📜 **{ctx.author.display_name}**, ecco il catalogo completo degli script Razor di **UO Outlands**!"
+    elif not script_file and not code:
+        content_text = f"📜 **{ctx.author.display_name}**, ecco il catalogo per la tua ricerca su **{target_skill.title()}**:"
+    else:
+        content_text = f"📜 **{ctx.author.display_name}**, ecco gli script Razor ufficiali per **{target_skill.title()}**!{code_block}"
+
+    if len(content_text) > 1950:
+        content_text = content_text[:1900] + "\n```"
 
     kwargs = {
-        "content": f"📜 **{ctx.author.display_name}**, ecco gli script Razor ufficiali per **{skill.title()}**!{code_block}",
+        "content": content_text,
         "embed": embed,
     }
     if view:
@@ -1471,6 +1539,58 @@ async def favola_live_cmd(ctx: commands.Context, *, tema: Optional[str] = None):
     await ctx.send(embed=embed)
     if player.voice_client and player.voice_client.is_connected():
         asyncio.create_task(player.speak_tts(fable, wait=True, interrupt_music=True, dramatic_fable=True))
+
+
+@bot.hybrid_command(
+    name="jack",
+    aliases=["formula", "matematico_jack", "jack_formula"],
+    description="Mostra la formula matematica di intelligenza del Super Matematico Jack e la telemetria Oracle ARM"
+)
+async def jack_cmd(ctx: commands.Context):
+    """Mostra la formula analitica del Super Matematico Jack e lo stato delle risorse server ARM."""
+    await ctx.defer()
+    from jack_math_engine import jack_engine, hardware_optimizer
+    telem = hardware_optimizer.get_hardware_telemetry()
+    embed = discord.Embed(
+        title="🧠 Formula Matematica Jack & Ottimizzazione Hardware ARM",
+        description=(
+            "Franchino opera con il motore di intelligenza analitica **Super Matematico Jack**:\n\n"
+            "$$\\mathcal{S}(\\text{Intent}, q) = w_{\\text{wake}} \\cdot \\phi_{\\text{wake}} + "
+            "w_{\\text{phonetic}} \\cdot \\sigma_{\\text{jaro}} + w_{\\text{domain}} \\cdot \\text{BM25}(q, D) + "
+            "w_{\\text{action}} \\cdot \\alpha_{\\text{syntax}} - \\lambda_{\\text{noise}}$$\n\n"
+            "**Distribuzione Probabilistica Softmax:**\n"
+            "$$\\mathcal{P}(\\text{Intent} \\mid q) = \\frac{e^{\\beta \\cdot \\mathcal{S}(\\text{Intent}, q)}}{\\sum_k e^{\\beta \\cdot \\mathcal{S}(k, q)}}$$"
+        ),
+        color=0xF1C40F,
+    )
+    embed.add_field(
+        name="⚖️ Pesi & Parametri Jack",
+        value=(
+            "• $w_{\\text{wake}}$: `0.15` (Riconoscimento vocale diretto)\n"
+            "• $w_{\\text{phonetic}}$: `0.25` (Jaro-Winkler tolleranza STT)\n"
+            "• $w_{\\text{domain}}$: `0.35` (Okapi BM25 pertinenza ontologica)\n"
+            "• $w_{\\text{action}}$: `0.25` (Sintassi imperativa grammaticale)\n"
+            "• $\\beta$ Softmax: `3.0` (Contrasto netto decisionale)"
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="☁️ Ottimizzazione Hardware Server Oracle ARM",
+        value=(
+            f"• **Architettura:** `{telem['server_arch']}`\n"
+            f"• **vCPU:** Target `2 vCPU ARM` (Disponibili: `{telem['cpu_cores_available']}`)\n"
+            f"• **RAM Sistema:** Target `12 GB` (Processo Python: `{telem['process_ram_mb']} MB`)\n"
+            f"• **Disco:** `{telem['disk_used_gb']} GB` usati su `{telem['disk_total_gb']} GB` max ({telem['disk_free_gb']} GB liberi)\n"
+            f"• **Efficienza Risorse:** `{telem['target_efficiency']}`"
+        ),
+        inline=False,
+    )
+    embed.set_footer(text="Franchino Bot • Super Matematico Jack Intelligence")
+    voice_jack = "Magia ragazzi! Ecco la formula del super matematico Jack! Ho ottimizzato la console con Okapi BM25 e Jaro-Winkler per 2 core ARM!"
+    await ctx.send(content=f"🧠 **{ctx.author.display_name}**, ecco la formula del **Super Matematico Jack**:", embed=embed)
+    player = player_manager.get_player(ctx.guild)
+    if player.voice_client and player.voice_client.is_connected():
+        asyncio.create_task(player.speak_tts(voice_jack, wait=False, interrupt_music=True, keep_paused_after=False))
 
 
 @bot.event

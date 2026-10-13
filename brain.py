@@ -60,9 +60,10 @@ Regole Fondamentali di Risposta:
 1. Comprendi a fondo l'intenzione dell'utente.
 2. Rispondi SEMPRE in formato JSON valido con questa struttura esatta:
 {
-  "intent": "play_music" | "wiki_guide" | "sports_match" | "sports_schedule" | "live_fable" | "song_info" | "chat",
+  "intent": "play_music" | "wiki_guide" | "razor_script" | "sports_match" | "sports_schedule" | "jack_math_boost" | "live_fable" | "song_info" | "chat",
   "music_query": "stringa ottimizzata per ricerca YouTube" (solo se intent è play_music, altrimenti null),
   "wiki_topic": "argomento outlands" (solo se intent è wiki_guide, altrimenti null),
+  "skill_slug": "slug della skill outlands" (solo se intent è razor_script, altrimenti null),
   "sport_query": "squadra, sport o lega" (solo se intent è sports_match o sports_schedule, altrimenti null),
   "voice_reply": "breve frase parlata da leggere col microfono (15-28 parole, ritmica, calda, teatrale con pause '...' stile vocalist, MAI link)",
   "chat_reply": "risposta testuale ricca, dettagliata e amichevole per la chat, formattata con markdown ed emoji"
@@ -229,10 +230,43 @@ class FranchinoBrain:
 
     def _fallback_heuristic_intent(self, text: str, user_name: str = "amico") -> Dict[str, Any]:
         """
-        Motore euristico ricco e caloroso che riproduce fedelmente l'umanità
+        Motore euristico e matematico basato sulla Formula Jack che riproduce fedelmente l'umanità
         e il carisma di Franchino quando l'LLM non è attivo.
         """
         t_low = text.lower().strip()
+
+        # 0. Valutazione prioritaria tramite Super Matematico Jack
+        try:
+            from jack_math_engine import jack_engine
+            jack_res = jack_engine.classify(text)
+            if jack_res.intent == "jack_math_boost" and jack_res.probability >= 0.25:
+                return {
+                    "intent": "jack_math_boost",
+                    "voice_reply": "Magia ragazzi! Ecco la formula del super matematico Jack! Ho ottimizzato la console con Okapi BM25 e Jaro-Winkler per i due core ARM!",
+                    "chat_reply": (
+                        "🧠 **Super Matematico Jack**: Formula di intelligenza e telemetria hardware ARM pronte!\n"
+                        "$$\\mathcal{S}(\\text{Intent}, q) = w_{\\text{wake}} \\cdot \\phi_{\\text{wake}} + "
+                        "w_{\\text{phonetic}} \\cdot \\sigma_{\\text{jaro}} + w_{\\text{domain}} \\cdot \\text{BM25}(q, D) + "
+                        "w_{\\text{action}} \\cdot \\alpha_{\\text{syntax}} - \\lambda_{\\text{noise}}$$"
+                    ),
+                    "telemetry": jack_res.extracted_entities.get("telemetry"),
+                    "classification": jack_res,
+                }
+        except Exception as e:
+            logger.debug(f"Jack math engine check in fallback: {e}")
+
+        # 0B. Script Razor per UO Outlands (outlands.uorazorscripts.com)
+        from razor_scripts import is_script_question
+        is_sc, sc_skill = is_script_question(t_low)
+        if is_sc:
+            target_skill = sc_skill if sc_skill and sc_skill != "lista" else "lista"
+            s_name = target_skill.title() if target_skill != "lista" else "UO Outlands"
+            return {
+                "intent": "razor_script",
+                "skill_slug": target_skill,
+                "voice_reply": f"Magia ragazzi! Ho trovato gli script Razor ufficiali per {s_name}! Ti ho messo il codice e il download in chat!",
+                "chat_reply": f"📜 **Franchino Razor Scripts**: Ecco gli script per **{s_name}** da outlands.uorazorscripts.com!",
+            }
 
         # 1. Palinsesto Sportivo, Partite di Stasera & Grandi Match
         sport_triggers = (

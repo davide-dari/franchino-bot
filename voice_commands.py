@@ -1560,11 +1560,20 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
         from razor_scripts import is_script_question, build_razor_scripts_response
         is_script, script_skill = is_script_question(command_part)
         if is_script:
-            logger.info(f"📜 Richiesta script Razor per {script_skill} da {user.display_name}: '{command_part}'")
-            embed, view, file, voice_ans, code = build_razor_scripts_response(script_skill)
+            target_skill = script_skill if script_skill and script_skill != "lista" else "lista"
+            logger.info(f"📜 Richiesta script Razor per {target_skill} da {user.display_name}: '{command_part}'")
+            embed, view, file, voice_ans, code = build_razor_scripts_response(target_skill)
             if embed:
+                preview_text = ""
+                if code:
+                    clean_code = code.replace("```", "'''")
+                    if len(clean_code) <= 1200:
+                        preview_text = f"\n```razor\n{clean_code}\n```"
+                    else:
+                        preview_text = f"\n```razor\n{clean_code[:1100]}\n# ... [File completo allegato sotto!] ...\n```"
+                skill_header = f"**{target_skill.title()}**" if target_skill != "lista" else "**UO Outlands**"
                 await self._notify_channel(
-                    f"📜 **{user.display_name}** ha chiesto gli script Razor per **{script_skill.title()}** — Ecco tutto pronto!",
+                    f"📜 **{user.display_name}** ha chiesto gli script Razor per {skill_header} — Ecco tutto pronto!{preview_text}",
                     embed=embed,
                     view=view,
                     file=file,
@@ -1573,7 +1582,86 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
                     asyncio.create_task(
                         self.player.speak_tts(voice_ans, wait=False, interrupt_music=True, keep_paused_after=False)
                     )
+                from central_hub import hub
+                asyncio.create_task(
+                    hub.archive_interaction(
+                        user_id=str(getattr(user, "id", 0)),
+                        user_name=user.display_name,
+                        raw_query=command_part,
+                        intent="razor_script",
+                        ai_response=f"Script Razor per {target_skill}",
+                        voice_summary=voice_ans,
+                        channel_name=self.player.text_channel.name if self.player.text_channel else None,
+                        metadata={"skill": target_skill},
+                    )
+                )
                 return
+
+        # 0C-bis-3. Richiesta Formula Matematica & Super Matematico Jack (/boost jack)
+        from jack_math_engine import jack_engine, hardware_optimizer
+        jack_check = jack_engine.classify(command_part)
+        if jack_check.intent == "jack_math_boost" and jack_check.probability >= 0.25:
+            logger.info(f"🧠 Richiesta Formula Super Matematico Jack da {user.display_name}: '{command_part}'")
+            telem = hardware_optimizer.get_hardware_telemetry()
+            embed = discord.Embed(
+                title="🧠 Formula Matematica Jack & Ottimizzazione Hardware ARM",
+                description=(
+                    "Franchino opera con il motore di intelligenza analitica **Super Matematico Jack**:\n\n"
+                    "$$\\mathcal{S}(\\text{Intent}, q) = w_{\\text{wake}} \\cdot \\phi_{\\text{wake}} + "
+                    "w_{\\text{phonetic}} \\cdot \\sigma_{\\text{jaro}} + w_{\\text{domain}} \\cdot \\text{BM25}(q, D) + "
+                    "w_{\\text{action}} \\cdot \\alpha_{\\text{syntax}} - \\lambda_{\\text{noise}}$$\n\n"
+                    f"**Classificazione Istantanea di '{command_part}':**\n"
+                    f"`{jack_check.to_math_summary()}`\n\n"
+                    "**Distribuzione Probabilistica Softmax:**\n"
+                    "$$\\mathcal{P}(\\text{Intent} \\mid q) = \\frac{e^{\\beta \\cdot \\mathcal{S}(\\text{Intent}, q)}}{\\sum_k e^{\\beta \\cdot \\mathcal{S}(k, q)}}$$"
+                ),
+                color=0xF1C40F,
+            )
+            embed.add_field(
+                name="⚖️ Pesi & Parametri Jack",
+                value=(
+                    "• $w_{\\text{wake}}$: `0.15` (Riconoscimento vocale diretto)\n"
+                    "• $w_{\\text{phonetic}}$: `0.25` (Jaro-Winkler tolleranza STT)\n"
+                    "• $w_{\\text{domain}}$: `0.35` (Okapi BM25 pertinenza ontologica)\n"
+                    "• $w_{\\text{action}}$: `0.25` (Sintassi imperativa grammaticale)\n"
+                    "• $\\beta$ Softmax: `3.0` (Contrasto netto decisionale)"
+                ),
+                inline=False,
+            )
+            embed.add_field(
+                name="☁️ Ottimizzazione Hardware Server Oracle ARM",
+                value=(
+                    f"• **Architettura:** `{telem['server_arch']}`\n"
+                    f"• **vCPU:** Target `2 vCPU ARM` (Disponibili: `{telem['cpu_cores_available']}`)\n"
+                    f"• **RAM Sistema:** Target `12 GB` (Processo Python: `{telem['process_ram_mb']} MB`)\n"
+                    f"• **Disco:** `{telem['disk_used_gb']} GB` usati su `{telem['disk_total_gb']} GB` max ({telem['disk_free_gb']} GB liberi)\n"
+                    f"• **Efficienza Risorse:** `{telem['target_efficiency']}`"
+                ),
+                inline=False,
+            )
+            embed.set_footer(text="Franchino Bot • Super Matematico Jack Intelligence")
+            voice_jack = "Magia ragazzi! Ecco la formula del super matematico Jack! Ho ottimizzato la console con Okapi BM25 e Jaro-Winkler per 2 core ARM!"
+            await self._notify_channel(
+                f"🧠 **{user.display_name}** ha invocato la formula del **Super Matematico Jack**! Ecco i dettagli completi:",
+                embed=embed,
+            )
+            asyncio.create_task(
+                self.player.speak_tts(voice_jack, wait=False, interrupt_music=True, keep_paused_after=False)
+            )
+            from central_hub import hub
+            asyncio.create_task(
+                hub.archive_interaction(
+                    user_id=str(getattr(user, "id", 0)),
+                    user_name=user.display_name,
+                    raw_query=command_part,
+                    intent="jack_math_boost",
+                    ai_response="Formula Matematica Jack & Ottimizzazione ARM",
+                    voice_summary=voice_jack,
+                    channel_name=self.player.text_channel.name if self.player.text_channel else None,
+                    metadata={"query": command_part, "telemetry": telem},
+                )
+            )
+            return
 
         # 0C-ter. Domande AIUTO/GUIDA su UO OUTLANDS ("cosa puoi fare su outlands", "aiuto outlands", ecc.)
         from outlands_wiki import is_help_question, is_wiki_question, query_outlands_wiki, get_outlands_help_embed
@@ -2032,15 +2120,77 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
 
         # 10. Fallback: Disambiguazione tra Domande/Outlands e Ricerca Musicale YouTube
         if command_part:
-            # Controllo di sicurezza 0: Richiesta Script Razor per una skill
+            # Controllo di sicurezza -1: Richiesta Formula Super Matematico Jack in fallback
+            from jack_math_engine import jack_engine, hardware_optimizer
+            jack_fb = jack_engine.classify(command_part)
+            if jack_fb.intent == "jack_math_boost" and jack_fb.probability >= 0.25:
+                logger.info(f"🧠 Intercettata richiesta Formula Super Matematico Jack in fallback da {user.display_name}: '{command_part}'")
+                telem = hardware_optimizer.get_hardware_telemetry()
+                embed = discord.Embed(
+                    title="🧠 Formula Matematica Jack & Ottimizzazione Hardware ARM",
+                    description=(
+                        "Franchino opera con il motore di intelligenza analitica **Super Matematico Jack**:\n\n"
+                        "$$\\mathcal{S}(\\text{Intent}, q) = w_{\\text{wake}} \\cdot \\phi_{\\text{wake}} + "
+                        "w_{\\text{phonetic}} \\cdot \\sigma_{\\text{jaro}} + w_{\\text{domain}} \\cdot \\text{BM25}(q, D) + "
+                        "w_{\\text{action}} \\cdot \\alpha_{\\text{syntax}} - \\lambda_{\\text{noise}}$$\n\n"
+                        f"**Classificazione Istantanea di '{command_part}':**\n"
+                        f"`{jack_fb.to_math_summary()}`\n\n"
+                        "**Distribuzione Probabilistica Softmax:**\n"
+                        "$$\\mathcal{P}(\\text{Intent} \\mid q) = \\frac{e^{\\beta \\cdot \\mathcal{S}(\\text{Intent}, q)}}{\\sum_k e^{\\beta \\cdot \\mathcal{S}(k, q)}}$$"
+                    ),
+                    color=0xF1C40F,
+                )
+                embed.add_field(
+                    name="⚖️ Pesi & Parametri Jack",
+                    value=(
+                        "• $w_{\\text{wake}}$: `0.15` (Riconoscimento vocale diretto)\n"
+                        "• $w_{\\text{phonetic}}$: `0.25` (Jaro-Winkler tolleranza STT)\n"
+                        "• $w_{\\text{domain}}$: `0.35` (Okapi BM25 pertinenza ontologica)\n"
+                        "• $w_{\\text{action}}$: `0.25` (Sintassi imperativa grammaticale)\n"
+                        "• $\\beta$ Softmax: `3.0` (Contrasto netto decisionale)"
+                    ),
+                    inline=False,
+                )
+                embed.add_field(
+                    name="☁️ Ottimizzazione Hardware Server Oracle ARM",
+                    value=(
+                        f"• **Architettura:** `{telem['server_arch']}`\n"
+                        f"• **vCPU:** Target `2 vCPU ARM` (Disponibili: `{telem['cpu_cores_available']}`)\n"
+                        f"• **RAM Sistema:** Target `12 GB` (Processo Python: `{telem['process_ram_mb']} MB`)\n"
+                        f"• **Disco:** `{telem['disk_used_gb']} GB` usati su `{telem['disk_total_gb']} GB` max ({telem['disk_free_gb']} GB liberi)\n"
+                        f"• **Efficienza Risorse:** `{telem['target_efficiency']}`"
+                    ),
+                    inline=False,
+                )
+                embed.set_footer(text="Franchino Bot • Super Matematico Jack Intelligence")
+                voice_jack = "Magia ragazzi! Ecco la formula del super matematico Jack! Ho ottimizzato la console con Okapi BM25 e Jaro-Winkler per 2 core ARM!"
+                await self._notify_channel(
+                    f"🧠 **{user.display_name}**, ecco la formula del **Super Matematico Jack**:",
+                    embed=embed,
+                )
+                asyncio.create_task(
+                    self.player.speak_tts(voice_jack, wait=False, interrupt_music=True, keep_paused_after=False)
+                )
+                return
+
+            # Controllo di sicurezza 0: Richiesta Script Razor per una skill o catalogo generale
             from razor_scripts import is_script_question, build_razor_scripts_response
             is_script, script_skill = is_script_question(command_part)
             if is_script:
-                logger.info(f"📜 Intercettata richiesta script Razor in fallback per {script_skill} da {user.display_name}: '{command_part}'")
-                embed, view, file, voice_ans, code = build_razor_scripts_response(script_skill)
+                target_skill = script_skill if script_skill and script_skill != "lista" else "lista"
+                logger.info(f"📜 Intercettata richiesta script Razor in fallback per {target_skill} da {user.display_name}: '{command_part}'")
+                embed, view, file, voice_ans, code = build_razor_scripts_response(target_skill)
                 if embed:
+                    preview_text = ""
+                    if code:
+                        clean_code = code.replace("```", "'''")
+                        if len(clean_code) <= 1200:
+                            preview_text = f"\n```razor\n{clean_code}\n```"
+                        else:
+                            preview_text = f"\n```razor\n{clean_code[:1100]}\n# ... [File completo allegato sotto!] ...\n```"
+                    skill_header = f"**{target_skill.title()}**" if target_skill != "lista" else "**UO Outlands**"
                     await self._notify_channel(
-                        f"📜 **{user.display_name}** ha chiesto gli script Razor per **{script_skill.title()}** — Ecco tutto pronto!",
+                        f"📜 **{user.display_name}** ha chiesto gli script Razor per {skill_header} — Ecco tutto pronto!{preview_text}",
                         embed=embed,
                         view=view,
                         file=file,
@@ -2282,6 +2432,79 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
         Ritorna True se gestito, False se deve proseguire (es. musica).
         """
         intent = decision.get("intent", "chat")
+
+        if intent == "jack_math_boost":
+            from jack_math_engine import jack_engine, hardware_optimizer
+            telem = hardware_optimizer.get_hardware_telemetry()
+            embed = discord.Embed(
+                title="🧠 Formula Matematica Jack & Ottimizzazione Hardware ARM",
+                description=(
+                    "Franchino opera con il motore di intelligenza analitica **Super Matematico Jack**:\n\n"
+                    "$$\\mathcal{S}(\\text{Intent}, q) = w_{\\text{wake}} \\cdot \\phi_{\\text{wake}} + "
+                    "w_{\\text{phonetic}} \\cdot \\sigma_{\\text{jaro}} + w_{\\text{domain}} \\cdot \\text{BM25}(q, D) + "
+                    "w_{\\text{action}} \\cdot \\alpha_{\\text{syntax}} - \\lambda_{\\text{noise}}$$\n\n"
+                    "**Distribuzione Probabilistica Softmax:**\n"
+                    "$$\\mathcal{P}(\\text{Intent} \\mid q) = \\frac{e^{\\beta \\cdot \\mathcal{S}(\\text{Intent}, q)}}{\\sum_k e^{\\beta \\cdot \\mathcal{S}(k, q)}}$$"
+                ),
+                color=0xF1C40F,
+            )
+            embed.add_field(
+                name="⚖️ Pesi & Parametri Jack",
+                value=(
+                    "• $w_{\\text{wake}}$: `0.15` (Riconoscimento vocale diretto)\n"
+                    "• $w_{\\text{phonetic}}$: `0.25` (Jaro-Winkler tolleranza STT)\n"
+                    "• $w_{\\text{domain}}$: `0.35` (Okapi BM25 pertinenza ontologica)\n"
+                    "• $w_{\\text{action}}$: `0.25` (Sintassi imperativa grammaticale)\n"
+                    "• $\\beta$ Softmax: `3.0` (Contrasto netto decisionale)"
+                ),
+                inline=False,
+            )
+            embed.add_field(
+                name="☁️ Ottimizzazione Hardware Server Oracle ARM",
+                value=(
+                    f"• **Architettura:** `{telem['server_arch']}`\n"
+                    f"• **vCPU:** Target `2 vCPU ARM` (Disponibili: `{telem['cpu_cores_available']}`)\n"
+                    f"• **RAM Sistema:** Target `12 GB` (Processo Python: `{telem['process_ram_mb']} MB`)\n"
+                    f"• **Disco:** `{telem['disk_used_gb']} GB` usati su `{telem['disk_total_gb']} GB` max ({telem['disk_free_gb']} GB liberi)\n"
+                    f"• **Efficienza Risorse:** `{telem['target_efficiency']}`"
+                ),
+                inline=False,
+            )
+            embed.set_footer(text="Franchino Bot • Super Matematico Jack Intelligence")
+            voice_jack = decision.get("voice_reply") or "Magia ragazzi! Ecco la formula del super matematico Jack! Ho ottimizzato la console con Okapi BM25 e Jaro-Winkler per 2 core ARM!"
+            await self._notify_channel(
+                f"🧠 **{user.display_name}**, ecco la formula del **Super Matematico Jack**:",
+                embed=embed,
+            )
+            asyncio.create_task(
+                self.player.speak_tts(voice_jack, wait=False, interrupt_music=True, keep_paused_after=False)
+            )
+            return True
+
+        if intent == "razor_script":
+            from razor_scripts import build_razor_scripts_response
+            skill_target = decision.get("skill_slug") or "lista"
+            embed, view, file, voice_ans, code = build_razor_scripts_response(skill_target)
+            if embed:
+                preview_text = ""
+                if code:
+                    clean_code = code.replace("```", "'''")
+                    if len(clean_code) <= 1200:
+                        preview_text = f"\n```razor\n{clean_code}\n```"
+                    else:
+                        preview_text = f"\n```razor\n{clean_code[:1100]}\n# ... [File completo allegato sotto!] ...\n```"
+                skill_header = f"**{skill_target.title()}**" if skill_target != "lista" else "**UO Outlands**"
+                await self._notify_channel(
+                    f"📜 **{user.display_name}**, ecco gli script Razor per {skill_header}!{preview_text}",
+                    embed=embed,
+                    view=view,
+                    file=file,
+                )
+                if voice_ans:
+                    asyncio.create_task(
+                        self.player.speak_tts(voice_ans, wait=False, interrupt_music=True, keep_paused_after=False)
+                    )
+                return True
 
         if intent in ("sports_match", "sports_schedule"):
             from sports_scraper import sports_scraper
