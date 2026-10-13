@@ -1342,6 +1342,25 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
         if await handle_voice_admin_command(self.player, user, command_part, self._notify_channel):
             return
 
+        # 0C-bis-2. Richiesta SCRIPT RAZOR ("script per magery", "dammi lo script di lockpicking", ecc.)
+        from razor_scripts import is_script_question, build_razor_scripts_response
+        is_script, script_skill = is_script_question(command_part)
+        if is_script:
+            logger.info(f"📜 Richiesta script Razor per {script_skill} da {user.display_name}: '{command_part}'")
+            embed, view, file, voice_ans, code = build_razor_scripts_response(script_skill)
+            if embed:
+                await self._notify_channel(
+                    f"📜 **{user.display_name}** ha chiesto gli script Razor per **{script_skill.title()}** — Ecco tutto pronto!",
+                    embed=embed,
+                    view=view,
+                    file=file,
+                )
+                if voice_ans:
+                    asyncio.create_task(
+                        self.player.speak_tts(voice_ans, wait=False, interrupt_music=True, keep_paused_after=False)
+                    )
+                return
+
         # 0C-ter. Domande AIUTO/GUIDA su UO OUTLANDS ("cosa puoi fare su outlands", "aiuto outlands", ecc.)
         from outlands_wiki import is_help_question, is_wiki_question, query_outlands_wiki, get_outlands_help_embed
         if is_help_question(command_part):
@@ -1743,6 +1762,25 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
 
         # 10. Fallback: Disambiguazione tra Domande/Outlands e Ricerca Musicale YouTube
         if command_part:
+            # Controllo di sicurezza 0: Richiesta Script Razor per una skill
+            from razor_scripts import is_script_question, build_razor_scripts_response
+            is_script, script_skill = is_script_question(command_part)
+            if is_script:
+                logger.info(f"📜 Intercettata richiesta script Razor in fallback per {script_skill} da {user.display_name}: '{command_part}'")
+                embed, view, file, voice_ans, code = build_razor_scripts_response(script_skill)
+                if embed:
+                    await self._notify_channel(
+                        f"📜 **{user.display_name}** ha chiesto gli script Razor per **{script_skill.title()}** — Ecco tutto pronto!",
+                        embed=embed,
+                        view=view,
+                        file=file,
+                    )
+                    if voice_ans:
+                        asyncio.create_task(
+                            self.player.speak_tts(voice_ans, wait=False, interrupt_music=True, keep_paused_after=False)
+                        )
+                    return
+
             # Controllo di sicurezza 1: Richiesta aiuto/guida Outlands
             from outlands_wiki import is_help_question, is_wiki_question, query_outlands_wiki, get_outlands_help_embed
             if is_help_question(command_part):
@@ -1911,6 +1949,7 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
         message: Optional[str] = None,
         embed: Optional[discord.Embed] = None,
         view: Optional[discord.ui.View] = None,
+        file: Optional[discord.File] = None,
     ):
         from player import resolve_preferred_text_channel
 
@@ -1925,6 +1964,8 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
                 kwargs["embed"] = embed
             if view:
                 kwargs["view"] = view
+            if file:
+                kwargs["file"] = file
             try:
                 await target_ch.send(**kwargs)
                 logger.info(f"💬 Notifica inviata con successo nel canale #{target_ch.name}")

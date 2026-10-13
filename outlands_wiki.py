@@ -1050,7 +1050,7 @@ def _extract_topic_and_keywords(question: str) -> Tuple[str, List[str]]:
         topic,
         flags=re.IGNORECASE,
     )
-    topic = re.sub(r"^(?:il|lo|la|i|gli|le|un|uno|una|l'|dei|degli|delle|del|della)\s*", "", topic.strip()).strip(" ?!.,;:")
+    topic = re.sub(r"^(?:il|lo|la|i|gli|le|un|uno|una|dei|degli|delle|del|della)\s+|^l['’]\s*", "", topic.strip()).strip(" ?!.,;:")
 
     return (topic or q_low), section_keywords
 
@@ -1447,7 +1447,7 @@ def _resolve_special_item_query(question: str) -> Optional[dict]:
         matched_key = "echoes"
     elif any(k in q_low for k in ("mastery scroll", "pergamene 120", "skill scroll", "pergamena skill")):
         matched_key = "mastery_scrolls"
-    elif any(k in q_low for k in ("lockpick", "grimaldelli", "trap wire", "remove trap")):
+    elif (any(k in q_low for k in ("lockpicks", "grimaldelli", "trap wire", "remove trap")) or re.search(r"\blockpicks?\b", q_low)) and "lockpicking" not in q_low:
         matched_key = "lockpicks"
 
     if not matched_key or matched_key not in OUTLANDS_SPECIAL_ITEMS:
@@ -1792,33 +1792,82 @@ def _resolve_local_knowledge_page(question: str, conn: sqlite3.Connection) -> Op
     else:
         ref_sec_url = base_page_url
 
-    sec_content = best_section["content"][:1200]
-    translated_content = translate_text(sec_content, "en", "it")
+    sec_content = best_section["content"][:2200]
+    translated_overview = translate_text(sec_content, "en", "it")
     translated_sec_title = (
         translate_text(ref_sec_title, "en", "it")
         if ref_sec_title != "Panoramica Generale"
         else ref_sec_title
     )
 
-    spoken_raw = sec_content.replace("• ", "").replace("\n", ". ")
-    spoken_raw = re.sub(r"\.\s*\.+", ".", spoken_raw)
-    spoken_raw = re.sub(r"\s+", " ", spoken_raw).strip()
-    if len(spoken_raw) > 350:
-        cut = spoken_raw[:350].rfind(".")
-        spoken_raw = spoken_raw[: cut + 1] if cut > 120 else spoken_raw[:350] + "..."
-    spoken_it = translate_text(spoken_raw, "en", "it")
-
-    voice_answer = (
-        f"Ecco cosa dice la Wiki di Outlands su {actual_title}: {spoken_it} "
-        "Ti ho inviato la sezione completa con tutti i link in messaggio privato! Magia!"
-    )
-
     embed = discord.Embed(
-        title=f"📖 {actual_title} — {translated_sec_title}",
+        title=f"📖 Guida Approfondita: {actual_title} — {translated_sec_title}",
         url=ref_sec_url,
-        description=translated_content[:3500],
+        description=translated_overview[:3200],
         color=COLOR_FRANCHINO,
     )
+
+    # 2. Cerca sezione Allenamento / Training se presente (fondamentale per le skill!)
+    training_sec = None
+    for sec in sections:
+        st = sec["title"].lower()
+        if any(tw in st for tw in ("training", "allenamento", "leveling", "progression", "how to train")):
+            if len(sec["content"]) > 20 and sec != best_section:
+                training_sec = sec
+                break
+
+    if training_sec:
+        t_content = training_sec["content"][:950]
+        t_trans = translate_text(t_content, "en", "it")
+        embed.add_field(
+            name="📚 Guida all'Allenamento (Training & Livellamento)",
+            value=t_trans[:1024],
+            inline=False,
+        )
+
+    # 3. Cerca sezione Meccaniche / Formule / Incantesimi / Reagenti
+    mech_sec = None
+    for sec in sections:
+        st = sec["title"].lower()
+        if any(mw in st for mw in ("detailed info", "mechanics", "formulas", "spells", "reagents", "charged", "abilities", "interrupts")):
+            if len(sec["content"]) > 20 and sec not in (best_section, training_sec):
+                mech_sec = sec
+                break
+
+    if mech_sec:
+        m_title = translate_text(mech_sec["title"], "en", "it")
+        m_content = mech_sec["content"][:950]
+        m_trans = translate_text(m_content, "en", "it")
+        embed.add_field(
+            name=f"⚙️ {m_title}",
+            value=m_trans[:1024],
+            inline=False,
+        )
+
+    # 4. Integrazione con Razor Scripts: verifica se ci sono script ufficiali per questo argomento
+    try:
+        from razor_scripts import get_scripts_for_skill, resolve_skill_from_text
+        sk_info = resolve_skill_from_text(clean_cand if 'clean_cand' in locals() else actual_title)
+        if not sk_info:
+            sk_info = resolve_skill_from_text(actual_title)
+        if sk_info:
+            sk_name, sk_slug = sk_info
+            scripts = get_scripts_for_skill(sk_slug)
+            if scripts:
+                top_s = scripts[0]
+                top_author = top_s.get("author") or "Community"
+                embed.add_field(
+                    name=f"📜 Script Razor Ufficiali Disponibili ({len(scripts)} per {sk_name})",
+                    value=(
+                        f"• Trovati **{len(scripts)} script Razor** pronti all'uso su `outlands.uorazorscripts.com`!\n"
+                        f"• Consigliato: **[{top_s['title']}]({top_s['url']})** *(di {top_author})*\n"
+                        f"• Chiedimi a voce: *\"Franchino script {sk_name}\"* o digita `/script {sk_slug}` per vedere tutti gli script e scaricare il file `.razor`!"
+                    ),
+                    inline=False,
+                )
+    except Exception as e:
+        logger.debug(f"Errore aggiunta campo razor_scripts: {e}")
+
     embed.add_field(
         name="🎯 Link Diretto alla Sezione Ufficiale",
         value=f"🔗 [**Apri `{actual_title} → {ref_sec_title}` su wiki.uooutlands.com**]({ref_sec_url})",
@@ -1845,13 +1894,30 @@ def _resolve_local_knowledge_page(question: str, conn: sqlite3.Connection) -> Op
 
     embed.set_footer(text="Franchino UO Outlands Encyclopedia • wiki.uooutlands.com")
 
+    spoken_raw = sec_content.replace("• ", "").replace("\n", ". ")
+    spoken_raw = re.sub(r"\.\s*\.+", ".", spoken_raw)
+    spoken_raw = re.sub(r"\s+", " ", spoken_raw).strip()
+    if len(spoken_raw) > 380:
+        cut = spoken_raw[:380].rfind(".")
+        spoken_raw = spoken_raw[: cut + 1] if cut > 140 else spoken_raw[:380] + "..."
+    spoken_it = translate_text(spoken_raw, "en", "it")
+
+    training_note = ""
+    if training_sec:
+        training_note = " Ho incluso anche la scaletta completa di allenamento e le formule!"
+
+    voice_answer = (
+        f"Ragazzi, ecco la guida approfondita su {actual_title}: {spoken_it}{training_note} "
+        "Ti ho inviato tutti i dettagli, le formule e gli script pronti in chat! Magia!"
+    )
+
     return {
         "page_title": actual_title,
         "section_title": translated_sec_title,
         "section_url": ref_sec_url,
         "voice_answer": voice_answer,
         "embed": embed,
-        "translated_body": translated_content,
+        "translated_body": translated_overview,
         "thumbnail_url": thumbnail_url,
     }
 
@@ -2171,11 +2237,22 @@ def get_outlands_help_embed(page_count: int = 2212, creature_count: int = 1301) 
         inline=False,
     )
     embed.add_field(
+        name="📜 Script Razor Ufficiali (outlands.uorazorscripts.com)",
+        value=(
+            "• *\"Franchino script Magery\"* — Script macro Magia con recall e cast\n"
+            "• *\"Franchino script Lockpicking\"* — Scassinamento casse automatico\n"
+            "• *\"Franchino script Animal Taming\"* — Macro addomesticamento e release\n"
+            "• *\"Franchino script Pesca / Mining / Lumber\"* — Raccolta risorse AFK/attiva\n"
+            "• Comando Slash: `/script [skill]` (scarica il file `.razor` pronto all'uso!)"
+        ),
+        inline=False,
+    )
+    embed.add_field(
         name="\U0001f4a1 Come chiedermi info (vocale o testuale)",
         value=(
-            "\U0001f399\ufe0f **Voce**: *\"Franchino [domanda]\"* \u2014 Rispondo a voce!\n"
-            "\u2328\ufe0f **Slash**: `/outlands [domanda]` o `/wiki [domanda]`\n"
-            "\U0001f4d6 **Fonte**: Tutto da [wiki.uooutlands.com](https://wiki.uooutlands.com) tradotto in italiano!"
+            "\U0001f399\ufe0f **Voce**: *\"Franchino [domanda]\"* o *\"Franchino script [skill]\"* \u2014 Rispondo a voce!\n"
+            "\u2328\ufe0f **Slash**: `/outlands [domanda]`, `/wiki [domanda]` o `/script [skill]`\n"
+            "\U0001f4d6 **Fonti**: [wiki.uooutlands.com](https://wiki.uooutlands.com) e [outlands.uorazorscripts.com](https://outlands.uorazorscripts.com)"
         ),
         inline=False,
     )
@@ -2236,6 +2313,15 @@ def is_wiki_question(command_part: str) -> Tuple[bool, str]:
         "skip", "stop", "pausa", "riprendi", "ripeti", "loop", "shuffle", "coda", "aspetta"
     ):
         return False, ""
+
+    # Se è una richiesta specifica di script Razor, delega al modulo dedicato razor_scripts
+    try:
+        from razor_scripts import is_script_question
+        is_sc, _ = is_script_question(cmd_low)
+        if is_sc:
+            return False, ""
+    except Exception:
+        pass
 
     # --- 0. Domanda di aiuto/guida outlands ---
     if is_help_question(cmd_low):

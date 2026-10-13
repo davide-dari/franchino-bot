@@ -903,6 +903,45 @@ async def wiki_cmd(ctx: commands.Context, *, domanda: str = "aiuto"):
 
 
 @bot.hybrid_command(
+    name="script",
+    aliases=["scripts", "razor", "razorscript", "razor_script"],
+    description="Cerca e scarica script Razor per UO Outlands da outlands.uorazorscripts.com per qualsiasi skill!"
+)
+async def script_cmd(ctx: commands.Context, skill: str, numero: Optional[int] = None):
+    """Mostra tutti gli script Razor per una skill e permette di scaricare il file .razor pronto da usare."""
+    await ctx.defer()
+    from razor_scripts import build_razor_scripts_response
+    embed, view, script_file, voice_answer, code = build_razor_scripts_response(skill, requested_idx=numero)
+    if not embed:
+        await ctx.send(f"⚠️ Non ho trovato script Razor per **{skill}** su `outlands.uorazorscripts.com`.")
+        return
+
+    code_block = ""
+    if code:
+        if len(code) <= 1700:
+            code_block = f"\n```razor\n{code}\n```"
+        else:
+            code_block = f"\n```razor\n{code[:1500]}\n# ... [Codice completo nel file allegato sotto!] ...\n```"
+
+    kwargs = {
+        "content": f"📜 **{ctx.author.display_name}**, ecco gli script Razor ufficiali per **{skill.title()}**!{code_block}",
+        "embed": embed,
+    }
+    if view:
+        kwargs["view"] = view
+    if script_file:
+        kwargs["file"] = script_file
+
+    await ctx.send(**kwargs)
+
+    player = player_manager.get_player(ctx.guild)
+    if player.voice_client and player.voice_client.is_connected() and voice_answer:
+        asyncio.create_task(
+            player.speak_tts(voice_answer, wait=False, interrupt_music=True, keep_paused_after=False)
+        )
+
+
+@bot.hybrid_command(
     name="partita",
     aliases=["sport", "streaming", "match", "partita_live"],
     description="Cerca una partita o evento sportivo in diretta su MadPlay77 e ottieni il link streaming!"
