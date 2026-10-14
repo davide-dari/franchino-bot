@@ -17,6 +17,7 @@ import gc
 import shutil
 import resource
 import logging
+import functools
 from typing import Dict, List, Tuple, Optional, Any
 from dataclasses import dataclass, field
 
@@ -97,7 +98,10 @@ DOMAIN_CORPUS: Dict[str, List[str]] = {
         "juventus", "roma", "napoli", "lazio", "prossima gara", "motori", "corre", "corrono", "corsa", "circuito", "formula1"
     ],
     "dj_control": [
-        "stop", "stoppa", "ferma", "fermati", "pausa", "riprendi", "salta", "skip",
+        "stop", "stoppa", "ferma", "fermati", "basta", "basta cosi", "basta così",
+        "basta musica", "basta parlare", "zitto", "stai zitto", "muto", "silenzio",
+        "fai silenzio", "taci", "spegni", "spegni tutto", "smettila", "svuota",
+        "ferma tutto", "fermati subito", "pausa", "riprendi", "salta", "skip",
         "volume", "alza", "abbassa", "riavvia", "riavviati", "reset", "sbloccati",
         "boost", "bassboost", "bassi", "megabass", "nightcore", "slowed", "8d",
         "loop", "ripeti", "shuffle", "mischia", "coda", "effetti", "audio", "console"
@@ -172,7 +176,7 @@ ACTION_SYNTAX_PATTERNS = {
         re.IGNORECASE,
     ),
     "dj_control": re.compile(
-        r"^(?:stop(?!\s+(?:timer|sveglia|il\s+timer|la\s+sveglia))|stoppa|ferma(?!\s+(?:il\s+timer|la\s+sveglia|timer|sveglia))|pausa|riprendi|salta|skip|volume|alza|abbassa|riavvia|riavviati|reset|bassi|boost|/boost|togli\s+il\s+boost|attiva\s+il\s+boost|"
+        r"^(?:stop(?!\s+(?:timer|sveglia|il\s+timer|la\s+sveglia))|stoppa|ferma(?!\s+(?:il\s+timer|la\s+sveglia|timer|sveglia))|fermati|basta|zitto|stai\s+zitto|muto|silenzio|fai\s+silenzio|taci|spegni|smettila|svuota|pausa|riprendi|salta|skip|volume|alza|abbassa|riavvia|riavviati|reset|bassi|boost|/boost|togli\s+il\s+boost|attiva\s+il\s+boost|"
         r"metti\s+(?:in\s+)?(?:pausa|stop|loop|ripetizione|shuffle|muto|mute)|"
         r"metti\s+(?:il\s+)?volume|"
         r"(?:metti|attiva|imposta|applica|pompa)\s+(?:il\s+|l[\x27\']|un\s+)?(?:bass\s*boost|megabass|bassi|boost|riverbero|reverb|eco|nightcore|slowed|8d|karaoke|vaporwave)|"
@@ -367,6 +371,11 @@ class JackIntelligenceFormula:
 
     def __init__(self):
         self.bm25 = _bm25_index
+        try:
+            from outlands_wiki import is_outlands_entity
+            from razor_scripts import is_script_question
+        except Exception:
+            pass
 
     def calculate_wake(self, text: str) -> float:
         """Calcola phi_wake in [0, 1] in base alla presenza, posizione e intenzione dell'invocazione di Franchino."""
@@ -506,7 +515,11 @@ class JackIntelligenceFormula:
 
         is_audio_boost = any(w in t_low for w in ("bass", "bassi", "bassboost", "megabass", "subbass", "audio", "volume", "suono", "cassa", "casse", "equalizzatore", "filtro", "filtri", "effetto", "effetti"))
         is_dj_command = bool(ACTION_SYNTAX_PATTERNS["dj_control"].search(t_low)) or any(
-            w in t_low for w in ("in pausa", "metti pausa", "metti stop", "metti muto", "in loop", "in shuffle", "metti il volume", "alza il volume", "abbassa il volume", "bass boost", "togli il boost", "senza boost")
+            w in t_low for w in (
+                "in pausa", "metti pausa", "metti stop", "metti muto", "in loop", "in shuffle",
+                "metti il volume", "alza il volume", "abbassa il volume", "bass boost", "togli il boost", "senza boost",
+                "ferma tutto", "stop tutto", "basta musica", "basta parlare", "fai silenzio", "stai zitto", "spegni tutto"
+            )
         )
 
         is_explicit_music = (
@@ -559,7 +572,7 @@ class JackIntelligenceFormula:
         if intent == "dj_control":
             if CONFLICT_PATTERNS["colloquial_fra_chatter"].search(t_low):
                 penalty += 0.50
-            elif not ACTION_SYNTAX_PATTERNS["dj_control"].search(t_low) and not any(w in t_low for w in ("stop", "pausa", "volume", "loop", "shuffle", "bassi", "boost")):
+            elif not ACTION_SYNTAX_PATTERNS["dj_control"].search(t_low) and not any(w in t_low for w in ("stop", "stoppa", "ferma", "fermati", "basta", "zitto", "muto", "silenzio", "spegni", "taci", "smettila", "svuota", "pausa", "volume", "loop", "shuffle", "bassi", "boost")):
                 penalty += 0.30
 
         if intent == "sports_match":
@@ -591,6 +604,7 @@ class JackIntelligenceFormula:
 
         return min(0.95, penalty)
 
+    @functools.lru_cache(maxsize=1024)
     def classify(self, query: str, current_song_title: Optional[str] = None) -> JackClassificationResult:
         """
         Classifica l'intenzione calcolando il punteggio analitico di ogni intento
@@ -692,7 +706,7 @@ class JackIntelligenceFormula:
                 entities["action"] = "pause"
             elif any(w in c_low for w in ("riprendi", "continua", "vai", "togli la pausa")):
                 entities["action"] = "resume"
-            elif any(w in c_low for w in ("stop", "ferma", "stoppa", "basta", "zitto", "muto")):
+            elif any(w in c_low for w in ("stop", "ferma", "stoppa", "basta", "zitto", "muto", "silenzio", "spegni", "taci", "smettila", "svuota", "fermati")):
                 entities["action"] = "stop"
             elif any(w in c_low for w in ("skip", "salta", "prossima", "avanti", "cambia")):
                 entities["action"] = "skip"

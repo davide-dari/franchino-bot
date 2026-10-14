@@ -98,10 +98,11 @@ class FranchinoControlsView(View):
 
     @discord.ui.button(emoji="⏹️", label="Stop", style=discord.ButtonStyle.danger, row=0)
     async def stop_btn(self, interaction: discord.Interaction, button: Button):
-        """Ferma la musica e svuota la coda."""
+        """Ferma la musica e svuota la coda in silenzio assoluto."""
         self.player.stop()
         self.stop()
-        await interaction.response.send_message("⏹️ **Tutto fermato da Franchino!** Musica, voce e coda azzerate.", ephemeral=False)
+        if not interaction.response.is_done():
+            await interaction.response.defer()
 
     @discord.ui.button(emoji="🔁", label="Loop: No", style=discord.ButtonStyle.secondary, row=0)
     async def loop_btn(self, interaction: discord.Interaction, button: Button):

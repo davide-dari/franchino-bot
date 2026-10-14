@@ -223,6 +223,13 @@ class FranchinoBrain:
                 clean = clean[:-3]
             data = json.loads(clean.strip())
             if isinstance(data, dict) and "intent" in data:
+                if (data.get("intent") == "dj_control" and data.get("action") == "stop") or any(
+                    w in original_text.lower() for w in ("stop", "stoppa", "ferma", "fermati", "basta", "zitto", "stai zitto", "muto", "silenzio", "fai silenzio", "taci", "spegni", "smettila", "svuota")
+                ):
+                    if data.get("intent") == "dj_control":
+                        data["action"] = "stop"
+                    data["voice_reply"] = ""
+                    data["chat_reply"] = ""
                 return data
         except Exception:
             pass
@@ -482,14 +489,26 @@ class FranchinoBrain:
         # 4-bis. Controlli DJ Console & Effetti Audio
         is_dj_phrase = any(
             t_low.startswith(p) for p in (
-                "stop", "stoppa", "ferma", "pausa", "riprendi", "salta", "skip",
+                "stop", "stoppa", "ferma", "fermati", "basta", "zitto", "stai zitto", "muto", "silenzio", "fai silenzio", "taci", "spegni", "smettila", "svuota",
+                "pausa", "riprendi", "salta", "skip",
                 "volume", "alza", "abbassa", "loop", "shuffle", "bassi", "boost",
                 "togli il boost", "attiva il bass boost", "metti in pausa", "metti pausa",
                 "metti in loop", "metti in shuffle", "metti muto"
             )
+        ) or any(
+            w in t_low for w in ("ferma tutto", "stop tutto", "basta musica", "stop musica", "basta parlare", "fai silenzio", "stai zitto", "spegni tutto")
         )
         if (jack_res and jack_res.intent == "dj_control") or is_dj_phrase:
             act = jack_res.extracted_entities.get("action") if jack_res else "general"
+            if act == "general" and any(w in t_low for w in ("stop", "ferma", "stoppa", "fermati", "basta", "zitto", "stai zitto", "muto", "silenzio", "fai silenzio", "spegni", "taci", "smettila", "svuota")):
+                act = "stop"
+            if act == "stop":
+                return {
+                    "intent": "dj_control",
+                    "action": "stop",
+                    "voice_reply": "",
+                    "chat_reply": "",
+                }
             return {
                 "intent": "dj_control",
                 "action": act,

@@ -1132,7 +1132,12 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
             if now - wake_time <= 10.0:
                 raw_followup = command_part if command_part else text.strip()
                 raw_followup = self._clean_transcription(raw_followup)
-                command_part = f"{pending_prefix} {raw_followup}".strip() if pending_prefix else raw_followup
+                rf_low = raw_followup.lower().strip()
+                # Se l'utente ha detto un comando di stop, cancellazione o liveness, non anteporre il prefisso musicale
+                if any(rf_low.startswith(w) for w in ("stop", "stoppa", "basta", "ferma", "fermati", "zitto", "silenzio", "muto", "spegni", "annulla", "niente", "lascia stare", "taci", "smettila")):
+                    command_part = raw_followup
+                else:
+                    command_part = f"{pending_prefix} {raw_followup}".strip() if pending_prefix else raw_followup
                 logger.info(f"🔗 Continuazione comando vocale per {user.display_name}: '{command_part}'")
 
         # NESSUN RICHIAMO A FRANCHINO: Ignora totalmente! Non risponde mai se non viene chiamato per nome.
@@ -1341,19 +1346,16 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
                 not cmd_lower.startswith(("metti ", "riproduci ", "suona ", "play ", "cerca ", "fammi sentire ", "fai partire ", "aggiungi ", "accoda "))
                 and any(
                     cmd_lower.startswith(prefix + " ")
-                    for prefix in ("stop", "stoppa", "ferma", "basta", "zitto", "stai zitto", "spegni")
+                    for prefix in ("stop", "stoppa", "ferma", "fermati", "basta", "zitto", "stai zitto", "spegni", "silenzio", "muto", "taci", "smettila")
                 )
             )
             or any(
                 phrase in cmd_lower
-                for phrase in ("ferma tutto", "basta parlare", "stai zitto", "fai silenzio", "stop tutto", "spegni tutto", "stop musica")
+                for phrase in ("ferma tutto", "basta parlare", "stai zitto", "fai silenzio", "stop tutto", "spegni tutto", "stop musica", "basta musica")
             )
         )
         if is_stop_cmd:
             self.player.stop()
-            await self._notify_channel(
-                f"⏹️ **{user.display_name}** ha detto *\"Franchino {command_part}\"* — Tutto fermato e silenzio assoluto in console! 🔇"
-            )
             return
 
         # 0B. Comando COMANDI / DIMMI I COMANDI / AIUTO -> Inviato in MESSAGGIO PRIVATO (DM)!
@@ -2236,9 +2238,8 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
                     await self._notify_channel(f"🎙️ **{user.display_name}** ha messo in pausa con la voce ⏸️")
                 return
 
-            if q_low in ("in stop", "stop", "muto", "silenzio", "basta"):
+            if q_low in ("in stop", "stop", "muto", "silenzio", "basta", "ferma", "stoppa", "fermati", "zitto", "fai silenzio", "spegni", "taci", "smettila"):
                 self.player.stop()
-                await self._notify_channel(f"⏹️ **{user.display_name}** ha fermato la musica in console! 🔇")
                 return
 
             if q_low in ("in loop", "loop", "ripeti"):
@@ -2375,9 +2376,6 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
             "stop", "stoppa", "basta", "ferma", "fermati", "zitto", "muto", "silenzio", "spegni", "svuota"
         )):
             self.player.stop()
-            await self._notify_channel(
-                f"⏹️ **{user.display_name}** ha detto *\"Franchino {command_part}\"* — Tutto fermato e silenzio assoluto in console! 🔇"
-            )
             return
 
         # 6. Comando LOOP / RIPETI
@@ -3062,9 +3060,8 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
                     self.player.resume()
                     await self._notify_channel(f"🎙️ **{user.display_name}** ha ripreso la musica con la voce ▶️")
                 return True
-            elif act == "stop" or any(w in c_low for w in ("stop", "ferma", "stoppa", "basta", "zitto", "muto")):
+            elif act == "stop" or any(w in c_low for w in ("stop", "ferma", "stoppa", "fermati", "basta", "zitto", "stai zitto", "muto", "silenzio", "fai silenzio", "spegni", "taci", "smettila", "svuota")):
                 self.player.stop()
-                await self._notify_channel(f"⏹️ **{user.display_name}** ha fermato la musica in console! 🔇")
                 return True
             elif act == "skip" or any(w in c_low for w in ("skip", "salta", "prossima", "avanti", "cambia")):
                 if self.player.is_active:

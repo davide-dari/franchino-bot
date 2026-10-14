@@ -145,14 +145,12 @@ async def _check_and_sync_voice_presence():
                     text_ch = _find_default_text_channel(guild, target_vc)
                     await player.connect(target_vc, text_ch)
                     logger.info(f"🎙️ Franchino è entrato automaticamente nella stanza '{target_vc.name}' ({guild.name})")
-                    asyncio.create_task(player.play_entrance_greeting())
                 else:
                     current_humans = _get_human_ids_in_channel(bot_vc.channel)
                     if len(current_humans) == 0 and bot_vc.channel != target_vc:
                         text_ch = _find_default_text_channel(guild, target_vc)
                         await player.connect(target_vc, text_ch)
                         logger.info(f"🎙️ Franchino si è spostato nella stanza popolata '{target_vc.name}' ({guild.name})")
-                        asyncio.create_task(player.play_entrance_greeting())
                     else:
                         player.voice_client = bot_vc
                         player._ensure_voice_listening()
@@ -267,30 +265,27 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
         target_vc = after.channel
         text_ch = _find_default_text_channel(guild, target_vc)
 
-        # Caso A: Franchino non è connesso a nessun canale vocale -> spunta fuori subito!
+        # Caso A: Franchino non è connesso a nessun canale vocale -> si connette subito
         if not bot_vc or not bot_vc.is_connected() or not bot_vc.channel:
             try:
                 await player.connect(target_vc, text_ch)
-                logger.info(f"🎙️ Auto-ingresso immediato nel canale '{target_vc.name}' per accogliere {member.display_name}")
-                asyncio.create_task(player.play_entrance_greeting(member))
+                logger.info(f"🎙️ Auto-ingresso immediato nel canale '{target_vc.name}' per {member.display_name}")
             except Exception as e:
                 logger.warning(f"Errore durante auto-ingresso vocale: {e}")
             return
 
-        # Caso B: Franchino è già nello stesso canale in cui è appena entrato l'utente -> saluta l'utente!
+        # Caso B: Franchino è già nello stesso canale in cui è appena entrato l'utente -> rimane silenzioso
         elif bot_vc.channel == target_vc:
             logger.info(f"🎙️ Utente {member.display_name} entrato nel canale di Franchino '{target_vc.name}'")
-            asyncio.create_task(player.play_entrance_greeting(member))
             return
 
-        # Caso C: Franchino era in un'altra stanza rimasta vuota (o tutti si sono spostati) -> lo segue subito!
+        # Caso C: Franchino era in un'altra stanza rimasta vuota (o tutti si sono spostati) -> lo segue subito
         elif bot_vc.channel != target_vc:
             humans_in_current = _get_human_ids_in_channel(bot_vc.channel, excluding_user_id=member.id)
             if len(humans_in_current) == 0:
                 try:
                     await player.connect(target_vc, text_ch)
                     logger.info(f"🎙️ Franchino ha seguito {member.display_name} nel canale '{target_vc.name}'")
-                    asyncio.create_task(player.play_entrance_greeting(member))
                 except Exception as e:
                     logger.warning(f"Errore spostamento automatico vocale: {e}")
                 return
@@ -317,7 +312,6 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
                 text_ch = _find_default_text_channel(guild, target_vc)
                 await player.connect(target_vc, text_ch)
                 logger.info(f"🎙️ Franchino si è spostato nella stanza popolata '{target_vc.name}'")
-                asyncio.create_task(player.play_entrance_greeting())
             else:
                 logger.info(f"👋 Canale vocale '{bot_vc.channel.name}' rimasto vuoto: Franchino si disconnette subito.")
                 await player.disconnect()
@@ -583,13 +577,18 @@ async def skip(ctx: commands.Context):
 
 @bot.hybrid_command(
     name="stop",
-    aliases=["ferma", "basta", "zitto"],
+    aliases=["ferma", "fermati", "basta", "zitto", "silenzio", "stoppa", "spegni"],
     description="Ferma immediatamente musica, voce di Franchino, effetti e svuota la coda"
 )
 async def stop(ctx: commands.Context):
     player = player_manager.get_player(ctx.guild)
     player.stop()
-    await ctx.send("⏹️ **Tutto fermato da Franchino!** Musica, voce ed effetti interrotti. Console libera e silenziosa. 🔇")
+    if ctx.interaction and not ctx.interaction.response.is_done():
+        await ctx.interaction.response.defer()
+        try:
+            await ctx.interaction.delete_original_response()
+        except Exception:
+            pass
 
 
 @bot.hybrid_command(

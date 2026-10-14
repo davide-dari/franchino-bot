@@ -632,33 +632,8 @@ class GuildPlayer:
             logger.debug(f"Errore ripresa brano interrotto: {e}")
 
     async def play_entrance_greeting(self, member: Optional[discord.Member] = None):
-        """Riproduce un saluto vocale iconico da vero vocalist quando qualcuno entra nel canale."""
-        now = time.monotonic()
-        if (now - self._last_entrance_greeting_time) < 8.0:
-            return  # Evita doppie riproduzioni consecutive o spam di saluti ravvicinati
-        self._last_entrance_greeting_time = now
-
-        if member and member.display_name:
-            clean_name = member.display_name.strip()
-            quotes = [
-                f"Magia ragazzi! Ciao {clean_name}! Franchino è in console con voi! Chiudi gli occhi e vola!",
-                f"Buonasera popolo della notte! Benvenuto {clean_name}! Franchino al microfono, si accende la console!",
-                f"Eccomi qua ragazzi! Ciao {clean_name}! Alziamo le mani al cielo e andiamo a decollare!",
-                f"Sempre presente in console! Ciao {clean_name}, vivere per vivere! Dimmi cosa ti serve stasera!",
-                f"Magia pura! {clean_name} entra in pista e Franchino accende la console! Pronti a volare!",
-            ]
-            chosen_quote = random.choice(quotes)
-        else:
-            chosen_quote = random.choice(FRANCHINO_ENTRANCE_QUOTES)
-
-        logger.info(f"🎙️ Franchino vocalist saluta l'ingresso in stanza: '{chosen_quote}'")
-        try:
-            # Breve attesa per consentire al client Discord dell'utente di negoziare WebRTC e attivare l'audio delle cuffie
-            await asyncio.sleep(0.6)
-            if self.voice_client and self.voice_client.is_connected():
-                await self.speak_tts(chosen_quote, wait=False, interrupt_music=True, dramatic_fable=False)
-        except Exception as e:
-            logger.debug(f"Errore riproduzione saluto vocale d'ingresso: {e}")
+        """Disabilitato: Franchino non saluta più all'ingresso per non disturbare la conversazione vocale."""
+        return
 
     # ==========================================================================
     # Effetti DJ in Tempo Reale (FFmpeg Filter Hot-Swap)
