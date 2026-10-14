@@ -2196,7 +2196,8 @@ def get_outlands_help_embed(page_count: int = 2212, creature_count: int = 1301) 
         name="🌐 UOAddicts & Server Sentinel",
         value=(
             "• *\"Il server è online?\"* o `/status` — Stato server, ping e IP\n"
-            "• *\"Quando si riavvia il server?\"* o `/riavvio` — Countdown riavvio delle 17:00\n"
+            "• *\"Quando si riavvia il server?\"* o `/riavvio` — Info ultima patch e riavvio server\n"
+            "• *\"Ultima patch\"* o `/patch` — Note di rilascio e link al forum Outlands\n"
             "• *\"Build PVM / PVP\"* o `/builds [cat]` — Build più usate da UOAddicts\n"
             "• *\"News Outlands\"* o `/news` — Ultime novità da UOAddicts"
         ),
@@ -2484,6 +2485,7 @@ def is_wiki_question(command_part: str) -> Tuple[bool, str]:
         "quando si riavvia il server", "quando riavvia il server", "riavvio del server", "orario del riavvio",
         "orario riavvio", "build pvm", "build pvp", "build popolari", "build recenti",
         "notizie outlands", "news outlands", "ultime novità outlands", "novità outlands",
+        "patch outlands", "ultima patch", "nuova patch", "patch notes",
     )
     if any(p in cmd_low for p in uo_phrases):
         return True, cmd

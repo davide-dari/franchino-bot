@@ -83,7 +83,7 @@ player_manager = PlayerManager(bot, source_manager)
 
 _presence_loop_task: Optional[asyncio.Task] = None
 _uo_news_task: Optional[asyncio.Task] = None
-_uo_restart_task: Optional[asyncio.Task] = None
+_uo_patch_task: Optional[asyncio.Task] = None
 
 
 def _get_human_ids_in_channel(vc_channel: discord.VoiceChannel, excluding_user_id: Optional[int] = None) -> list[int]:
@@ -205,74 +205,63 @@ async def _uoaddicts_news_monitor_loop(interval_sec: float = 900.0):
         pass
 
 
-async def _uo_daily_restart_alert_loop(check_interval_sec: float = 25.0):
+async def _uo_patch_monitor_loop(check_interval_sec: float = 120.0):
     """
-    Loop di background che controlla l'orario e invia allarmi automatici nel canale #info:
-    - Alle 16:50 (10 minuti prima del riavvio ordinario delle 17:00 / 11:00 AM ET): pre-avviso manutenzione + TTS vocale
-    - Alle 16:55 (5 minuti prima): allarme urgente + TTS vocale
+    Loop di background che monitora il forum ufficiale delle patch di UO Outlands:
+    https://forums.uooutlands.com/index.php?forums/patches.14/
+    Quando viene pubblicata una nuova patch:
+    - Se cita un riavvio/reboot/manutenzione/downtime:
+      * Pubblica un Discord Embed prioritario in #info (o canale annunci)
+      * Effettua annuncio vocale conciso da vocalist nei canali vocali attivi
+    - Altrimenti pubblica la notizia della nuova patch nel canale annunci.
     """
     try:
         await asyncio.sleep(6.0)
         import uo_outlands_service
-        logger.info("⏰ Avviato loop di allerta riavvio ordinario UO Outlands...")
-        alerts_10min_sent = set()
-        alerts_5min_sent = set()
-
+        logger.info("🛠️ Avviato loop di monitoraggio patch UO Outlands con allerta riavvio...")
         while True:
             try:
-                now_ny = datetime.now(uo_outlands_service.TZ_ET)
-                today_ny = now_ny.date()
-                restart_today = datetime.combine(today_ny, dtime(11, 0, 0), tzinfo=uo_outlands_service.TZ_ET)
-                t_10min = restart_today - timedelta(minutes=10)
-                t_5min = restart_today - timedelta(minutes=5)
-
-                restart_rome = restart_today.astimezone(uo_outlands_service.TZ_ROME)
-                time_str = f"alle {restart_rome.strftime('%H:%M')} italiane / 11:00 AM ET"
-
-                # Pre-avviso 10 minuti prima
-                if t_10min <= now_ny < t_5min:
-                    if today_ny not in alerts_10min_sent:
-                        alerts_10min_sent.add(today_ny)
-                        logger.info("⚠️ Invio allerta riavvio 10 minuti per UO Outlands!")
-                        embed = uo_outlands_service.build_restart_alert_embed(minutes_left=10, target_time_str=time_str)
-                        voice_msg = uo_outlands_service.build_restart_alert_voice(minutes_left=10)
-                        for guild in bot.guilds:
-                            ch = uo_outlands_service.resolve_announcement_channel(guild)
-                            if ch:
-                                try:
-                                    await ch.send(content="⚠️ **Attenzione avventurieri! Riavvio ordinario del server tra 10 minuti!**", embed=embed)
-                                except Exception as e:
-                                    logger.warning(f"Errore invio alert 10m a {guild.name}: {e}")
-                            player = player_manager.get_player(guild)
-                            if player and player.voice_client and player.voice_client.is_connected():
-                                asyncio.create_task(player.speak_tts(voice_msg, wait=False, interrupt_music=True))
-
-                # Allarme urgente 5 minuti prima
-                elif t_5min <= now_ny < restart_today:
-                    if today_ny not in alerts_5min_sent:
-                        alerts_5min_sent.add(today_ny)
-                        logger.info("🚨 Invio allerta riavvio 5 minuti per UO Outlands!")
-                        embed = uo_outlands_service.build_restart_alert_embed(minutes_left=5, target_time_str=time_str)
-                        voice_msg = uo_outlands_service.build_restart_alert_voice(minutes_left=5)
-                        for guild in bot.guilds:
-                            ch = uo_outlands_service.resolve_announcement_channel(guild)
-                            if ch:
-                                try:
-                                    await ch.send(content="🚨 **ULTIMO AVVISO! Riavvio ordinario del server tra 5 minuti!**", embed=embed)
-                                except Exception as e:
-                                    logger.warning(f"Errore invio alert 5m a {guild.name}: {e}")
-                            player = player_manager.get_player(guild)
-                            if player and player.voice_client and player.voice_client.is_connected():
-                                asyncio.create_task(player.speak_tts(voice_msg, wait=False, interrupt_music=True))
-
-                # Pulizia date vecchie
-                if len(alerts_10min_sent) > 5:
-                    alerts_10min_sent = {today_ny}
-                if len(alerts_5min_sent) > 5:
-                    alerts_5min_sent = {today_ny}
-
+                new_patches = await uo_outlands_service.patch_service.check_for_new_patches()
+                if new_patches:
+                    logger.info(f"🛠️ Rilevate {len(new_patches)} nuove patch su UO Outlands!")
+                    for patch in new_patches:
+                        if patch.mentions_restart:
+                            logger.info(f"⚠️ Nuova patch con RIAVVIO CITATO: {patch.title}")
+                            embed = uo_outlands_service.build_patch_restart_alert_embed(patch)
+                            for guild in bot.guilds:
+                                ch = uo_outlands_service.resolve_announcement_channel(guild)
+                                if ch:
+                                    try:
+                                        await ch.send(
+                                            content=f"⚠️ **Riavvio Server per Nuova Patch!**\n> **{patch.title}**",
+                                            embed=embed,
+                                        )
+                                    except Exception as e:
+                                        logger.warning(f"Errore invio alert patch restart a {guild.name}: {e}")
+                                player = player_manager.get_player(guild)
+                                if player and player.voice_client and player.voice_client.is_connected():
+                                    asyncio.create_task(
+                                        player.speak_tts(
+                                            uo_outlands_service.VOICE_ALERT_PATCH_RESTART,
+                                            wait=False,
+                                            interrupt_music=True,
+                                        )
+                                    )
+                        else:
+                            logger.info(f"🛠️ Nuova patch (senza riavvio): {patch.title}")
+                            embed = uo_outlands_service.build_patch_embed(patch)
+                            for guild in bot.guilds:
+                                ch = uo_outlands_service.resolve_announcement_channel(guild)
+                                if ch:
+                                    try:
+                                        await ch.send(
+                                            content=f"🛠️ **Nuova Patch Annunciata per UO Outlands!**\n> **{patch.title}**",
+                                            embed=embed,
+                                        )
+                                    except Exception as e:
+                                        logger.warning(f"Errore invio patch a {guild.name}: {e}")
             except Exception as e:
-                logger.error(f"Errore nel loop alert riavvio Outlands: {e}")
+                logger.error(f"Errore nel loop monitoraggio patch Outlands: {e}")
             await asyncio.sleep(check_interval_sec)
     except asyncio.CancelledError:
         pass
@@ -283,7 +272,7 @@ async def _uo_daily_restart_alert_loop(check_interval_sec: float = 25.0):
 # ==========================================
 @bot.event
 async def on_ready():
-    global _presence_loop_task, _uo_news_task, _uo_restart_task
+    global _presence_loop_task, _uo_news_task, _uo_patch_task
     logger.info("==========================================")
     logger.info(f"Franchino è online come: {bot.user} (ID: {bot.user.id})")
     logger.info(f"Prefisso comandi testuali: {COMMAND_PREFIX}")
@@ -297,12 +286,12 @@ async def on_ready():
     if _presence_loop_task is None or _presence_loop_task.done():
         _presence_loop_task = asyncio.create_task(_voice_room_presence_loop())
 
-    # 2b. Avvia i guardiani di monitoraggio UO Outlands (News UOAddicts e Daily Restart Alert)
+    # 2b. Avvia i guardiani di monitoraggio UO Outlands (News UOAddicts e Official Patches Monitor)
     if _uo_news_task is None or _uo_news_task.done():
         _uo_news_task = asyncio.create_task(_uoaddicts_news_monitor_loop())
 
-    if _uo_restart_task is None or _uo_restart_task.done():
-        _uo_restart_task = asyncio.create_task(_uo_daily_restart_alert_loop())
+    if _uo_patch_task is None or _uo_patch_task.done():
+        _uo_patch_task = asyncio.create_task(_uo_patch_monitor_loop())
 
     # 3. Sincronizza i comandi slash in background (così eventuali rate-limit Discord non bloccano mai la voce)
     asyncio.create_task(_sync_slash_commands_bg())
@@ -1069,13 +1058,21 @@ async def _handle_outlands_query(ctx: commands.Context, domanda: str):
             asyncio.create_task(player.speak_tts(s_res.voice_text(), wait=False, interrupt_music=True))
         return
 
-    if domanda_low in ("riavvio", "restart", "manutenzione", "quando riavvia", "orario riavvio"):
+    if domanda_low in ("riavvio", "restart", "manutenzione", "quando riavvia", "orario riavvio", "patch", "patches", "ultima patch"):
         import uo_outlands_service
-        r_info = uo_outlands_service.get_next_restart_info()
-        await ctx.send(embed=r_info.build_embed())
+        is_patch = domanda_low in ("patch", "patches", "ultima patch")
+        if is_patch:
+            patch = await uo_outlands_service.patch_service.get_latest_patch()
+        else:
+            patch = await uo_outlands_service.patch_service.get_latest_restart_patch()
+            if not patch:
+                patch = await uo_outlands_service.patch_service.get_latest_patch()
+        p_embed = uo_outlands_service.build_patch_embed(patch)
+        await ctx.send(embed=p_embed)
         player = player_manager.get_player(ctx.guild)
         if player and player.voice_client and player.voice_client.is_connected():
-            asyncio.create_task(player.speak_tts(r_info.voice_text(), wait=False, interrupt_music=True))
+            v_text = patch.voice_text()
+            asyncio.create_task(player.speak_tts(v_text, wait=False, interrupt_music=True))
         return
 
     if domanda_low in ("build", "builds", "builds popolari", "build popolari") or any(k in domanda_low for k in ("build pvm", "build pvp", "build popolari", "build recenti", "build uoaddicts", "build più usate", "build piu usate")):
@@ -1289,18 +1286,42 @@ async def server_cmd(ctx: commands.Context):
 @bot.hybrid_command(
     name="riavvio",
     aliases=["server_riavvio", "server_restart", "uo_restart", "outlands_restart"],
-    description="Mostra il conto alla rovescia del prossimo riavvio di UO Outlands (ore 17:00)"
+    description="Mostra le informazioni sul riavvio del server e l'ultima patch di UO Outlands"
 )
 async def riavvio_cmd(ctx: commands.Context):
-    """Mostra l'orario del riavvio ordinario giornaliero e il conto alla rovescia."""
+    """Mostra l'ultima patch annunciata, l'eventuale riavvio citato e il link diretto al forum."""
     await ctx.defer()
     import uo_outlands_service
-    info = uo_outlands_service.get_next_restart_info()
-    embed = info.build_embed()
+    patch = await uo_outlands_service.patch_service.get_latest_restart_patch()
+    if not patch:
+        patch = await uo_outlands_service.patch_service.get_latest_patch()
+    embed = uo_outlands_service.build_patch_embed(patch)
     await ctx.send(embed=embed)
     player = player_manager.get_player(ctx.guild)
     if player and player.voice_client and player.voice_client.is_connected():
-        asyncio.create_task(player.speak_tts(info.voice_text(), wait=False, interrupt_music=True))
+        v_text = patch.voice_text()
+        asyncio.create_task(player.speak_tts(v_text, wait=False, interrupt_music=True))
+
+
+@bot.hybrid_command(
+    name="patch",
+    aliases=["patches", "patchnotes", "patch_notes", "ultimapatch", "outlands_patch"],
+    description="Mostra l'ultima patch ufficiale di UO Outlands con note, link al forum e stato riavvio"
+)
+async def patch_cmd(ctx: commands.Context):
+    """Mostra l'ultima patch annunciata, l'eventuale riavvio citato e il link diretto al forum."""
+    await ctx.defer()
+    import uo_outlands_service
+    patch = await uo_outlands_service.patch_service.get_latest_patch()
+    embed = uo_outlands_service.build_patch_embed(patch)
+    await ctx.send(embed=embed)
+    player = player_manager.get_player(ctx.guild)
+    if player and player.voice_client and player.voice_client.is_connected():
+        if patch.mentions_restart:
+            v_text = uo_outlands_service.VOICE_ALERT_PATCH_RESTART
+        else:
+            v_text = f"L'ultima patch pubblicata per Outlands è {patch.title}. Ho inviato i dettagli e il link in chat!"
+        asyncio.create_task(player.speak_tts(v_text, wait=False, interrupt_music=True))
 
 
 @bot.hybrid_command(

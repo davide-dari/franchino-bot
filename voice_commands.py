@@ -2070,25 +2070,36 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
             )
             return
 
-        # 0C-ter-2. UO Outlands RIAVVIO ORDINARIO ("quando si riavvia il server?", "riavvio server", ecc.)
+        # 0C-ter-2. UO Outlands RIAVVIO SERVER / PATCH RESTART ("quando si riavvia il server?", "riavvio server", "patch", ecc.)
         restart_triggers = (
             "quando si riavvia il server", "quando riavvia il server", "quando c'è il riavvio",
             "quando ce il riavvio", "a che ora si riavvia il server", "a che ora riavvia il server",
             "orario riavvio", "orario del riavvio", "riavvio server", "riavvio del server",
-            "riavvio ordinario", "restart server", "quando riavviano", "prossimo riavvio"
+            "riavvio ordinario", "restart server", "quando riavviano", "prossimo riavvio",
+            "quando riavvia", "patch outlands", "ultima patch", "nuova patch"
         )
         if any(tr in cmd_p_low for tr in restart_triggers) or (
-            ("server" in cmd_p_low or "outlands" in cmd_p_low) and any(w in cmd_p_low for w in ("riavvio", "riavvia", "restart", "manutenzione"))
+            ("server" in cmd_p_low or "outlands" in cmd_p_low) and any(w in cmd_p_low for w in ("riavvio", "riavvia", "restart", "manutenzione", "patch"))
         ):
-            logger.info(f"⏰ Richiesta Riavvio Server Outlands da {user.display_name}: '{command_part}'")
+            logger.info(f"⏰ Richiesta Riavvio/Patch Server Outlands da {user.display_name}: '{command_part}'")
             import uo_outlands_service
-            info = uo_outlands_service.get_next_restart_info()
+            is_patch_direct = any(w in cmd_p_low for w in ("patch outlands", "ultima patch", "nuova patch", "patch notes"))
+            if is_patch_direct:
+                patch = await uo_outlands_service.patches_service.get_latest_patch()
+                notify_title = f"🛠️ **{user.display_name}** ha chiesto informazioni sull'ultima patch di **UO Outlands**:"
+            else:
+                patch = await uo_outlands_service.patches_service.get_latest_restart_patch()
+                if not patch:
+                    patch = await uo_outlands_service.patches_service.get_latest_patch()
+                notify_title = f"🔄 **{user.display_name}** ha chiesto informazioni sul riavvio del server di **UO Outlands**:"
+
             await self._notify_channel(
-                f"🔄 **{user.display_name}** ha chiesto informazioni sul riavvio del server di **UO Outlands**:",
-                embed=info.build_embed()
+                notify_title,
+                embed=patch.build_embed()
             )
+            v_text = patch.voice_text()
             asyncio.create_task(
-                self.player.speak_tts(info.voice_text(), wait=False, interrupt_music=True, keep_paused_after=False)
+                self.player.speak_tts(v_text, wait=False, interrupt_music=True, keep_paused_after=False)
             )
             from central_hub import hub
             asyncio.create_task(
@@ -2097,10 +2108,10 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
                     user_name=user.display_name,
                     raw_query=command_part,
                     intent="uo_server_restart",
-                    ai_response="UO Outlands Daily Restart",
-                    voice_summary=info.voice_text(),
+                    ai_response="UO Outlands Patch & Restart Info",
+                    voice_summary=v_text,
                     channel_name=self.player.text_channel.name if self.player.text_channel else None,
-                    metadata={"hours": info.hours, "minutes": info.minutes}
+                    metadata={"patch_id": getattr(patch, "id", ""), "patch_title": getattr(patch, "title", ""), "mentions_restart": getattr(patch, "mentions_restart", False)}
                 )
             )
             return

@@ -1,11 +1,11 @@
 """
 test_uo_outlands_uoaddicts.py
 =============================
-Suite di test completa per le 4 nuove funzionalità di UO Outlands & UOAddicts:
+Suite di test completa per le funzionalità di UO Outlands & UOAddicts:
 1. News UOAddicts Auto-Poster & Cache
 2. UOAddicts Builds Scraper & Browser (PVM, PVP, Popolari, Recenti)
 3. Server Status Check (TCP socket, latenza ping, Ashburn WV, fallback IP)
-4. Daily Server Restart Manager & Allerte (10m e 5m prima, countdown 11:00 AM ET / 17:00 IT)
+4. Official Patches Monitor & Restart Alerts (Forum & RSS scraper, restart detection, cache atomica)
 5. Integrazione Comandi Vocali, Jack Math Engine e Outlands Wiki
 """
 
@@ -29,20 +29,31 @@ from uo_outlands_service import (
     UOAddictsNewsItem,
     UOAddictsBuildItem,
     ServerStatusResult,
-    RestartInfo,
+    UOPatchItem,
+    PatchItem,
     UOAddictsNewsService,
     UOAddictsBuildsService,
+    UOPatchMonitorService,
+    PatchesService,
     parse_news_html,
     parse_builds_html,
+    parse_patches_rss,
+    parse_patches_html,
+    extract_thread_first_post,
+    detect_restart_mention,
     check_uo_server_status,
-    get_next_restart_info,
-    build_restart_alert_embed,
-    build_restart_alert_voice,
+    build_patch_embed,
+    build_patch_restart_alert_embed,
     resolve_announcement_channel,
     build_news_embed,
     build_news_list_embed,
     build_builds_embed,
     build_single_build_embed,
+    clean_html,
+    VOICE_ALERT_PATCH_RESTART,
+    RESTART_KEYWORDS,
+    RESTART_PATTERNS,
+    FALLBACK_PATCH_ITEMS,
     TZ_ET,
     TZ_ROME,
     UO_SERVER_HOST,
@@ -150,6 +161,46 @@ SAMPLE_BUILDS_HTML = """
       <div class="not-input">Alive Mage</div>
     </div>
   </a>
+</div>
+</body>
+</html>
+"""
+
+SAMPLE_PATCHES_RSS = """<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:content="http://purl.org/rss/1.0/modules/content/">
+  <channel>
+    <title>UO Outlands - Patches</title>
+    <link>https://forums.uooutlands.com/index.php?forums/patches.14/</link>
+    <description>Patch notes and updates for Ultima Online Outlands</description>
+    <item>
+      <title>Patch Notes for October 14, 2026 - Server Restart</title>
+      <pubDate>Wed, 14 Oct 2026 15:30:00 +0000</pubDate>
+      <link>https://forums.uooutlands.com/index.php?threads/patch-notes-for-october-14-2026.6380/</link>
+      <guid isPermaLink="false">6380</guid>
+      <dc:creator>Owyn</dc:creator>
+      <content:encoded><![CDATA[<p>Patch Notes for today:</p><p>We will be restarting the server at 16:00 UTC for patch deploy. Downtime is expected to be 15 minutes.</p><p>Bug fixes and quality of life updates.</p>]]></content:encoded>
+    </item>
+    <item>
+      <title>Patch Notes for October 10, 2026</title>
+      <pubDate>Sat, 10 Oct 2026 12:00:00 +0000</pubDate>
+      <link>https://forums.uooutlands.com/index.php?threads/patch-notes-for-october-10-2026.6375/</link>
+      <guid isPermaLink="false">6375</guid>
+      <dc:creator>Luthius</dc:creator>
+      <content:encoded><![CDATA[<p>Client side cosmetic updates and wiki link corrections. Good luck in dungeons!</p>]]></content:encoded>
+    </item>
+  </channel>
+</rss>
+"""
+
+SAMPLE_PATCHES_HTML = """
+<!DOCTYPE html>
+<html>
+<body>
+<div class="structItem-title">
+  <a href="/index.php?threads/patch-notes-for-october-14-2026.6380/">Patch Notes for October 14, 2026 - Server Restart</a>
+</div>
+<div class="structItem-title">
+  <a href="/index.php?threads/patch-notes-for-october-10-2026.6375/">Patch Notes for October 10, 2026</a>
 </div>
 </body>
 </html>
@@ -413,60 +464,273 @@ class TestServerStatusCheck(unittest.IsolatedAsyncioTestCase):
 
 
 # ==============================================================================
-# 4. TEST FEATURE 4: DAILY SERVER RESTART MANAGER & ALERTS
+# 4. TEST FEATURE 4: OFFICIAL PATCHES MONITOR & RESTART ALERTS
 # ==============================================================================
 
-class TestDailyServerRestart(unittest.TestCase):
-    """Test del calcolo del countdown del riavvio ordinario delle 11:00 AM ET (17:00 IT)."""
+class TestUOPatchesAndRestartService(unittest.IsolatedAsyncioTestCase):
+    """Test del monitoraggio patch ufficiale Outlands, scraping RSS/HTML, rilevamento riavvii e notifiche."""
 
-    def test_restart_before_11am_et(self):
-        # Ore 08:30 AM ET del 14 Ottobre 2026 -> riavvio previsto per le 11:00 AM ET di OGGI (2h 30m)
-        mock_now_ny = datetime(2026, 10, 14, 8, 30, 0, tzinfo=TZ_ET)
-        info = get_next_restart_info(current_time_ny=mock_now_ny)
+    def test_detect_restart_mention_positive(self):
+        # Nel testo con varie coniugazioni ed espressioni reali
+        res, snip = detect_restart_mention("Patch Notes 10.5", "The server restart will happen at 16:00 UTC.")
+        self.assertTrue(res)
+        self.assertIn("server restart", snip.lower())
 
-        self.assertEqual(info.hours, 2)
-        self.assertEqual(info.minutes, 30)
-        self.assertEqual(info.seconds, 0)
-        self.assertEqual(info.next_restart_ny.hour, 11)
-        self.assertEqual(info.next_restart_ny.day, 14)
-        self.assertEqual(info.next_restart_rome.hour, 17)
-        self.assertIn("2 ore e 30 minuti", info.voice_text())
+        res2, snip2 = detect_restart_mention("Emergency maintenance", "Routine bug fixes.")
+        self.assertTrue(res2)
+        self.assertIn("maintenance", snip2.lower())
 
-    def test_restart_after_11am_et(self):
-        # Ore 14:00 (2:00 PM) ET del 14 Ottobre 2026 -> riavvio previsto per DOMANI alle 11:00 AM ET (21h rimanenti)
-        mock_now_ny = datetime(2026, 10, 14, 14, 0, 0, tzinfo=TZ_ET)
-        info = get_next_restart_info(current_time_ny=mock_now_ny)
+        res3, snip3 = detect_restart_mention("Update", "Taking the server down for 30 minutes.")
+        self.assertTrue(res3)
+        self.assertIn("taking the server down", snip3.lower())
 
-        self.assertEqual(info.hours, 21)
-        self.assertEqual(info.minutes, 0)
-        self.assertEqual(info.next_restart_ny.day, 15)
-        self.assertEqual(info.next_restart_rome.hour, 17)
+        # Coniugazione passata in inglese (restarted)
+        res4, snip4 = detect_restart_mention("Patch Notes", "The server will be restarted at 2:00 PM EST for deploy.")
+        self.assertTrue(res4)
+        self.assertIn("server will be restarted", snip4.lower())
 
-    def test_restart_alert_10min(self):
-        embed = build_restart_alert_embed(10)
-        voice = build_restart_alert_voice(10)
+        # Coniugazione presente (restarts)
+        res5, snip5 = detect_restart_mention("Patch Notes", "Server restarts at 2pm.")
+        self.assertTrue(res5)
+        self.assertIn("restarts", snip5.lower())
 
-        self.assertIn("10 Minuti", embed.title)
-        self.assertEqual(embed.color.value, 0xF39C12)
-        self.assertIn("dieci minuti", voice.lower())
+        # Italiano: "Il server si riavvia"
+        res6, snip6 = detect_restart_mention("Patch Notes", "Il server si riavvia alle 18:00 per manutenzione.")
+        self.assertTrue(res6)
+        self.assertIn("riavvia", snip6.lower())
 
-    def test_restart_alert_5min(self):
-        embed = build_restart_alert_embed(5)
-        voice = build_restart_alert_voice(5)
+        # "The server will be coming down"
+        res7, snip7 = detect_restart_mention("Patch Notes", "The server will be coming down at 11am for the patch.")
+        self.assertTrue(res7)
+        self.assertIn("coming down", snip7.lower())
 
-        self.assertIn("5 Minuti", embed.title)
-        self.assertIn("ULTIMO AVVISO", embed.description)
-        self.assertEqual(embed.color.value, 0xE74C3C)
-        self.assertIn("cinque minuti", voice.lower())
+    def test_detect_restart_mention_negative_and_client_only(self):
+        # Patch ordinaria senza riavvio
+        res, snip = detect_restart_mention("Patch Notes 10.6", "Adjusted skill gain rates and monster spawn timers.")
+        self.assertFalse(res)
+        self.assertEqual(snip, "")
 
-    def test_restart_embed_fields(self):
-        mock_now_ny = datetime(2026, 10, 14, 10, 45, 0, tzinfo=TZ_ET)
-        info = get_next_restart_info(current_time_ny=mock_now_ny)
-        embed = info.build_embed()
+        # Falso positivo prevenuto: riavvio solo client di gioco
+        res_cl1, snip_cl1 = detect_restart_mention("Art Update", "You will need to restart your client to see the new art files.")
+        self.assertFalse(res_cl1)
+        self.assertEqual(snip_cl1, "")
 
-        self.assertIn("Riavvio Ordinario", embed.title)
-        self.assertTrue(any("11:00 AM ET" in f.value for f in embed.fields))
-        self.assertTrue(any("15m" in f.value for f in embed.fields))
+        res_cl2, snip_cl2 = detect_restart_mention("Patch", "Client restart required to apply UI updates.")
+        self.assertFalse(res_cl2)
+        self.assertEqual(snip_cl2, "")
+
+    def test_detect_restart_mention_cooccurrence_server_and_client(self):
+        # Se sono presenti sia server restart sia client restart, deve rilevare il server restart
+        text = "The server will restart at 2:00 PM EST.\nPlease restart your client to receive the updated files."
+        res, snip = detect_restart_mention("Patch", text)
+        self.assertTrue(res)
+        self.assertIn("server will restart", snip.lower())
+
+    def test_clean_html_helper(self):
+        raw = "<p>Title</p><br/><div>Line 2 &amp; more</div>"
+        cleaned = clean_html(raw)
+        self.assertIn("Title\nLine 2 & more", cleaned)
+
+    def test_extract_thread_first_post(self):
+        thread_html = (
+            "<html><body>"
+            "<article class=\"message-body js-selectToQuote\">"
+            "<script>some_script();</script>"
+            "<div class=\"bbWrapper\"><b>Patch Notes:</b><br/>Server restart scheduled at 14:00.</div>"
+            "</article>"
+            "</body></html>"
+        )
+        extracted = extract_thread_first_post(thread_html)
+        self.assertIn("Patch Notes:", extracted)
+        self.assertIn("Server restart scheduled at 14:00.", extracted)
+        self.assertNotIn("some_script", extracted)
+
+    async def test_enrich_patch_content_if_needed(self):
+        service = UOPatchMonitorService()
+        patch_truncated = UOPatchItem(
+            id="999",
+            title="October Mega Patch",
+            url="https://forums.uooutlands.com/index.php?threads/october-mega-patch.999/",
+            published="Wed, 14 Oct 2026",
+            content="Summary of changes... <a href=\"#\">Read more</a>",
+            mentions_restart=False,
+        )
+        fake_thread_html = (
+            "<article class=\"message-body js-selectToQuote\">"
+            "<div class=\"bbWrapper\">Full patch notes here.<br/>The server will be restarted at 18:00 UTC.</div>"
+            "</article>"
+        )
+        with patch("uo_outlands_service.fetch_html", new_callable=AsyncMock, return_value=fake_thread_html):
+            enriched = await service.enrich_patch_content_if_needed(patch_truncated)
+            self.assertTrue(enriched.mentions_restart)
+            self.assertIn("server will be restarted", enriched.restart_details.lower())
+
+    def test_parse_patches_rss_standard_xml(self):
+        items = parse_patches_rss(SAMPLE_PATCHES_RSS)
+        self.assertEqual(len(items), 2)
+        p1, p2 = items[0], items[1]
+
+        self.assertEqual(p1.id, "6380")
+        self.assertIn("October 14, 2026", p1.title)
+        self.assertEqual(p1.author, "Owyn")
+        self.assertTrue(p1.mentions_restart)
+        self.assertIn("server restart", p1.restart_details.lower())
+
+        self.assertEqual(p2.id, "6375")
+        self.assertIn("October 10, 2026", p2.title)
+        self.assertEqual(p2.author, "Luthius")
+        self.assertFalse(p2.mentions_restart)
+
+    def test_parse_patches_rss_malformed_xml_regex_fallback(self):
+        # XML non valido per ElementTree standard (fallback regex)
+        malformed = (
+            "<rss><channel><item>"
+            "<title><![CDATA[Emergency Patch - Server Reboot]]></title>"
+            "<link>https://forums.uooutlands.com/threads/emergency.5555/</link>"
+            "<guid>5555</guid>"
+            "<pubDate>Wed, 14 Oct 2026 12:00:00 +0000</pubDate>"
+            "<content:encoded><![CDATA[Immediate server reboot required for hotfix.]]></content:encoded>"
+            "</item></channel>"
+        )
+        items = parse_patches_rss(malformed)
+        self.assertGreaterEqual(len(items), 1)
+        self.assertEqual(items[0].id, "5555")
+        self.assertIn("Emergency Patch", items[0].title)
+        self.assertTrue(items[0].mentions_restart)
+
+    def test_parse_patches_html(self):
+        items = parse_patches_html(SAMPLE_PATCHES_HTML)
+        self.assertEqual(len(items), 2)
+        self.assertEqual(items[0].id, "6380")
+        self.assertTrue(items[0].mentions_restart)
+        self.assertEqual(items[1].id, "6375")
+        self.assertFalse(items[1].mentions_restart)
+
+    def test_parse_patches_html_full_xenforo_structure(self):
+        full_html = (
+            "<div class=\"structItem-cell structItem-cell--main\">"
+            "<div class=\"structItem-title\">"
+            "<a href=\"/index.php?forums/patches.14/&amp;prefix_id=4\">PATCH</a>"
+            "<a href=\"/index.php?threads/patch-notes-for-october-12-2026.6370/\">Patch Notes for October 12, 2026</a>"
+            "</div>"
+            "<div class=\"structItem-minor\">"
+            "<ul class=\"structItem-parts\">"
+            "<li><a href=\"/index.php?members/luthius.6/\">Luthius</a></li>"
+            "<li><time class=\"u-dt\" datetime=\"2026-10-12T13:48:58-0400\" title=\"Oct 12, 2026\">Monday</time></li>"
+            "</ul>"
+            "</div>"
+            "</div>"
+        )
+        items = parse_patches_html(full_html)
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0].id, "6370")
+        self.assertEqual(items[0].title, "Patch Notes for October 12, 2026")
+        self.assertEqual(items[0].author, "Luthius")
+        self.assertIn("2026-10-12", items[0].published)
+
+    async def test_check_for_new_patches_first_run_initializes_cache(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cache_file = os.path.join(tmpdir, "patches_cache.json")
+            service = UOPatchMonitorService(cache_file=cache_file)
+
+            with patch.object(service, "fetch_patches", new_callable=AsyncMock) as mock_fetch:
+                mock_fetch.return_value = [
+                    UOPatchItem("101", "Patch 1", "https://url1", "date", "content"),
+                    UOPatchItem("102", "Patch 2", "https://url2", "date", "content"),
+                ]
+                new_patches = await service.check_for_new_patches()
+                # Al primo avvio assoluto restituisce [] per prevenire spam di massa
+                self.assertEqual(new_patches, [])
+                self.assertTrue(os.path.exists(cache_file))
+
+                cache_data = service.load_cache()
+                self.assertEqual(cache_data["seen_ids"], ["101", "102"])
+                self.assertIsNotNone(cache_data["latest_patch"])
+
+    async def test_check_for_new_patches_subsequent_run_finds_new(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cache_file = os.path.join(tmpdir, "patches_cache.json")
+            service = UOPatchMonitorService(cache_file=cache_file)
+            service.save_cache({"seen_ids": ["102"], "latest_patch": None, "last_updated": 0})
+
+            with patch.object(service, "fetch_patches", new_callable=AsyncMock) as mock_fetch:
+                mock_fetch.return_value = [
+                    UOPatchItem("101", "New Patch 101", "https://url1", "date", "content"),
+                    UOPatchItem("102", "Old Patch 102", "https://url2", "date", "content"),
+                ]
+                new_patches = await service.check_for_new_patches()
+                self.assertEqual(len(new_patches), 1)
+                self.assertEqual(new_patches[0].id, "101")
+
+                cache_data = service.load_cache()
+                self.assertIn("101", cache_data["seen_ids"])
+                self.assertIn("102", cache_data["seen_ids"])
+
+    async def test_get_latest_restart_patch(self):
+        service = UOPatchMonitorService()
+        p_restart = UOPatchItem("1", "Patch with Restart", "url", "date", "restart", mentions_restart=True)
+        p_normal = UOPatchItem("2", "Normal Patch", "url", "date", "normal", mentions_restart=False)
+
+        with patch.object(service, "fetch_patches", new_callable=AsyncMock) as mock_fetch:
+            # Caso 1: C'è una patch con riavvio
+            mock_fetch.return_value = [p_normal, p_restart]
+            res = await service.get_latest_restart_patch()
+            self.assertIsNotNone(res)
+            self.assertEqual(res.id, "1")
+
+            # Caso 2: Nessuna patch cita riavvio
+            mock_fetch.return_value = [p_normal]
+            with patch.object(service, "load_cache", return_value={}):
+                res_none = await service.get_latest_restart_patch()
+                self.assertIsNone(res_none)
+
+    async def test_get_latest_patch_fallback(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cache_file = os.path.join(tmpdir, "nonexistent.json")
+            service = UOPatchMonitorService(cache_file=cache_file)
+            with patch.object(service, "fetch_patches", new_callable=AsyncMock, return_value=[]):
+                fallback = await service.get_latest_patch()
+                self.assertIsNotNone(fallback)
+                self.assertEqual(fallback.id, FALLBACK_PATCH_ITEMS[0].id)
+
+    def test_build_patch_embed_with_and_without_restart(self):
+        p_restart = UOPatchItem("1", "Patch 1", "https://url", "date", "notes", mentions_restart=True, restart_details="Reboot at 16:00")
+        emb_r = build_patch_embed(p_restart)
+        self.assertIn("Patch 1", emb_r.title)
+        self.assertEqual(emb_r.color.value, 0xF39C12)  # COLOR_WARNING
+        self.assertTrue(any("RIAVVIO CITATO" in f.value for f in emb_r.fields))
+
+        p_no_restart = UOPatchItem("2", "Patch 2", "https://url", "date", "notes", mentions_restart=False)
+        emb_nr = build_patch_embed(p_no_restart)
+        self.assertIn("Patch 2", emb_nr.title)
+        self.assertEqual(emb_nr.color.value, 0x3498DB)  # COLOR_INFO
+        self.assertTrue(any("Nessun riavvio automatico" in f.value for f in emb_nr.fields))
+
+    def test_build_patch_restart_alert_embed(self):
+        p = UOPatchItem("10", "Dungeon Expansion Patch", "https://forums.uooutlands.com/threads/10/", "date", "notes", mentions_restart=True, restart_details="Server reboot at 18:00")
+        emb = build_patch_restart_alert_embed(p)
+        self.assertIn("Riavvio Server", emb.title)
+        self.assertIn("Dungeon Expansion Patch", emb.title)
+        self.assertEqual(emb.color.value, 0xF39C12)
+        self.assertTrue(any("Raccomandazione" in f.name for f in emb.fields))
+
+    def test_patch_item_voice_text(self):
+        p1 = UOPatchItem("1", "Halloween Patch", "url", "date", "notes", mentions_restart=True)
+        self.assertIn("riavvio del server", p1.voice_text().lower())
+
+        p2 = UOPatchItem("2", "Bug Fix Patch", "url", "date", "notes", mentions_restart=False)
+        self.assertIn("non ci sono riavvii fissi", p2.voice_text().lower())
+
+    def test_patch_item_build_embed(self):
+        p = UOPatchItem("1", "Test Patch", "url", "date", "notes", mentions_restart=False)
+        emb = p.build_embed()
+        self.assertIn("Test Patch", emb.title)
+
+    def test_patch_item_to_from_dict(self):
+        p = UOPatchItem("100", "Title", "url", "date", "content", True, "Details", "Author")
+        d = p.to_dict()
+        p2 = UOPatchItem.from_dict(d)
+        self.assertEqual(p, p2)
 
 
 # ==============================================================================
@@ -564,21 +828,62 @@ class TestVoiceCommandsExecution(unittest.IsolatedAsyncioTestCase):
             self.assertIn("ONLINE", call_kwargs["embed"].title)
 
     async def test_voice_server_restart(self):
-        mock_info = RestartInfo(
-            next_restart_ny=datetime(2026, 10, 14, 11, 0, 0, tzinfo=TZ_ET),
-            next_restart_rome=datetime(2026, 10, 14, 17, 0, 0, tzinfo=TZ_ROME),
-            time_remaining=timedelta(hours=2, minutes=15),
-            hours=2,
-            minutes=15,
-            seconds=0,
+        mock_patch = UOPatchItem(
+            id="6380",
+            title="Patch Notes 10.9 - Server Restart",
+            url="https://forums.uooutlands.com/threads/6380/",
+            published="Wed, 14 Oct 2026 15:30:00",
+            content="Server rebooting for patch deploy",
+            mentions_restart=True,
+            restart_details="Server rebooting for patch deploy",
         )
-        with patch("uo_outlands_service.get_next_restart_info", return_value=mock_info):
+        with patch.object(uo_outlands_service.patches_service, "get_latest_restart_patch", new_callable=AsyncMock) as mock_rp:
+            mock_rp.return_value = mock_patch
             await self.sink._handle_transcribed_text(self.user, "hey franchino quando si riavvia il server?")
 
             self.sink._notify_channel.assert_awaited()
             call_kwargs = self.sink._notify_channel.call_args.kwargs
             self.assertIn("embed", call_kwargs)
-            self.assertIn("Riavvio Ordinario", call_kwargs["embed"].title)
+            self.assertIn("Patch Notes", call_kwargs["embed"].title)
+
+    async def test_voice_server_restart_fallback_latest_patch(self):
+        mock_patch = UOPatchItem(
+            id="6375",
+            title="Patch Notes 10.8",
+            url="https://forums.uooutlands.com/threads/6375/",
+            published="Sat, 10 Oct 2026 12:00:00",
+            content="Regular bug fixes",
+            mentions_restart=False,
+        )
+        with patch.object(uo_outlands_service.patches_service, "get_latest_restart_patch", new_callable=AsyncMock) as mock_rp, \
+             patch.object(uo_outlands_service.patches_service, "get_latest_patch", new_callable=AsyncMock) as mock_lp:
+            mock_rp.return_value = None
+            mock_lp.return_value = mock_patch
+            await self.sink._handle_transcribed_text(self.user, "hey franchino quando riavviano il server?")
+
+            self.sink._notify_channel.assert_awaited()
+            call_kwargs = self.sink._notify_channel.call_args.kwargs
+            self.assertIn("embed", call_kwargs)
+            self.assertIn("Patch Notes", call_kwargs["embed"].title)
+
+    async def test_voice_server_patch_direct_query(self):
+        mock_patch = UOPatchItem(
+            id="6390",
+            title="Patch Notes 10.11",
+            url="https://forums.uooutlands.com/threads/6390/",
+            published="Wed, 14 Oct 2026",
+            content="Brand new patch notes",
+            mentions_restart=False,
+        )
+        with patch.object(uo_outlands_service.patches_service, "get_latest_patch", new_callable=AsyncMock) as mock_lp:
+            mock_lp.return_value = mock_patch
+            await self.sink._handle_transcribed_text(self.user, "hey franchino ultima patch")
+
+            mock_lp.assert_awaited()
+            self.sink._notify_channel.assert_awaited()
+            kw = self.sink._notify_channel.call_args.kwargs
+            self.assertIn("embed", kw)
+            self.assertIn("Patch Notes 10.11", kw["embed"].title)
 
     async def test_voice_uoaddicts_builds(self):
         mock_builds = [
@@ -642,10 +947,11 @@ class TestMainSlashCommands(unittest.IsolatedAsyncioTestCase):
     """Test dei comandi slash registrati in main.py (/status, /server, /riavvio, /builds, /news)."""
 
     async def asyncSetUp(self):
-        from main import status_cmd, server_cmd, riavvio_cmd, builds_cmd, build_cmd, news_cmd, player_manager
+        from main import status_cmd, server_cmd, riavvio_cmd, patch_cmd, builds_cmd, build_cmd, news_cmd, player_manager
         self.status_cmd = status_cmd
         self.server_cmd = server_cmd
         self.riavvio_cmd = riavvio_cmd
+        self.patch_cmd = patch_cmd
         self.builds_cmd = builds_cmd
         self.build_cmd = build_cmd
         self.news_cmd = news_cmd
@@ -681,20 +987,32 @@ class TestMainSlashCommands(unittest.IsolatedAsyncioTestCase):
             kw2 = self.ctx.send.call_args.kwargs
             self.assertIn("ONLINE", kw2["embed"].title)
 
-    async def test_slash_riavvio(self):
-        mock_info = RestartInfo(
-            next_restart_ny=datetime(2026, 10, 14, 11, 0, 0, tzinfo=TZ_ET),
-            next_restart_rome=datetime(2026, 10, 14, 17, 0, 0, tzinfo=TZ_ROME),
-            time_remaining=timedelta(hours=3, minutes=10),
-            hours=3,
-            minutes=10,
-            seconds=0,
+    async def test_slash_riavvio_and_patch(self):
+        mock_patch = UOPatchItem(
+            id="6380",
+            title="Patch Notes 10.9",
+            url="https://forums.uooutlands.com/threads/6380/",
+            published="Wed, 14 Oct 2026 15:30:00",
+            content="Server rebooting for patch deploy",
+            mentions_restart=True,
+            restart_details="Server rebooting for patch deploy",
         )
-        with patch("uo_outlands_service.get_next_restart_info", return_value=mock_info):
+        with patch.object(uo_outlands_service.patch_service, "get_latest_restart_patch", new_callable=AsyncMock) as mock_rp, \
+             patch.object(uo_outlands_service.patch_service, "get_latest_patch", new_callable=AsyncMock) as mock_p:
+            mock_rp.return_value = mock_patch
+            mock_p.return_value = mock_patch
+            # Test /riavvio
             await self.riavvio_cmd.callback(self.ctx)
             self.ctx.send.assert_awaited()
             kw = self.ctx.send.call_args.kwargs
-            self.assertIn("Riavvio Ordinario", kw["embed"].title)
+            self.assertIn("Patch Notes 10.9", kw["embed"].title)
+
+            # Test /patch
+            self.ctx.send.reset_mock()
+            await self.patch_cmd.callback(self.ctx)
+            self.ctx.send.assert_awaited()
+            kw2 = self.ctx.send.call_args.kwargs
+            self.assertIn("Patch Notes 10.9", kw2["embed"].title)
 
     async def test_slash_builds(self):
         mock_builds = [
@@ -777,8 +1095,8 @@ class TestMainBackgroundLoops(unittest.IsolatedAsyncioTestCase):
             self.assertIn("embed", kw)
             self.assertEqual(kw["embed"].title, "📰 New Dungeon")
 
-    async def test_uo_restart_alert_loop_triggers_prewarning(self):
-        from main import _uo_daily_restart_alert_loop, bot, player_manager
+    async def test_uo_patch_monitor_loop_sends_alert_on_restart_patch(self):
+        from main import _uo_patch_monitor_loop, bot, player_manager
         from unittest.mock import PropertyMock
         mock_guild = MagicMock(spec=discord.Guild)
         mock_ch = MagicMock(spec=discord.TextChannel)
@@ -794,25 +1112,75 @@ class TestMainBackgroundLoops(unittest.IsolatedAsyncioTestCase):
         mock_player.speak_tts = AsyncMock()
         player_manager.get_player = MagicMock(return_value=mock_player)
 
-        # Ore 10:51 AM ET (tra 10:50 e 10:55) -> Deve lanciare pre-avviso 10m
-        mock_ny_now = datetime(2026, 10, 14, 10, 51, 0, tzinfo=TZ_ET)
+        mock_patch = UOPatchItem(
+            id="6380",
+            title="Patch 10.9 - Scheduled Server Restart",
+            url="https://forums.uooutlands.com/threads/test.6380/",
+            published="Wed, 14 Oct 2026 15:30:00",
+            content="Server restart for patch deploy",
+            mentions_restart=True,
+            restart_details="Server restart for patch deploy",
+        )
 
-        with patch("main.datetime") as mock_dt, \
+        with patch("uo_outlands_service.patch_service.check_for_new_patches", new_callable=AsyncMock) as mock_chk, \
              patch.object(type(bot), "guilds", new_callable=PropertyMock, return_value=[mock_guild]), \
              patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
-            mock_dt.now.return_value = mock_ny_now
-            mock_dt.combine = datetime.combine
+            mock_chk.return_value = [mock_patch]
             mock_sleep.side_effect = [None, asyncio.CancelledError()]
 
             try:
-                await _uo_daily_restart_alert_loop(check_interval_sec=5.0)
+                await _uo_patch_monitor_loop(check_interval_sec=5.0)
             except asyncio.CancelledError:
                 pass
 
             mock_ch.send.assert_awaited()
             kw = mock_ch.send.call_args.kwargs
             self.assertIn("embed", kw)
-            self.assertIn("10 Minuti", kw["embed"].title)
+            self.assertIn("Riavvio Server", kw["embed"].title)
+
+    async def test_uo_patch_monitor_loop_sends_notice_on_non_restart_patch(self):
+        from main import _uo_patch_monitor_loop, bot, player_manager
+        from unittest.mock import PropertyMock
+        mock_guild = MagicMock(spec=discord.Guild)
+        mock_ch = MagicMock(spec=discord.TextChannel)
+        mock_ch.name = "info"
+        mock_ch.send = AsyncMock()
+        mock_ch.permissions_for.return_value.send_messages = True
+        mock_guild.text_channels = [mock_ch]
+        mock_guild.me = MagicMock()
+
+        mock_player = MagicMock()
+        mock_player.voice_client = MagicMock()
+        mock_player.voice_client.is_connected.return_value = True
+        mock_player.speak_tts = AsyncMock()
+        player_manager.get_player = MagicMock(return_value=mock_player)
+
+        mock_patch = UOPatchItem(
+            id="6381",
+            title="Patch 10.10 - Minor Fixes",
+            url="https://forums.uooutlands.com/threads/test.6381/",
+            published="Wed, 14 Oct 2026 16:30:00",
+            content="Minor text fixes only",
+            mentions_restart=False,
+        )
+
+        with patch("uo_outlands_service.patch_service.check_for_new_patches", new_callable=AsyncMock) as mock_chk, \
+             patch.object(type(bot), "guilds", new_callable=PropertyMock, return_value=[mock_guild]), \
+             patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+            mock_chk.return_value = [mock_patch]
+            mock_sleep.side_effect = [None, asyncio.CancelledError()]
+
+            try:
+                await _uo_patch_monitor_loop(check_interval_sec=5.0)
+            except asyncio.CancelledError:
+                pass
+
+            mock_ch.send.assert_awaited()
+            kw = mock_ch.send.call_args.kwargs
+            self.assertIn("embed", kw)
+            self.assertIn("Ultima Patch", kw["embed"].title)
+            # Per le patch senza riavvio non deve essere fatto l'annuncio vocale che interrompe la musica
+            mock_player.speak_tts.assert_not_called()
 
 
 # ==============================================================================

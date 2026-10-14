@@ -8,8 +8,10 @@ Fornisce le 4 funzionalità avanzate per Ultima Online Outlands:
    PVM, PVP, Popolari e Recenti con estrazione di popolarità, voti, skill template e link.
 3. Server Status Check: controllo socket TCP asincrono su play.uooutlands.com
    (fallback 74.91.113.38) porta 2593 con ping in ms e rilevamento ONLINE / OFFLINE.
-4. Daily Restart Manager: calcolo countdown e allerte automatiche (10m e 5m prima)
-   per il riavvio ordinario delle 11:00 AM ET (17:00 italiane).
+4. Official Patches Monitor & Restart Alerts: monitoraggio continuo del forum ufficiale
+   delle patch (https://forums.uooutlands.com/index.php?forums/patches.14/), estrazione
+   delle note di rilascio (RSS + HTML), rilevamento intelligente dei riavvii/manutenzioni
+   del server e pubblicazione immediata con allerta prioritaria e annuncio vocale da vocalist.
 """
 
 import asyncio
@@ -36,6 +38,11 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(BASE_DIR, "data")
 NEWS_CACHE_FILE = os.path.join(DATA_DIR, "uoaddicts_news_cache.json")
 BUILDS_CACHE_FILE = os.path.join(DATA_DIR, "uoaddicts_builds_cache.json")
+PATCHES_CACHE_FILE = os.path.join(DATA_DIR, "uo_patches_cache.json")
+
+# URL Forum Patches UO Outlands
+UO_PATCHES_FORUM_URL = "https://forums.uooutlands.com/index.php?forums/patches.14/"
+UO_PATCHES_RSS_URL = "https://forums.uooutlands.com/index.php?forums/patches.14/index.rss"
 
 # Fusi orari
 TZ_ET = ZoneInfo("America/New_York")
@@ -272,51 +279,70 @@ class ServerStatusResult:
 
 
 @dataclass
-class RestartInfo:
-    next_restart_ny: datetime
-    next_restart_rome: datetime
-    time_remaining: timedelta
-    hours: int
-    minutes: int
-    seconds: int
+class UOPatchItem:
+    id: str
+    title: str
+    url: str
+    published: str
+    content: str
+    mentions_restart: bool = False
+    restart_details: str = ""
+    author: str = "Outlands Staff"
 
-    def build_embed(self) -> discord.Embed:
-        embed = discord.Embed(
-            title="🔄 UO Outlands — Riavvio Ordinario Giornaliero",
-            description=(
-                "Il server di **Ultima Online Outlands** effettua un riavvio automatico giornaliero "
-                "per la manutenzione del mondo, l'applicazione delle patch ed eventi stagionali."
-            ),
-            color=COLOR_INFO,
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "title": self.title,
+            "url": self.url,
+            "published": self.published,
+            "content": self.content,
+            "mentions_restart": self.mentions_restart,
+            "restart_details": self.restart_details,
+            "author": self.author,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "UOPatchItem":
+        return cls(
+            id=str(data.get("id", "")),
+            title=data.get("title", ""),
+            url=data.get("url", ""),
+            published=data.get("published", ""),
+            content=data.get("content", ""),
+            mentions_restart=data.get("mentions_restart", False),
+            restart_details=data.get("restart_details", ""),
+            author=data.get("author", "Outlands Staff"),
         )
-        embed.add_field(name="⏰ Orario Finestra", value="`11:00 AM ET (17:00 Italiane)`", inline=True)
-        if self.hours > 0:
-            countdown_str = f"**{self.hours}h {self.minutes}m {self.seconds}s**"
-        else:
-            countdown_str = f"**{self.minutes}m {self.seconds}s**"
-        embed.add_field(name="⏳ Conto alla Rovescia", value=countdown_str, inline=True)
-        date_str = self.next_restart_rome.strftime("%d/%m/%Y alle %H:%M %Z")
-        embed.add_field(name="📅 Prossimo Riavvio", value=f"`{date_str}`", inline=False)
-        embed.add_field(
-            name="💡 Consiglio Avventurieri",
-            value="Ricordati di portare il personaggio in locanda o safe zone prima dell'inizio della manutenzione!",
-            inline=False,
-        )
-        embed.set_footer(text="Franchino Outlands Maintenance Sentinel • uooutlands.com")
-        return embed
 
     def voice_text(self) -> str:
-        rome_hour = self.next_restart_rome.hour
-        h_word = {
-            16: "alle sedici",
-            17: "alle diciassette",
-            18: "alle diciotto",
-        }.get(rome_hour, f"alle ore {rome_hour}")
-        if self.hours > 0:
-            h_str = f"{self.hours} or{'a' if self.hours == 1 else 'e'}"
-            m_str = f"{self.minutes} minut{'o' if self.minutes == 1 else 'i'}"
-            return f"Il prossimo riavvio ordinario del server è previsto tra {h_str} e {m_str}, {h_word}!"
-        return f"Attenzione! Il riavvio ordinario del server è tra soli {self.minutes} minuti, {h_word}!"
+        """Restituisce il testo di sintesi vocale da pronunciare tramite TTS."""
+        if self.mentions_restart:
+            return (
+                f"Attenzione ragazzi! L'ultima patch pubblicata, {self.title}, "
+                f"cita un riavvio del server! Dettagli e note in chat!"
+            )
+        return (
+            f"L'ultima patch pubblicata per Outlands è {self.title}. "
+            f"Non ci sono riavvii fissi giornalieri alle diciassette: il server si riavvia solo al rilascio delle patch!"
+        )
+
+    def build_embed(self) -> discord.Embed:
+        """Restituisce l'embed discord formattato per questa patch."""
+        return build_patch_embed(self)
+
+
+FALLBACK_PATCH_ITEMS = [
+    UOPatchItem(
+        id="6370",
+        title="Patch Notes for October 12, 2026",
+        url="https://forums.uooutlands.com/index.php?threads/patch-notes-for-october-12-2026.6370/",
+        published="Tue, 13 Oct 2026 02:14:53 +0000",
+        content="Aggiornamento Echoes, bilanciamento abilità e creature. Nessun riavvio automatico delle 17:00 attivo sul server.",
+        mentions_restart=False,
+        restart_details="Nessun riavvio specifico programmato in questa patch.",
+        author="Outlands Staff",
+    )
+]
 
 
 # ==============================================================================
@@ -860,85 +886,543 @@ async def check_uo_server_status(
 
 
 # ==============================================================================
-# FEATURE 4: DAILY SERVER RESTART MANAGER & ALERTS
+# FEATURE 4: UO OUTLANDS OFFICIAL PATCHES MONITOR & RESTART ALERTS
 # ==============================================================================
 
-def get_next_restart_info(
-    target_hour_et: int = 11,
-    target_minute_et: int = 0,
-    current_time_ny: Optional[datetime] = None,
-) -> RestartInfo:
+RESTART_KEYWORDS = [
+    "server restart",
+    "server reboot",
+    "restarting the server",
+    "restart the server",
+    "reboot the server",
+    "taking the server down",
+    "server will be down",
+    "patch deploy",
+    "downtime",
+    "maintenance",
+    "scheduled restart",
+    "scheduled maintenance",
+    "server maintenance",
+    "restarting",
+    "restart",
+    "restarted",
+    "restarts",
+    "reboot",
+    "rebooted",
+    "reboots",
+    "riavvio",
+    "riavvii",
+    "riavvia",
+    "riavviare",
+    "riavviato",
+    "riavvierà",
+    "manutenzione",
+]
+
+RESTART_PATTERNS = RESTART_KEYWORDS
+
+SERVER_RESTART_REGEXES = [
+    r'\bserver\s+restart(?:s|ed|ing)?\b',
+    r'\bserver\s+reboot(?:s|ed|ing)?\b',
+    r'\b(?:restarts?|restarted|restarting)\s+(?:the\s+)?server\b',
+    r'\b(?:reboots?|rebooted|rebooting)\s+(?:the\s+)?server\b',
+    r'\btaking\s+(?:the\s+)?server\s+down\b',
+    r'\bserver\s+(?:is\s+|will\s+be\s+)?(?:coming\s+down|down)\b',
+    r'\bserver\s+maintenance\b',
+    r'\bscheduled\s+(?:maintenance|restart|reboot)\b',
+    r'\bmaintenance\s+window\b',
+    r'\bserver\s+downtime\b',
+    r'\bpatch\s+deploy(?:ment)?\b',
+    r'\bshard\s+restart(?:s|ed|ing)?\b',
+    r'\bworld\s+save\s+and\s+restart\b',
+    r'\brestart\s+scheduled\b',
+    r'\b(?:restarts?|restarted|restarting)\s+at\s+\d+',
+    r'\b(?:reboots?|rebooted|rebooting)\s+at\s+\d+',
+    r'\b(?:downtime|maintenance)\b',
+    r'\b(?:riavvi[oia]|riavviare|riavviato|riavvierà|riavvii)\s+(?:del\s+)?server\b',
+    r'\bserver\s+si\s+riavvi(?:a|erà)\b',
+    r'\bmanutenzion[ei]\b',
+]
+
+CLIENT_ONLY_RESTART_PATTERN = (
+    r'\b(?:restart(?:s|ed|ing)?\s+(?:your\s+|the\s+)?(?:client|game|launcher|razor|classicuo)|'
+    r'(?:client|game|launcher|razor|classicuo)\s+restart(?:s|ed|ing)?)\b'
+)
+
+VOICE_ALERT_PATCH_RESTART = (
+    "Attenzione ragazzi! È stata annunciata una nuova patch con riavvio del server! "
+    "Date un'occhiata alla chat per i dettagli!"
+)
+
+
+def clean_html(raw_html: str) -> str:
+    """Rimuove tag HTML, converte break in newline e decodifica le entità HTML."""
+    if not raw_html:
+        return ""
+    text = re.sub(r'<(?:br|br\s*/|/p|/li|/div|/tr)>', '\n', raw_html, flags=re.IGNORECASE)
+    text = re.sub(r'<[^>]+>', ' ', text)
+    text = html.unescape(text)
+    lines = [re.sub(r'[ \t]+', ' ', line).strip() for line in text.split('\n')]
+    return '\n'.join([line for line in lines if line]).strip()
+
+
+def detect_restart_mention(title: str, text: str) -> Tuple[bool, str]:
     """
-    Calcola il countdown esatto al prossimo riavvio ordinario delle 11:00 AM ET (17:00 italiane).
-    Tiene conto accuratamente del fuso orario New York (ET) e conversione in ora italiana (Europe/Rome).
+    Analizza il titolo e il contenuto del post/thread per verificare se viene citato un riavvio,
+    reboot, manutenzione o downtime del server.
+    Filtra i falsi positivi relativi ai soli riavvii del client di gioco / launcher.
+    Ritorna (True, estratto_dettagli) se trovato, altrimenti (False, "").
     """
-    now_ny = current_time_ny or datetime.now(TZ_ET)
-    restart_today_ny = datetime.combine(
-        now_ny.date(),
-        dtime(target_hour_et, target_minute_et, 0),
-        tzinfo=TZ_ET,
-    )
+    combined = f"{title}\n{text}".strip()
+    if not combined:
+        return False, ""
 
-    if now_ny >= restart_today_ny:
-        next_restart_ny = restart_today_ny + timedelta(days=1)
-    else:
-        next_restart_ny = restart_today_ny
+    matched_pattern: Optional[str] = None
 
-    next_restart_rome = next_restart_ny.astimezone(TZ_ROME)
-    diff = next_restart_ny - now_ny
-    total_sec = max(0, int(diff.total_seconds()))
-    hours, rem = divmod(total_sec, 3600)
-    minutes, seconds = divmod(rem, 60)
+    # 1. Controlla i pattern specifici di riavvio / manutenzione del server
+    for pat in SERVER_RESTART_REGEXES:
+        if re.search(pat, combined, re.IGNORECASE):
+            matched_pattern = pat
+            break
 
-    return RestartInfo(
-        next_restart_ny=next_restart_ny,
-        next_restart_rome=next_restart_rome,
-        time_remaining=diff,
-        hours=hours,
-        minutes=minutes,
-        seconds=seconds,
-    )
+    # 2. Se non ha fatto match sui pattern specifici, controlla termini generici escludendo client restart
+    if not matched_pattern:
+        general_restart = r'\b(?:restarts?|restarted|restarting|reboots?|rebooted|rebooting|riavvi[oia]|riavviare|riavviato|riavvierà|riavvii)\b'
+        if re.search(general_restart, combined, re.IGNORECASE):
+            stripped = re.sub(CLIENT_ONLY_RESTART_PATTERN, '', combined, flags=re.IGNORECASE)
+            if re.search(general_restart, stripped, re.IGNORECASE):
+                matched_pattern = general_restart
+
+    # 3. Controlla anche la lista RESTART_KEYWORDS per retrocompatibilità
+    if not matched_pattern:
+        for kw in RESTART_KEYWORDS:
+            pat = r'\b' + re.escape(kw) + r'\b'
+            if re.search(pat, combined, re.IGNORECASE):
+                if kw in ("restart", "restarting", "reboot", "rebooting"):
+                    stripped = re.sub(CLIENT_ONLY_RESTART_PATTERN, '', combined, flags=re.IGNORECASE)
+                    if not re.search(pat, stripped, re.IGNORECASE):
+                        continue
+                matched_pattern = pat
+                break
+
+    if not matched_pattern:
+        return False, ""
+
+    # Cerca la riga o frase più informativa che contiene il riferimento al riavvio
+    lines = text.split('\n')
+    for line in lines:
+        line_clean = line.strip()
+        if not line_clean:
+            continue
+        if re.search(CLIENT_ONLY_RESTART_PATTERN, line_clean, re.IGNORECASE):
+            stripped_line = re.sub(CLIENT_ONLY_RESTART_PATTERN, '', line_clean, flags=re.IGNORECASE)
+            if not re.search(matched_pattern, stripped_line, re.IGNORECASE):
+                continue
+        if re.search(matched_pattern, line_clean, re.IGNORECASE):
+            snippet = line_clean[:280] + ("..." if len(line_clean) > 280 else "")
+            return True, snippet
+
+    # Se menzionato nel titolo
+    if re.search(matched_pattern, title, re.IGNORECASE):
+        return True, f"Riavvio o manutenzione indicati direttamente nel titolo dell'annuncio: '{title}'."
+
+    snippet = text[:250].strip() + ("..." if len(text) > 250 else "")
+    return True, snippet or "Riavvio del server annunciato per il deploy della patch."
 
 
-def build_restart_alert_embed(minutes_left: int, target_time_str: Optional[str] = None) -> discord.Embed:
-    """Genera l'Embed di allerta per il riavvio del server a 10m o 5m."""
-    time_label = target_time_str or "alle 17:00 italiane / 11:00 AM ET"
-    if minutes_left >= 10:
-        embed = discord.Embed(
-            title="⚠️ UO Outlands — Riavvio Ordinario tra 10 Minuti!",
-            description=(
-                "Attenzione avventurieri! Il server di **Ultima Online Outlands** effettuerà il consueto "
-                f"**riavvio ordinario giornaliero** per manutenzione e applicazione patch tra **10 minuti** "
-                f"({time_label}).\n\n"
-                "🛡️ **Raccomandazione**: portatevi al sicuro in una locanda o safe zone per prevenire rollback o perdite!"
-            ),
-            color=COLOR_WARNING,
+def parse_patches_rss(xml_content: str) -> List[UOPatchItem]:
+    """Parsa il feed RSS ufficiale XenForo da https://forums.uooutlands.com/index.php?forums/patches.14/index.rss."""
+    items: List[UOPatchItem] = []
+    if not xml_content or not xml_content.strip():
+        return items
+
+    import xml.etree.ElementTree as ET
+    try:
+        root = ET.fromstring(xml_content)
+        channel = root.find("channel")
+        if channel is not None:
+            for it in channel.findall("item"):
+                title_elem = it.find("title")
+                title = html.unescape(title_elem.text.strip()) if title_elem is not None and title_elem.text else "Nuova Patch UO Outlands"
+
+                link_elem = it.find("link")
+                link = link_elem.text.strip() if link_elem is not None and link_elem.text else UO_PATCHES_FORUM_URL
+
+                guid_elem = it.find("guid")
+                guid = guid_elem.text.strip() if guid_elem is not None and guid_elem.text else ""
+                if not guid:
+                    m_id = re.search(r'\.(\d+)/?$', link)
+                    guid = m_id.group(1) if m_id else link
+
+                pub_elem = it.find("pubDate")
+                pub_date = pub_elem.text.strip() if pub_elem is not None and pub_elem.text else ""
+
+                creator_elem = it.find("{http://purl.org/dc/elements/1.1/}creator")
+                author = creator_elem.text.strip() if creator_elem is not None and creator_elem.text else "Outlands Staff"
+
+                content_elem = it.find("{http://purl.org/rss/1.0/modules/content/}encoded")
+                desc_elem = it.find("description")
+                raw_content = ""
+                if content_elem is not None and content_elem.text:
+                    raw_content = content_elem.text
+                elif desc_elem is not None and desc_elem.text:
+                    raw_content = desc_elem.text
+
+                clean_desc = clean_html(raw_content)
+                mentions_restart, restart_details = detect_restart_mention(title, clean_desc)
+
+                items.append(
+                    UOPatchItem(
+                        id=str(guid),
+                        title=title,
+                        url=link,
+                        published=pub_date,
+                        content=clean_desc,
+                        mentions_restart=mentions_restart,
+                        restart_details=restart_details,
+                        author=author,
+                    )
+                )
+    except Exception as e:
+        logger.debug(f"Parsing XML standard fallito ({e}), tento fallback regex per RSS...")
+        item_blocks = re.findall(r'<item>(.*?)</item>', xml_content, re.DOTALL)
+        for block in item_blocks:
+            t_m = re.search(r'<title>(.*?)</title>', block, re.DOTALL)
+            title = html.unescape(re.sub(r'<!\[CDATA\[(.*?)\]\]>', r'\1', t_m.group(1))).strip() if t_m else "Nuova Patch"
+            l_m = re.search(r'<link>(.*?)</link>', block)
+            link = l_m.group(1).strip() if l_m else UO_PATCHES_FORUM_URL
+            g_m = re.search(r'<guid[^>]*>(.*?)</guid>', block)
+            guid = g_m.group(1).strip() if g_m else link
+            p_m = re.search(r'<pubDate>(.*?)</pubDate>', block)
+            pub_date = p_m.group(1).strip() if p_m else ""
+            c_m = re.search(r'<content:encoded>(.*?)</content:encoded>', block, re.DOTALL) or re.search(r'<description>(.*?)</description>', block, re.DOTALL)
+            raw_c = c_m.group(1) if c_m else ""
+            raw_c = re.sub(r'<!\[CDATA\[(.*?)\]\]>', r'\1', raw_c)
+            clean_desc = clean_html(raw_c)
+            mentions_restart, restart_details = detect_restart_mention(title, clean_desc)
+            items.append(
+                UOPatchItem(
+                    id=str(guid),
+                    title=title,
+                    url=link,
+                    published=pub_date,
+                    content=clean_desc,
+                    mentions_restart=mentions_restart,
+                    restart_details=restart_details,
+                    author="Outlands Staff",
+                )
+            )
+
+    return items
+
+
+def extract_thread_first_post(html_text: str) -> str:
+    """Estrae il corpo del messaggio principale (primo post) di un thread XenForo."""
+    if not html_text:
+        return ""
+    m = re.search(r'<article\s+class="message-body[^>]*>(.*?)</article>', html_text, re.DOTALL)
+    if m:
+        raw_article = m.group(1)
+        raw_article = re.sub(r'<script[^>]*>.*?</script>', '', raw_article, flags=re.DOTALL)
+        return clean_html(raw_article)
+    m_bb = re.search(r'<div\s+class="bbWrapper">(.*?)</div>', html_text, re.DOTALL)
+    if m_bb:
+        return clean_html(m_bb.group(1))
+    return ""
+
+
+def parse_patches_html(html_text: str) -> List[UOPatchItem]:
+    """Parsa i thread della sezione Patch Notes da https://forums.uooutlands.com/index.php?forums/patches.14/."""
+    items: List[UOPatchItem] = []
+    if not html_text:
+        return items
+
+    # Cerca i blocchi structItem o structItem-cell--main
+    cell_pattern = r'<div\s+class="[^"]*structItem-cell--main[^"]*"[^>]*>(.*?)(?=<div\s+class="[^"]*structItem-cell|$)'
+    cells = re.findall(cell_pattern, html_text, re.DOTALL)
+    if not cells:
+        # Fallback se non ci sono structItem-cell--main: split su structItem-title
+        cells = [m.group(0) for m in re.finditer(r'<div\s+class="structItem-title"[^>]*>.*?(?=<div\s+class="structItem-title"|$)', html_text, re.DOTALL)]
+
+    seen_urls = set()
+    for block in cells:
+        t_match = re.search(r'<a\s+href="(/index\.php\?threads/[^"]+)"[^>]*>(.*?)</a>', block, re.DOTALL)
+        if not t_match:
+            continue
+        rel_url = t_match.group(1)
+        raw_title = t_match.group(2)
+        clean_title = html.unescape(re.sub(r'<[^>]+>', '', raw_title)).strip()
+        if not clean_title or "prefix_id=" in rel_url:
+            continue
+
+        full_url = "https://forums.uooutlands.com" + rel_url
+        if full_url in seen_urls:
+            continue
+        seen_urls.add(full_url)
+
+        m_id = re.search(r'\.(\d+)/?$', rel_url)
+        thread_id = m_id.group(1) if m_id else rel_url
+
+        a_m = re.search(r'<a\s+href="[^"]*members/[^"]*"[^>]*>(?:<span[^>]*>)?([^<]+)', block)
+        author = a_m.group(1).strip() if a_m else "Outlands Staff"
+
+        d_m = re.search(r'<time[^>]*datetime="([^"]+)"', block) or re.search(r'<time[^>]*title="([^"]+)"', block)
+        pub_date = d_m.group(1).strip() if d_m else ""
+
+        mentions_restart, restart_details = detect_restart_mention(clean_title, "")
+        items.append(
+            UOPatchItem(
+                id=str(thread_id),
+                title=clean_title,
+                url=full_url,
+                published=pub_date,
+                content=clean_title,
+                mentions_restart=mentions_restart,
+                restart_details=restart_details,
+                author=author,
+            )
         )
-        embed.set_footer(text="Franchino Sentinel • Riavvio ordinario UO Outlands")
-    else:
-        embed = discord.Embed(
-            title="🚨 UO Outlands — Ultimo Avviso: Riavvio tra 5 Minuti!",
-            description=(
-                "🚨 **ULTIMO AVVISO!** Il server di **Ultima Online Outlands** si riavvierà tra soli **5 minuti esatti**!\n\n"
-                "⚠️ **Sloggate immediatamente** e assicuratevi di non essere nel mezzo di dungeon o combattimenti!"
-            ),
-            color=COLOR_OFFLINE,
+    return items
+
+
+class UOPatchMonitorService:
+    """Monitora il forum ufficiale delle patch di UO Outlands con cache persistente per rilevare nuovi annunci e riavvii."""
+
+    def __init__(self, cache_file: str = PATCHES_CACHE_FILE):
+        self.cache_file = cache_file
+        self._ensure_cache_dir()
+
+    def _ensure_cache_dir(self):
+        try:
+            os.makedirs(os.path.dirname(self.cache_file), exist_ok=True)
+        except Exception:
+            pass
+
+    def load_cache(self) -> dict:
+        if not os.path.exists(self.cache_file):
+            return {"seen_ids": [], "latest_patch": None, "latest_restart_patch": None, "last_updated": 0}
+        try:
+            with open(self.cache_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                return data if isinstance(data, dict) else {"seen_ids": [], "latest_patch": None, "latest_restart_patch": None, "last_updated": 0}
+        except Exception as e:
+            logger.warning(f"Errore lettura cache patch {self.cache_file}: {e}")
+            return {"seen_ids": [], "latest_patch": None, "latest_restart_patch": None, "last_updated": 0}
+
+    def save_cache(self, data: dict) -> None:
+        self._ensure_cache_dir()
+        try:
+            _atomic_json_dump(self.cache_file, data)
+        except Exception as e:
+            logger.warning(f"Errore salvataggio cache patch: {e}")
+
+    async def fetch_patches(self) -> List[UOPatchItem]:
+        """Scarica e parsa la lista delle patch ufficiali provando prima RSS e poi HTML."""
+        # Tentativo 1: Feed RSS ufficiale XenForo
+        try:
+            content = await fetch_html(UO_PATCHES_RSS_URL)
+            items = parse_patches_rss(content)
+            if items:
+                return items
+        except Exception as e:
+            logger.debug(f"Download RSS patches fallito ({e}), provo scraping HTML...")
+
+        # Tentativo 2: Scraping HTML
+        try:
+            html_text = await fetch_html(UO_PATCHES_FORUM_URL)
+            items = parse_patches_html(html_text)
+            if items:
+                return items
+        except Exception as e:
+            logger.error(f"Download forum patches fallito: {e}")
+
+        return []
+
+    async def enrich_patch_content_if_needed(self, patch: UOPatchItem) -> UOPatchItem:
+        """
+        Se la patch non menziona il riavvio ma ha contenuto troncato da feed RSS ('Read more' / breve)
+        oppure ottenuto da HTML con solo titolo, scarica il thread completo per analizzare l'intero post.
+        """
+        if patch.mentions_restart:
+            return patch
+
+        is_truncated = (
+            "Read more" in patch.content
+            or len(patch.content) <= 500
+            or patch.content == patch.title
+            or not patch.content
         )
-        embed.set_footer(text="Franchino Sentinel • Spegnimento imminente del server")
+        if is_truncated and patch.url and "uooutlands.com/index.php?threads/" in patch.url:
+            try:
+                thread_html = await fetch_html(patch.url)
+                full_body = extract_thread_first_post(thread_html)
+                if full_body:
+                    patch.content = full_body
+                    m_restart, r_details = detect_restart_mention(patch.title, full_body)
+                    if m_restart:
+                        patch.mentions_restart = True
+                        patch.restart_details = r_details
+            except Exception as e:
+                logger.debug(f"Impossibile scaricare dettagli thread patch {patch.url}: {e}")
+        return patch
+
+    async def check_for_new_patches(self) -> List[UOPatchItem]:
+        """
+        Controlla se ci sono post non ancora visti.
+        Al primo avvio assoluto (cache inesistente) inizializza la cache con le patch attuali
+        per evitare spam di post storici, ritornando lista vuota.
+        Nelle esecuzioni successive ritorna tutti i post nuovi trovati e aggiorna la cache.
+        """
+        items = await self.fetch_patches()
+        if not items:
+            return []
+
+        if not os.path.exists(self.cache_file):
+            all_ids = [it.id for it in items]
+            cache_data = {
+                "seen_ids": all_ids,
+                "latest_patch": items[0].to_dict() if items else None,
+                "latest_restart_patch": next((it.to_dict() for it in items if it.mentions_restart), None),
+                "last_updated": time.time(),
+            }
+            self.save_cache(cache_data)
+            logger.info(f"🛠️ Inizializzata cache patch Outlands con {len(all_ids)} thread pregressi.")
+            return []
+
+        cache_data = self.load_cache()
+        seen_ids = set(cache_data.get("seen_ids", []))
+        new_items = [it for it in items if it.id not in seen_ids]
+
+        if new_items:
+            for it in new_items:
+                seen_ids.add(it.id)
+                if not it.mentions_restart:
+                    await self.enrich_patch_content_if_needed(it)
+
+            cache_data["seen_ids"] = sorted(list(seen_ids))
+            cache_data["latest_patch"] = items[0].to_dict()
+            for it in items:
+                if it.mentions_restart:
+                    cache_data["latest_restart_patch"] = it.to_dict()
+                    break
+            cache_data["last_updated"] = time.time()
+            self.save_cache(cache_data)
+
+        return new_items
+
+    async def get_latest_patch(self) -> UOPatchItem:
+        """Recupera l'ultima patch (dalla rete o fallback/cache)."""
+        items = await self.fetch_patches()
+        if items:
+            latest = items[0]
+            if not latest.mentions_restart:
+                await self.enrich_patch_content_if_needed(latest)
+            try:
+                cache_data = self.load_cache()
+                cache_data["latest_patch"] = latest.to_dict()
+                if latest.mentions_restart:
+                    cache_data["latest_restart_patch"] = latest.to_dict()
+                if not cache_data.get("seen_ids"):
+                    cache_data["seen_ids"] = [it.id for it in items]
+                cache_data["last_updated"] = time.time()
+                self.save_cache(cache_data)
+            except Exception:
+                pass
+            return latest
+
+        cache_data = self.load_cache()
+        latest_dict = cache_data.get("latest_patch")
+        if latest_dict:
+            return UOPatchItem.from_dict(latest_dict)
+        return FALLBACK_PATCH_ITEMS[0]
+
+    async def get_latest_restart_patch(self) -> Optional[UOPatchItem]:
+        """Recupera la patch più recente che cita espressamente un riavvio del server."""
+        items = await self.fetch_patches()
+        for idx, item in enumerate(items):
+            if not item.mentions_restart and idx < 3:
+                await self.enrich_patch_content_if_needed(item)
+            if item.mentions_restart:
+                return item
+        cache_data = self.load_cache()
+        restart_dict = cache_data.get("latest_restart_patch")
+        if restart_dict:
+            return UOPatchItem.from_dict(restart_dict)
+        latest_dict = cache_data.get("latest_patch")
+        if latest_dict and latest_dict.get("mentions_restart"):
+            return UOPatchItem.from_dict(latest_dict)
+        return None
+
+
+def build_patch_restart_alert_embed(patch: UOPatchItem) -> discord.Embed:
+    """Discord Embed prioritario ed elegante quando viene pubblicata una nuova patch che cita un riavvio."""
+    embed = discord.Embed(
+        title=f"⚠️ Riavvio Server per Nuova Patch — {patch.title}",
+        url=patch.url,
+        description=(
+            f"È stata annunciata una nuova patch ufficiale su **UO Outlands** che richiede il **riavvio del server**!\n\n"
+            f"**Estratto & Dettagli Manutenzione**:\n"
+            f"> {patch.restart_details or patch.content[:300]}\n"
+        ),
+        color=COLOR_WARNING,
+    )
+    embed.add_field(name="📢 Stato Riavvio", value="⚠️ `RIAVVIO / MANUTENZIONE PREVISTA`", inline=True)
+    if patch.published:
+        embed.add_field(name="📅 Data Annuncio", value=f"`{patch.published[:25]}`", inline=True)
+    embed.add_field(
+        name="🔗 Note di Rilascio Complete",
+        value=f"[Leggi il thread completo sul Forum UO Outlands]({patch.url})",
+        inline=False,
+    )
+    embed.add_field(
+        name="🛡️ Raccomandazione Avventurieri",
+        value="Portate al sicuro il vostro personaggio in locanda o safe zone prima dell'inizio del downtime!",
+        inline=False,
+    )
+    embed.set_footer(text="Franchino Patch Sentinel • forums.uooutlands.com/patches")
     return embed
 
 
-def build_restart_alert_voice(minutes_left: int) -> str:
-    """Testo per la notifica vocale TTS."""
-    if minutes_left >= 10:
-        return (
-            "Attenzione ragazzi! Il server di Ultima Online Outlands si riavvia tra dieci minuti "
-            "per la manutenzione ordinaria! Mettetevi al sicuro in una locanda!"
+def build_patch_embed(patch: UOPatchItem) -> discord.Embed:
+    """Discord Embed per la visualizzazione dell'ultima patch annunciata (usato da /riavvio e /patch)."""
+    if patch.mentions_restart:
+        embed = discord.Embed(
+            title=f"🛠️ UO Outlands — Ultima Patch: {patch.title}",
+            url=patch.url,
+            description="Informazioni sull'ultima patch pubblicata sul forum ufficiale di Ultima Online Outlands:",
+            color=COLOR_WARNING,
         )
-    return (
-        "Ultimo avviso ragazzi! Il server di Outlands si riavvia tra cinque minuti esatti! "
-        "Sloggate subito per non perdere nulla!"
-    )
+        embed.add_field(
+            name="⚠️ Riavvio Server",
+            value=f"⚠️ `RIAVVIO CITATO NELL'ANNUNCIO`\n> {patch.restart_details or 'Riavvio programmato per applicazione della patch.'}",
+            inline=False,
+        )
+    else:
+        embed = discord.Embed(
+            title=f"🛠️ UO Outlands — Ultima Patch: {patch.title}",
+            url=patch.url,
+            description="Informazioni sull'ultima patch pubblicata sul forum ufficiale di Ultima Online Outlands:",
+            color=COLOR_INFO,
+        )
+        embed.add_field(
+            name="🔄 Riavvio Server",
+            value="ℹ️ *Nessun riavvio automatico delle 17:00 attivo.* Il server si riavvia solo al deploy di nuove patch che lo richiedono espressamente.",
+            inline=False,
+        )
+
+    if patch.content:
+        snippet = patch.content[:350].strip()
+        if len(patch.content) > 350:
+            snippet += "..."
+        embed.add_field(name="📝 Note & Novità", value=f"> {snippet}", inline=False)
+
+    if patch.published:
+        embed.add_field(name="📅 Pubblicazione", value=f"`{patch.published[:25]}`", inline=True)
+    if patch.author:
+        embed.add_field(name="✍️ Autore", value=f"`{patch.author}`", inline=True)
+    embed.add_field(name="🔗 Discussione Ufficiale", value=f"[Apri thread sul Forum Outlands]({patch.url})", inline=False)
+    embed.set_footer(text="Franchino Outlands Patch Sentinel • forums.uooutlands.com/patches")
+    return embed
 
 
 # ==============================================================================
@@ -986,3 +1470,19 @@ def resolve_announcement_channel(guild: discord.Guild) -> Optional[discord.TextC
 # Istanza singleton dei servizi
 news_service = UOAddictsNewsService()
 builds_service = UOAddictsBuildsService()
+patch_service = UOPatchMonitorService()
+
+# Aliases per retrocompatibilità e flessibilità di naming
+PatchesService = UOPatchMonitorService
+PatchItem = UOPatchItem
+patches_service = patch_service
+
+
+async def get_latest_patch() -> UOPatchItem:
+    """Recupera l'ultima patch tramite il servizio patch."""
+    return await patch_service.get_latest_patch()
+
+
+async def get_latest_restart_patch() -> Optional[UOPatchItem]:
+    """Recupera l'ultima patch che cita un riavvio tramite il servizio patch."""
+    return await patch_service.get_latest_restart_patch()
