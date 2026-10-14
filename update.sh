@@ -5,6 +5,9 @@
 
 cd "$(dirname "$0")"
 
+echo "📥 Scaricamento ultimi aggiornamenti da git..."
+git pull origin main || echo "⚠️ Git pull non riuscito o già aggiornato, proseguo..."
+
 DOCKER_CMD="docker compose"
 if ! docker compose version &> /dev/null; then
     if sudo docker compose version &> /dev/null; then

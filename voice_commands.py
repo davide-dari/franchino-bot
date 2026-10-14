@@ -305,6 +305,68 @@ vr_vc.VoiceRecvClient.create_connection_state = _safe_create_connection_state
 DiscordVoiceWebSocket.received_binary_message = _safe_received_binary_message
 
 
+def extract_vendor_query(text: str) -> Optional[str]:
+    """
+    Estrae il nome dell'oggetto per la ricerca Vendor su UO Outlands da comandi parlati o testuali:
+    - 'cerca sul vendor aspect core' -> 'aspect core'
+    - 'cerca vendor aspect core' -> 'aspect core'
+    - 'quanto costa aspect core' -> 'aspect core'
+    - 'quanto costa un aspect core sul vendor' -> 'aspect core'
+    - 'prezzo di aspect core' -> 'aspect core'
+    - 'prezzi vendor aspect core' -> 'aspect core'
+    - 'vendor search aspect core' -> 'aspect core'
+    """
+    if not text:
+        return None
+    low = text.strip().lower()
+    low = re.sub(r"[?!.,;:]+$", "", low).strip()
+
+    if low in ("vendor search", "cerca sul vendor", "cerca sui vendor", "vendor", "prezzi vendor", "prezzo vendor", "cerca vendor", "prezzi", "prezzo"):
+        return ""
+
+    # 1. "quanto costa [un/il/la] <item> [sul/sui/nei vendor]?"
+    m1 = re.search(r"quanto\s+costa\s+(?:un\s+|uno\s+|una\s+|l[\x27\']|il\s+|la\s+|i\s+|gli\s+|le\s+)?(.+?)(?:\s+(?:sul|sui|nel|nei|dai|dai\s+player)?\s*vendor)?$", low)
+    if m1:
+        cand = m1.group(1).strip()
+        cand = re.sub(r"^(?:di\s+|del\s+|della\s+|per\s+)?(?:un\s+|uno\s+|una\s+|il\s+|la\s+|l[\x27\'])?", "", cand).strip()
+        cand = re.sub(r"^(?:(?:sui?|nei?)\s+)?vendor\s+", "", cand).strip()
+        cand = re.sub(r"\s+(?:sul|sui|nel|nei|dai|dai\s+player)?\s*vendor$", "", cand).strip()
+        if cand:
+            return cand
+
+    # 2. "cerca/trova/vedi [sul/sui vendor] <item>" oppure "cerca [i] prezzi [di/per/del] <item>"
+    m2 = re.search(r"(?:cerca|trova|vedi)\s+(?:(?:sul|sui|nel|nei|tra\s+i|dai)\s*vendor\s+|(?:i\s+)?prezz[oi]\s+(?:di\s+|del\s+|della\s+|per\s+)?(?:un\s+|uno\s+|una\s+|il\s+|la\s+|l[\x27\'])?)(.+)", low)
+    if m2:
+        cand = m2.group(1).strip()
+        cand = re.sub(r"^(?:di\s+|del\s+|della\s+|per\s+)?(?:un\s+|uno\s+|una\s+|il\s+|la\s+|l[\x27\'])?", "", cand).strip()
+        cand = re.sub(r"^(?:(?:sui?|nei?)\s+)?vendor\s+", "", cand).strip()
+        cand = re.sub(r"\s+(?:sul|sui|nel|nei|dai|dai\s+player)?\s*vendor$", "", cand).strip()
+        if cand:
+            return cand
+
+    # 3. "prezzo/prezzi [di/del/della] <item> [sul vendor]" oppure "prezzi [sui] vendor <item>"
+    m3 = re.search(r"^prezz[oi]\s+(?:(?:sul|sui|nel|nei)\s*vendor\s+)?(?:di\s+|del\s+|della\s+|per\s+)?(?:un\s+|uno\s+|una\s+|il\s+|la\s+|l[\x27\'])?(.+)", low)
+    if m3:
+        cand = m3.group(1).strip()
+        cand = re.sub(r"^(?:di\s+|del\s+|della\s+|per\s+)?(?:un\s+|uno\s+|una\s+|il\s+|la\s+|l[\x27\'])?", "", cand).strip()
+        cand = re.sub(r"^(?:(?:sui?|nei?)\s+)?vendor\s+", "", cand).strip()
+        cand = re.sub(r"\s+(?:sul|sui|nel|nei|dai|dai\s+player)?\s*vendor$", "", cand).strip()
+        if cand:
+            return cand
+
+    # 4. "vendor search <item>" o "cerca vendor <item>" o "vendor <item>"
+    m4 = re.search(r"(?:vendor\s+search|cerca\s+vendor|vendor)\s+(.+)", low)
+    if m4:
+        cand = m4.group(1).strip()
+        cand = re.sub(r"^(?:di\s+|del\s+|della\s+|per\s+)?(?:un\s+|uno\s+|una\s+|il\s+|la\s+|l[\x27\'])?", "", cand).strip()
+        cand = re.sub(r"^(?:(?:sui?|nei?)\s+)?vendor\s+", "", cand).strip()
+        cand = re.sub(r"\s+(?:sul|sui|nel|nei|dai|dai\s+player)?\s*vendor$", "", cand).strip()
+        if cand and len(cand) >= 2:
+            return cand
+
+    return None
+
+
 # ==============================================================================
 # 2. Sink Multi-Utente per ascolto di TUTTO il canale vocale
 # ==============================================================================
@@ -2216,27 +2278,7 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
             return
 
         # 0C-bis-3. Ricerca VENDOR & PREZZI su UO Outlands Portal ("cerca sul vendor...", "quanto costa ... sul vendor", "vendor search...")
-        def _extract_vendor_query(text: str) -> Optional[str]:
-            low = text.strip().lower()
-            if low in ("vendor search", "cerca sul vendor", "cerca sui vendor", "vendor", "prezzi vendor", "prezzo vendor", "cerca vendor"):
-                return ""
-            m1 = re.search(r"quanto\s+costa\s+(.+?)\s+(?:sul|sui|nel|nei|dai|dai\s+player)?\s*vendor", low)
-            if m1:
-                return m1.group(1).strip()
-            m2 = re.search(r"(?:cerca|trova|vedi)\s+(?:sul|sui|nel|nei|tra\s+i|dai)\s*vendor\s+(.+)", low)
-            if m2:
-                return m2.group(1).strip()
-            m3 = re.search(r"prezz[oi]\s+(?:di\s+|del\s+|della\s+|per\s+)?(.+?)\s+(?:sul|sui|nel|nei|dai)?\s*vendor", low)
-            if m3:
-                return m3.group(1).strip()
-            m4 = re.search(r"(?:vendor\s+search|vendor)\s+(.+)", low)
-            if m4:
-                cand = m4.group(1).strip()
-                if cand and len(cand) >= 2:
-                    return cand
-            return None
-
-        vendor_item_query = _extract_vendor_query(command_part)
+        vendor_item_query = extract_vendor_query(command_part)
         if vendor_item_query is not None:
             clean_item = vendor_item_query or "oggetti"
             logger.info(f"🛒 Richiesta Vendor Search da {user.display_name}: '{clean_item}' (raw: '{command_part}')")

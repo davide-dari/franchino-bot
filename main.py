@@ -116,12 +116,22 @@ def _get_all_humans_in_voice(guild: discord.Guild, excluding_user_id: Optional[i
 
 
 async def _sync_slash_commands_bg():
-    """Sincronizza i comandi slash in background senza mai bloccare l'ingresso vocale all'avvio."""
+    """Sincronizza i comandi slash sia per le singole guild (istantaneo) sia a livello globale."""
+    # 1. Sync istantaneo per ogni server in cui si trova il bot (visibile in pochi secondi sul client Discord)
+    for guild in bot.guilds:
+        try:
+            bot.tree.copy_global_to(guild=guild)
+            synced_guild = await bot.tree.sync(guild=guild)
+            logger.info(f"⚡ Comandi slash sincronizzati all'istante per il server '{guild.name}' ({guild.id}): {len(synced_guild)} comandi registrati.")
+        except Exception as e:
+            logger.warning(f"Errore sincronizzazione comandi slash per guild {guild.id} ({guild.name}): {e}")
+
+    # 2. Sync globale canonico
     try:
         synced = await bot.tree.sync()
-        logger.info(f"Comandi slash sincronizzati con successo: {len(synced)} comandi registrati.")
+        logger.info(f"🌍 Comandi slash globali sincronizzati con successo: {len(synced)} comandi registrati.")
     except Exception as e:
-        logger.error(f"Errore durante la sincronizzazione dei comandi slash: {e}")
+        logger.error(f"Errore durante la sincronizzazione dei comandi slash globali: {e}")
 
 
 async def _check_and_sync_voice_presence():
@@ -1406,7 +1416,7 @@ async def news_cmd(ctx: commands.Context):
 
 @bot.hybrid_command(
     name="vendor",
-    aliases=["prezzi", "vendorsearch", "prezzo"],
+    aliases=["vendorsearch"],
     description="Cerca oggetti e prezzi sui Player Vendor di UO Outlands (portal.uooutlands.com/vendor-search)"
 )
 async def vendor_cmd(ctx: commands.Context, *, oggetto: str):
@@ -1421,6 +1431,28 @@ async def vendor_cmd(ctx: commands.Context, *, oggetto: str):
         asyncio.create_task(
             player.speak_tts(uo_outlands_service.VOICE_VENDOR_SEARCH_REPLY, wait=False, interrupt_music=True)
         )
+
+
+@bot.hybrid_command(
+    name="prezzi",
+    aliases=["prezzo"],
+    description="Cerca oggetti e prezzi sui Player Vendor di UO Outlands (portal.uooutlands.com/vendor-search)"
+)
+async def prezzi_cmd(ctx: commands.Context, *, oggetto: str):
+    """Cerca i migliori prezzi per un oggetto sui Player Vendor di Ultima Online Outlands."""
+    await vendor_cmd(ctx, oggetto=oggetto)
+
+
+@bot.command(name="sync")
+async def sync_cmd(ctx: commands.Context):
+    """Sincronizza istantaneamente tutti i comandi slash sul server attuale (es. !sync)."""
+    msg = await ctx.send("🔄 Sincronizzazione comandi slash in corso su questo server...")
+    try:
+        bot.tree.copy_global_to(guild=ctx.guild)
+        synced = await bot.tree.sync(guild=ctx.guild)
+        await msg.edit(content=f"✅ Sincronizzati istantaneamente **{len(synced)}** comandi slash su questo server! (Inclusi `/vendor`, `/prezzi`, `/status`, `/patch`, ecc.)")
+    except Exception as e:
+        await msg.edit(content=f"❌ Errore sincronizzazione comandi slash: `{e}`")
 
 
 

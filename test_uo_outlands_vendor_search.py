@@ -205,39 +205,26 @@ class TestVoiceCommandVendorSearchExtraction(unittest.TestCase):
 
     def test_voice_query_extraction_patterns(self):
         """Verifica che varie formulazioni vocali riconoscano correttamente il nome dell'oggetto."""
-        import voice_commands
-        # Creiamo un sink minimale per testare la funzione regex interna
-        import re
-
-        def extract_query(text: str):
-            low = text.strip().lower()
-            if low in ("vendor search", "cerca sul vendor", "cerca sui vendor", "vendor", "prezzi vendor", "prezzo vendor", "cerca vendor"):
-                return ""
-            m1 = re.search(r"quanto\s+costa\s+(.+?)\s+(?:sul|sui|nel|nei|dai|dai\s+player)?\s*vendor", low)
-            if m1:
-                return m1.group(1).strip()
-            m2 = re.search(r"(?:cerca|trova|vedi)\s+(?:sul|sui|nel|nei|tra\s+i|dai)\s*vendor\s+(.+)", low)
-            if m2:
-                return m2.group(1).strip()
-            m3 = re.search(r"prezz[oi]\s+(?:di\s+|del\s+|della\s+|per\s+)?(.+?)\s+(?:sul|sui|nel|nei|dai)?\s*vendor", low)
-            if m3:
-                return m3.group(1).strip()
-            m4 = re.search(r"(?:vendor\s+search|vendor)\s+(.+)", low)
-            if m4:
-                cand = m4.group(1).strip()
-                if cand and len(cand) >= 2:
-                    return cand
-            return None
+        from voice_commands import extract_vendor_query
 
         cases = {
             "cerca sul vendor aspect core": "aspect core",
+            "cerca vendor aspect core": "aspect core",
             "cerca sui vendor fire aspect": "fire aspect",
-            "trova nel vendor runebook": "runebook",
+            "trova sul vendor mana potion": "mana potion",
             "quanto costa mastery chain sul vendor": "mastery chain",
-            "quanto costa una bag of holding sui vendor": "una bag of holding",
-            "prezzo aspect core sui vendor": "aspect core",
-            "prezzi spellbook sul vendor": "spellbook",
+            "quanto costa una bag of holding sui vendor": "bag of holding",
+            "quanto costa aspect core": "aspect core",
+            "quanto costa un aspect core?": "aspect core",
+            "prezzo aspect core": "aspect core",
+            "prezzi aspect core": "aspect core",
+            "prezzo di aspect core sul vendor": "aspect core",
+            "prezzi vendor aspect core": "aspect core",
+            "prezzi sui vendor aspect core": "aspect core",
+            "cerca prezzi aspect core": "aspect core",
+            "cerca i prezzi di aspect core": "aspect core",
             "vendor search aspect core": "aspect core",
+            "vendor search rope": "rope",
             "vendor runebook": "runebook",
             "vendor search": "",
             "cerca sul vendor": "",
@@ -246,20 +233,27 @@ class TestVoiceCommandVendorSearchExtraction(unittest.TestCase):
         }
 
         for phrase, expected in cases.items():
-            result = extract_query(phrase)
+            result = extract_vendor_query(phrase)
             self.assertEqual(result, expected, f"Fallito per '{phrase}': ottenuto {result!r}, atteso {expected!r}")
 
 
 class TestMainSlashCommandsVendorSearch(unittest.TestCase):
-    """Verifica che il comando /vendor sia registrato correttamente in main.py."""
+    """Verifica che i comandi /vendor, /prezzi e !sync siano registrati correttamente in main.py."""
 
     def test_vendor_hybrid_command_registered(self):
         import main
-        cmd = main.bot.get_command("vendor")
-        self.assertIsNotNone(cmd, "Il comando /vendor non è registrato nel bot!")
-        self.assertEqual(cmd.name, "vendor")
-        self.assertIn("prezzi", cmd.aliases)
-        self.assertIn("vendorsearch", cmd.aliases)
+        cmd_vendor = main.bot.get_command("vendor")
+        self.assertIsNotNone(cmd_vendor, "Il comando /vendor non è registrato nel bot!")
+        self.assertEqual(cmd_vendor.name, "vendor")
+        self.assertIn("vendorsearch", cmd_vendor.aliases)
+
+        cmd_prezzi = main.bot.get_command("prezzi")
+        self.assertIsNotNone(cmd_prezzi, "Il comando /prezzi non è registrato nel bot!")
+        self.assertEqual(cmd_prezzi.name, "prezzi")
+        self.assertIn("prezzo", cmd_prezzi.aliases)
+
+        cmd_sync = main.bot.get_command("sync")
+        self.assertIsNotNone(cmd_sync, "Il comando !sync non è registrato nel bot!")
 
 
 if __name__ == "__main__":
