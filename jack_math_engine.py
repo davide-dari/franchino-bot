@@ -87,7 +87,10 @@ DOMAIN_CORPUS: Dict[str, List[str]] = {
         "hydra", "chimera", "kraken", "serpent", "spider", "ettin", "gargoyle", "golem",
         "wraith", "mummy", "wisp", "steed", "yeti", "zorn", "guar", "kith", "garou", "dryad",
         "magery", "fishing", "pesca", "mining", "lockpicking", "scassinare", "tamare", "curare",
-        "meditare", "swords", "archery", "chivalry", "necromancy", "spiritspeak"
+        "meditare", "swords", "archery", "chivalry", "necromancy", "spiritspeak",
+        "uoaddicts", "build pvm", "build pvp", "build popolari", "build recenti",
+        "server status", "status server", "server online", "server up", "riavvio",
+        "manutenzione", "restart", "orario riavvio", "ashburn", "2593"
     ],
     "sports_match": [
         "partita", "partite", "match", "incontri", "gare", "sfide", "stasera", "oggi",

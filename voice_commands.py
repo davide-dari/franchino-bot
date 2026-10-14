@@ -1920,6 +1920,173 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
                 )
                 return
 
+        # 0C-ter-1. UO Outlands SERVER STATUS ("il server è online?", "status server", ecc.)
+        cmd_p_low = command_part.lower().strip(" ?!.,;:")
+        status_triggers = (
+            "il server è online", "il server e online", "il server è up", "il server e up",
+            "server online", "server up", "status server", "server status", "stato del server",
+            "è online il server", "e online il server", "è up il server", "e up il server",
+            "controlla il server", "server outlands online", "il server outlands è online"
+        )
+        if any(tr in cmd_p_low for tr in status_triggers) or (
+            ("server" in cmd_p_low or "outlands" in cmd_p_low) and any(w in cmd_p_low for w in ("online", "up", "status", "stato"))
+        ):
+            logger.info(f"🌐 Richiesta Server Status Outlands da {user.display_name}: '{command_part}'")
+            import uo_outlands_service
+            res = await uo_outlands_service.check_uo_server_status()
+            await self._notify_channel(
+                f"🌐 **{user.display_name}** ha chiesto lo stato del server di **UO Outlands**:",
+                embed=res.build_embed()
+            )
+            asyncio.create_task(
+                self.player.speak_tts(res.voice_text(), wait=False, interrupt_music=True, keep_paused_after=False)
+            )
+            from central_hub import hub
+            asyncio.create_task(
+                hub.archive_interaction(
+                    user_id=str(getattr(user, "id", 0)),
+                    user_name=user.display_name,
+                    raw_query=command_part,
+                    intent="uo_server_status",
+                    ai_response="UO Outlands Server Status",
+                    voice_summary=res.voice_text(),
+                    channel_name=self.player.text_channel.name if self.player.text_channel else None,
+                    metadata={"online": res.online, "latency": res.latency_ms}
+                )
+            )
+            return
+
+        # 0C-ter-2. UO Outlands RIAVVIO ORDINARIO ("quando si riavvia il server?", "riavvio server", ecc.)
+        restart_triggers = (
+            "quando si riavvia il server", "quando riavvia il server", "quando c'è il riavvio",
+            "quando ce il riavvio", "a che ora si riavvia il server", "a che ora riavvia il server",
+            "orario riavvio", "orario del riavvio", "riavvio server", "riavvio del server",
+            "riavvio ordinario", "restart server", "quando riavviano", "prossimo riavvio"
+        )
+        if any(tr in cmd_p_low for tr in restart_triggers) or (
+            ("server" in cmd_p_low or "outlands" in cmd_p_low) and any(w in cmd_p_low for w in ("riavvio", "riavvia", "restart", "manutenzione"))
+        ):
+            logger.info(f"⏰ Richiesta Riavvio Server Outlands da {user.display_name}: '{command_part}'")
+            import uo_outlands_service
+            info = uo_outlands_service.get_next_restart_info()
+            await self._notify_channel(
+                f"🔄 **{user.display_name}** ha chiesto informazioni sul riavvio del server di **UO Outlands**:",
+                embed=info.build_embed()
+            )
+            asyncio.create_task(
+                self.player.speak_tts(info.voice_text(), wait=False, interrupt_music=True, keep_paused_after=False)
+            )
+            from central_hub import hub
+            asyncio.create_task(
+                hub.archive_interaction(
+                    user_id=str(getattr(user, "id", 0)),
+                    user_name=user.display_name,
+                    raw_query=command_part,
+                    intent="uo_server_restart",
+                    ai_response="UO Outlands Daily Restart",
+                    voice_summary=info.voice_text(),
+                    channel_name=self.player.text_channel.name if self.player.text_channel else None,
+                    metadata={"hours": info.hours, "minutes": info.minutes}
+                )
+            )
+            return
+
+        # 0C-ter-3. UOAddicts BUILDS VOCALI ("build pvm", "build pvp", "build popolari", "build recenti", "build più usate", ecc.)
+        builds_online_triggers = (
+            "build pvm", "builds pvm", "build pvp", "builds pvp", "build popolari",
+            "build recenti", "build più usate", "build piu usate", "build più utilizzate",
+            "build piu utilizzate", "build uoaddicts", "builds uoaddicts", "build outlands",
+            "build", "builds", "mostra le build", "quali sono le build", "consigliami una build"
+        )
+        if any(tr in cmd_p_low for tr in builds_online_triggers) or (
+            "build" in cmd_p_low and any(w in cmd_p_low for w in ("pvm", "pvp", "popolari", "recenti", "uoaddicts", "più usate", "piu usate", "outlands", "cerca"))
+        ):
+            logger.info(f"⚔️ Richiesta Build UOAddicts da {user.display_name}: '{command_part}'")
+            import uo_outlands_service
+            cat = "popular"
+            cat_label = "più popolari"
+            if "pvp" in cmd_p_low:
+                cat = "pvp"
+                cat_label = "PvP"
+            elif "pvm" in cmd_p_low:
+                cat = "pvm"
+                cat_label = "PvM"
+            elif any(r in cmd_p_low for r in ("recent", "nuov")):
+                cat = "recent"
+                cat_label = "recenti"
+
+            # Estrae eventuale termine di ricerca specifico (es. "build tamer", "build arciere")
+            clean_search = re.sub(
+                r"\b(?:build|builds|template|su|da|di|per|le|la|il|più|piu|usate|utilizzate|migliori|popolari|recenti|pvm|pvp|uoaddicts|outlands|cerca|trova|mostra)\b",
+                "",
+                cmd_p_low
+            ).strip()
+
+            if clean_search and len(clean_search) >= 3 and clean_search not in ("online", "server", "news"):
+                builds = await uo_outlands_service.builds_service.search_builds(clean_search, category=cat)
+                embed = uo_outlands_service.build_builds_embed(builds, category=cat, query=clean_search)
+                voice_text = f"Ho cercato le build per {clean_search} su UO Addicts e te le ho mandate in chat!"
+            else:
+                builds = await uo_outlands_service.builds_service.fetch_builds(cat)
+                embed = uo_outlands_service.build_builds_embed(builds, category=cat)
+                voice_text = f"Ho trovato le build {cat_label} su UO Addicts e te le ho mandate in chat!"
+
+            await self._notify_channel(
+                f"⚔️ **{user.display_name}** ha chiesto le build **{cat_label.upper()}** di UO Outlands da UOAddicts:",
+                embed=embed
+            )
+            asyncio.create_task(
+                self.player.speak_tts(voice_text, wait=False, interrupt_music=True, keep_paused_after=False)
+            )
+            from central_hub import hub
+            asyncio.create_task(
+                hub.archive_interaction(
+                    user_id=str(getattr(user, "id", 0)),
+                    user_name=user.display_name,
+                    raw_query=command_part,
+                    intent="uoaddicts_builds",
+                    ai_response=f"UOAddicts Builds {cat}",
+                    voice_summary=voice_text,
+                    channel_name=self.player.text_channel.name if self.player.text_channel else None,
+                    metadata={"category": cat, "count": len(builds), "search": clean_search}
+                )
+            )
+            return
+
+        # 0C-ter-4. UOAddicts NEWS VOCALI ("news outlands", "notizie outlands", ecc.)
+        news_triggers = (
+            "news outlands", "notizie outlands", "ultime news outlands",
+            "novità outlands", "novita outlands", "aggiornamenti outlands",
+            "news uoaddicts", "novità di outlands"
+        )
+        if any(tr in cmd_p_low for tr in news_triggers):
+            logger.info(f"📰 Richiesta News Outlands da {user.display_name}: '{command_part}'")
+            import uo_outlands_service
+            items = await uo_outlands_service.news_service.fetch_latest_news(limit=5)
+            embed = uo_outlands_service.build_news_list_embed(items)
+            voice_text = "Ho recuperato le ultime novità di Outlands da UO Addicts, trovi tutto in chat!"
+            await self._notify_channel(
+                f"📰 **{user.display_name}** ha chiesto le ultime notizie di **UO Outlands** da UOAddicts:",
+                embed=embed
+            )
+            asyncio.create_task(
+                self.player.speak_tts(voice_text, wait=False, interrupt_music=True, keep_paused_after=False)
+            )
+            from central_hub import hub
+            asyncio.create_task(
+                hub.archive_interaction(
+                    user_id=str(getattr(user, "id", 0)),
+                    user_name=user.display_name,
+                    raw_query=command_part,
+                    intent="uoaddicts_news",
+                    ai_response="UOAddicts News",
+                    voice_summary=voice_text,
+                    channel_name=self.player.text_channel.name if self.player.text_channel else None,
+                    metadata={"count": len(items)}
+                )
+            )
+            return
+
         # 0C-ter. Domande AIUTO/GUIDA su UO OUTLANDS ("cosa puoi fare su outlands", "aiuto outlands", ecc.)
         from outlands_wiki import is_help_question, is_wiki_question, query_outlands_wiki, get_outlands_help_embed
         if is_help_question(command_part):

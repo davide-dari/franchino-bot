@@ -1349,7 +1349,7 @@ def _resolve_build_query(question: str) -> Optional[dict]:
         matched_key = "dexxer_spada"
     elif any(k in q_low for k in ("iniziare", "principiante", "beginner", "soldi", "gold", "starter")):
         matched_key = "starter_gold"
-    elif any(k in q_low for k in ("miglior", "migliori", "consigli", "consiglia", "consigliami", "quali", "che", "top", "meta", "farmare", "farm", "pvm")):
+    elif any(k in q_low for k in ("miglior", "migliori", "consigli", "consiglia", "consigliami", "quali", "che", "top", "meta", "farmare", "farm", "pvm", "build", "builds", "template")):
         matched_key = "meta_overview"
 
     if not matched_key or matched_key not in OUTLANDS_BUILDS:
@@ -1370,7 +1370,12 @@ def _resolve_build_query(question: str) -> Optional[dict]:
         value=f"[Apri la guida `{b['wiki_page']}` su wiki.uooutlands.com]({b['wiki_url']})",
         inline=False,
     )
-    embed.set_footer(text="Franchino UO Outlands Build Advisor • wiki.uooutlands.com")
+    embed.add_field(
+        name="🌐 Build Online Community UOAddicts",
+        value="[Sfoglia le build più utilizzate su UOAddicts.com](https://uoaddicts.com/builds/popular) • Usa il comando `/builds` in chat!",
+        inline=False,
+    )
+    embed.set_footer(text="Franchino UO Outlands Build Advisor • wiki.uooutlands.com & uoaddicts.com")
 
     return {
         "page_title": b["title"],
@@ -2188,6 +2193,16 @@ def get_outlands_help_embed(page_count: int = 2212, creature_count: int = 1301) 
         inline=False,
     )
     embed.add_field(
+        name="🌐 UOAddicts & Server Sentinel",
+        value=(
+            "• *\"Il server è online?\"* o `/status` — Stato server, ping e IP\n"
+            "• *\"Quando si riavvia il server?\"* o `/riavvio` — Countdown riavvio delle 17:00\n"
+            "• *\"Build PVM / PVP\"* o `/builds [cat]` — Build più usate da UOAddicts\n"
+            "• *\"News Outlands\"* o `/news` — Ultime novità da UOAddicts"
+        ),
+        inline=False,
+    )
+    embed.add_field(
         name="\U0001f4a1 Come chiedermi info (vocale o testuale)",
         value=(
             "\U0001f399\ufe0f **Voce**: *\"Franchino [domanda]\"* o *\"Franchino script [skill]\"* \u2014 Rispondo a voce!\n"
@@ -2425,7 +2440,8 @@ def is_wiki_question(command_part: str) -> Tuple[bool, str]:
     # 2. Termini chiave UO Outlands con word boundary (alta priorita')
     uo_kw = re.compile(
         r"\b(?:pet|pets|build|builds|template|tamer|taming|dexxer|aspect|slayer|slayers|"
-        r"drake|ostard|nightmare|bestiario|bestiary|lockpicking|codex|pvm|pvp)\b",
+        r"drake|ostard|nightmare|bestiario|bestiary|lockpicking|codex|pvm|pvp|uoaddicts|"
+        r"server\s+status|status\s+server|riavvio|riavvii|restart)\b",
         re.IGNORECASE,
     )
     if uo_kw.search(cmd_low):
@@ -2464,6 +2480,10 @@ def is_wiki_question(command_part: str) -> Tuple[bool, str]:
         "corpse worm", "frenzied ostard", "bloodwolf", "hellhound", "tier list",
         "guida ai pet", "guida pet", "guida tamer", "guida build", "statistiche del pet", "statistiche dei pet",
         "bardo arciere", "dexxer spada", "tamer mage", "ladro dungeon",
+        "il server è online", "il server è up", "status server", "stato del server", "server status",
+        "quando si riavvia il server", "quando riavvia il server", "riavvio del server", "orario del riavvio",
+        "orario riavvio", "build pvm", "build pvp", "build popolari", "build recenti",
+        "notizie outlands", "news outlands", "ultime novità outlands", "novità outlands",
     )
     if any(p in cmd_low for p in uo_phrases):
         return True, cmd

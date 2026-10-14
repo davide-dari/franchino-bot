@@ -3,6 +3,7 @@ import logging
 import random
 import re
 import sys
+from datetime import datetime, time as dtime, timedelta
 from typing import Optional, Literal
 import discord
 from discord.ext import commands
@@ -81,6 +82,8 @@ player_manager = PlayerManager(bot, source_manager)
 
 
 _presence_loop_task: Optional[asyncio.Task] = None
+_uo_news_task: Optional[asyncio.Task] = None
+_uo_restart_task: Optional[asyncio.Task] = None
 
 
 def _get_human_ids_in_channel(vc_channel: discord.VoiceChannel, excluding_user_id: Optional[int] = None) -> list[int]:
@@ -172,12 +175,115 @@ async def _voice_room_presence_loop():
         pass
 
 
+async def _uoaddicts_news_monitor_loop(interval_sec: float = 900.0):
+    """Loop di background che controlla nuove news su UOAddicts ogni 15 minuti e le pubblica in #info."""
+    try:
+        await asyncio.sleep(5.0)
+        import uo_outlands_service
+        logger.info("📰 Avviato loop di monitoraggio news UOAddicts...")
+        while True:
+            try:
+                new_items = await uo_outlands_service.news_service.check_for_new_news()
+                if new_items:
+                    logger.info(f"📰 Trovate {len(new_items)} nuove news su UOAddicts!")
+                    for item in new_items:
+                        embed = uo_outlands_service.build_news_embed(item)
+                        for guild in bot.guilds:
+                            ch = uo_outlands_service.resolve_announcement_channel(guild)
+                            if ch:
+                                try:
+                                    await ch.send(
+                                        content=f"📰 **Nuovo articolo su UOAddicts per UO Outlands!**\n> **{item.title}**",
+                                        embed=embed,
+                                    )
+                                except Exception as e:
+                                    logger.warning(f"Errore invio news nel canale {ch.name} di {guild.name}: {e}")
+            except Exception as e:
+                logger.error(f"Errore nel check periodico news UOAddicts: {e}")
+            await asyncio.sleep(interval_sec)
+    except asyncio.CancelledError:
+        pass
+
+
+async def _uo_daily_restart_alert_loop(check_interval_sec: float = 25.0):
+    """
+    Loop di background che controlla l'orario e invia allarmi automatici nel canale #info:
+    - Alle 16:50 (10 minuti prima del riavvio ordinario delle 17:00 / 11:00 AM ET): pre-avviso manutenzione + TTS vocale
+    - Alle 16:55 (5 minuti prima): allarme urgente + TTS vocale
+    """
+    try:
+        await asyncio.sleep(6.0)
+        import uo_outlands_service
+        logger.info("⏰ Avviato loop di allerta riavvio ordinario UO Outlands...")
+        alerts_10min_sent = set()
+        alerts_5min_sent = set()
+
+        while True:
+            try:
+                now_ny = datetime.now(uo_outlands_service.TZ_ET)
+                today_ny = now_ny.date()
+                restart_today = datetime.combine(today_ny, dtime(11, 0, 0), tzinfo=uo_outlands_service.TZ_ET)
+                t_10min = restart_today - timedelta(minutes=10)
+                t_5min = restart_today - timedelta(minutes=5)
+
+                restart_rome = restart_today.astimezone(uo_outlands_service.TZ_ROME)
+                time_str = f"alle {restart_rome.strftime('%H:%M')} italiane / 11:00 AM ET"
+
+                # Pre-avviso 10 minuti prima
+                if t_10min <= now_ny < t_5min:
+                    if today_ny not in alerts_10min_sent:
+                        alerts_10min_sent.add(today_ny)
+                        logger.info("⚠️ Invio allerta riavvio 10 minuti per UO Outlands!")
+                        embed = uo_outlands_service.build_restart_alert_embed(minutes_left=10, target_time_str=time_str)
+                        voice_msg = uo_outlands_service.build_restart_alert_voice(minutes_left=10)
+                        for guild in bot.guilds:
+                            ch = uo_outlands_service.resolve_announcement_channel(guild)
+                            if ch:
+                                try:
+                                    await ch.send(content="⚠️ **Attenzione avventurieri! Riavvio ordinario del server tra 10 minuti!**", embed=embed)
+                                except Exception as e:
+                                    logger.warning(f"Errore invio alert 10m a {guild.name}: {e}")
+                            player = player_manager.get_player(guild)
+                            if player and player.voice_client and player.voice_client.is_connected():
+                                asyncio.create_task(player.speak_tts(voice_msg, wait=False, interrupt_music=True))
+
+                # Allarme urgente 5 minuti prima
+                elif t_5min <= now_ny < restart_today:
+                    if today_ny not in alerts_5min_sent:
+                        alerts_5min_sent.add(today_ny)
+                        logger.info("🚨 Invio allerta riavvio 5 minuti per UO Outlands!")
+                        embed = uo_outlands_service.build_restart_alert_embed(minutes_left=5, target_time_str=time_str)
+                        voice_msg = uo_outlands_service.build_restart_alert_voice(minutes_left=5)
+                        for guild in bot.guilds:
+                            ch = uo_outlands_service.resolve_announcement_channel(guild)
+                            if ch:
+                                try:
+                                    await ch.send(content="🚨 **ULTIMO AVVISO! Riavvio ordinario del server tra 5 minuti!**", embed=embed)
+                                except Exception as e:
+                                    logger.warning(f"Errore invio alert 5m a {guild.name}: {e}")
+                            player = player_manager.get_player(guild)
+                            if player and player.voice_client and player.voice_client.is_connected():
+                                asyncio.create_task(player.speak_tts(voice_msg, wait=False, interrupt_music=True))
+
+                # Pulizia date vecchie
+                if len(alerts_10min_sent) > 5:
+                    alerts_10min_sent = {today_ny}
+                if len(alerts_5min_sent) > 5:
+                    alerts_5min_sent = {today_ny}
+
+            except Exception as e:
+                logger.error(f"Errore nel loop alert riavvio Outlands: {e}")
+            await asyncio.sleep(check_interval_sec)
+    except asyncio.CancelledError:
+        pass
+
+
 # ==========================================
 # EVENTI DEL BOT
 # ==========================================
 @bot.event
 async def on_ready():
-    global _presence_loop_task
+    global _presence_loop_task, _uo_news_task, _uo_restart_task
     logger.info("==========================================")
     logger.info(f"Franchino è online come: {bot.user} (ID: {bot.user.id})")
     logger.info(f"Prefisso comandi testuali: {COMMAND_PREFIX}")
@@ -190,6 +296,13 @@ async def on_ready():
     # 2. Avvia il guardiano continuo 24/7 delle stanze vocali (controlla ogni 2.5 secondi)
     if _presence_loop_task is None or _presence_loop_task.done():
         _presence_loop_task = asyncio.create_task(_voice_room_presence_loop())
+
+    # 2b. Avvia i guardiani di monitoraggio UO Outlands (News UOAddicts e Daily Restart Alert)
+    if _uo_news_task is None or _uo_news_task.done():
+        _uo_news_task = asyncio.create_task(_uoaddicts_news_monitor_loop())
+
+    if _uo_restart_task is None or _uo_restart_task.done():
+        _uo_restart_task = asyncio.create_task(_uo_daily_restart_alert_loop())
 
     # 3. Sincronizza i comandi slash in background (così eventuali rate-limit Discord non bloccano mai la voce)
     asyncio.create_task(_sync_slash_commands_bg())
@@ -939,6 +1052,46 @@ async def _handle_outlands_query(ctx: commands.Context, domanda: str):
             )
         return
 
+    # Riconosce scorciatoie per status, riavvio, build e news
+    if domanda_low in ("status", "server", "server status", "online", "stato", "ping"):
+        import uo_outlands_service
+        s_res = await uo_outlands_service.check_uo_server_status()
+        await ctx.send(embed=s_res.build_embed())
+        player = player_manager.get_player(ctx.guild)
+        if player and player.voice_client and player.voice_client.is_connected():
+            asyncio.create_task(player.speak_tts(s_res.voice_text(), wait=False, interrupt_music=True))
+        return
+
+    if domanda_low in ("riavvio", "restart", "manutenzione", "quando riavvia", "orario riavvio"):
+        import uo_outlands_service
+        r_info = uo_outlands_service.get_next_restart_info()
+        await ctx.send(embed=r_info.build_embed())
+        player = player_manager.get_player(ctx.guild)
+        if player and player.voice_client and player.voice_client.is_connected():
+            asyncio.create_task(player.speak_tts(r_info.voice_text(), wait=False, interrupt_music=True))
+        return
+
+    if domanda_low in ("build", "builds", "builds popolari", "build popolari") or any(k in domanda_low for k in ("build pvm", "build pvp", "build popolari", "build recenti", "build uoaddicts", "build più usate", "build piu usate")):
+        import uo_outlands_service
+        cat = "pvm" if "pvm" in domanda_low else ("pvp" if "pvp" in domanda_low else ("recent" if "recent" in domanda_low else "popular"))
+        builds = await uo_outlands_service.builds_service.fetch_builds(cat)
+        b_embed = uo_outlands_service.build_builds_embed(builds, category=cat)
+        await ctx.send(embed=b_embed)
+        player = player_manager.get_player(ctx.guild)
+        if player and player.voice_client and player.voice_client.is_connected():
+            asyncio.create_task(player.speak_tts("Ecco le build più utilizzate su UO Addicts, te le ho mandate in chat!", wait=False, interrupt_music=True))
+        return
+
+    if domanda_low in ("news", "notizie", "novità", "novita", "aggiornamenti"):
+        import uo_outlands_service
+        items = await uo_outlands_service.news_service.fetch_latest_news(limit=5)
+        n_embed = uo_outlands_service.build_news_list_embed(items)
+        await ctx.send(embed=n_embed)
+        player = player_manager.get_player(ctx.guild)
+        if player and player.voice_client and player.voice_client.is_connected():
+            asyncio.create_task(player.speak_tts("Ho trovato le ultime novità da UO Addicts e te le ho mandate in chat!", wait=False, interrupt_music=True))
+        return
+
     try:
         res = await asyncio.wait_for(query_outlands_wiki(domanda), timeout=18.0)
     except asyncio.TimeoutError:
@@ -1091,6 +1244,136 @@ async def script_cmd(ctx: commands.Context, skill: Optional[str] = "lista", nume
         asyncio.create_task(
             player.speak_tts(voice_answer, wait=False, interrupt_music=True, keep_paused_after=False)
         )
+
+
+@bot.hybrid_command(
+    name="status",
+    aliases=["uo_status", "server_status"],
+    description="Verifica se il server di Ultima Online Outlands è online (porta 2593, IP 74.91.113.38) e ping in ms"
+)
+async def status_cmd(ctx: commands.Context):
+    """Verifica lo stato di connessione TCP e la latenza del server UO Outlands."""
+    await ctx.defer()
+    import uo_outlands_service
+    res = await uo_outlands_service.check_uo_server_status()
+    embed = res.build_embed()
+    await ctx.send(embed=embed)
+    player = player_manager.get_player(ctx.guild)
+    if player and player.voice_client and player.voice_client.is_connected():
+        asyncio.create_task(player.speak_tts(res.voice_text(), wait=False, interrupt_music=True))
+
+
+@bot.hybrid_command(
+    name="server",
+    description="Verifica se il server di UO Outlands è online (play.uooutlands.com, IP 74.91.113.38:2593)"
+)
+async def server_cmd(ctx: commands.Context):
+    """Verifica lo stato del server UO Outlands (alias per /status)."""
+    await ctx.defer()
+    import uo_outlands_service
+    res = await uo_outlands_service.check_uo_server_status()
+    embed = res.build_embed()
+    await ctx.send(embed=embed)
+    player = player_manager.get_player(ctx.guild)
+    if player and player.voice_client and player.voice_client.is_connected():
+        asyncio.create_task(player.speak_tts(res.voice_text(), wait=False, interrupt_music=True))
+
+
+@bot.hybrid_command(
+    name="riavvio",
+    aliases=["server_riavvio", "server_restart", "uo_restart", "outlands_restart"],
+    description="Mostra il conto alla rovescia e l'orario del prossimo riavvio ordinario di UO Outlands (11:00 AM ET / 17:00 IT)"
+)
+async def riavvio_cmd(ctx: commands.Context):
+    """Mostra l'orario del riavvio ordinario giornaliero e il conto alla rovescia."""
+    await ctx.defer()
+    import uo_outlands_service
+    info = uo_outlands_service.get_next_restart_info()
+    embed = info.build_embed()
+    await ctx.send(embed=embed)
+    player = player_manager.get_player(ctx.guild)
+    if player and player.voice_client and player.voice_client.is_connected():
+        asyncio.create_task(player.speak_tts(info.voice_text(), wait=False, interrupt_music=True))
+
+
+@bot.hybrid_command(
+    name="build",
+    aliases=["cerca_build", "find_build"],
+    description="Cerca una build specifica di UO Outlands per nome o abilità su UOAddicts"
+)
+async def build_cmd(
+    ctx: commands.Context,
+    *,
+    nome: str
+):
+    """Cerca e visualizza una build specifica di Ultima Online Outlands da UOAddicts."""
+    await ctx.defer()
+    import uo_outlands_service
+    builds = await uo_outlands_service.builds_service.search_builds(nome)
+    if builds:
+        if len(builds) == 1:
+            embed = uo_outlands_service.build_single_build_embed(builds[0])
+        else:
+            embed = uo_outlands_service.build_builds_embed(builds, query=nome)
+        voice_msg = f"Ho cercato la build per {nome} su UO Addicts e te l'ho mandata in chat!"
+    else:
+        popular = await uo_outlands_service.builds_service.fetch_builds("popular")
+        embed = uo_outlands_service.build_builds_embed(popular, query=f"{nome} (nessun risultato)")
+        embed.description = f"⚠️ Nessuna build trovata per **\"{nome}\"**. Ecco le build più popolari su UOAddicts:"
+        voice_msg = f"Non ho trovato build per {nome}, ma ti ho mandato in chat le più popolari!"
+
+    await ctx.send(embed=embed)
+    player = player_manager.get_player(ctx.guild)
+    if player and player.voice_client and player.voice_client.is_connected():
+        asyncio.create_task(player.speak_tts(voice_msg, wait=False, interrupt_music=True))
+
+
+@bot.hybrid_command(
+    name="builds",
+    aliases=["builds_list", "uoaddicts_builds", "outlands_builds"],
+    description="Mostra le build più utilizzate di UO Outlands da UOAddicts (categorie: popolari, pvm, pvp, recenti)"
+)
+async def builds_cmd(
+    ctx: commands.Context,
+    categoria: Literal["popolari", "pvm", "pvp", "recenti"] = "popolari",
+    *,
+    ricerca: Optional[str] = None
+):
+    """Sfoglia o cerca le build più utilizzate di Ultima Online Outlands da UOAddicts."""
+    await ctx.defer()
+    import uo_outlands_service
+    norm_cat = uo_outlands_service.builds_service.normalize_category(categoria)
+    if ricerca:
+        builds = await uo_outlands_service.builds_service.search_builds(ricerca, category=norm_cat)
+    else:
+        builds = await uo_outlands_service.builds_service.fetch_builds(category=norm_cat)
+    embed = uo_outlands_service.build_builds_embed(builds, category=norm_cat, query=ricerca)
+    await ctx.send(embed=embed)
+    player = player_manager.get_player(ctx.guild)
+    if player and player.voice_client and player.voice_client.is_connected():
+        voice_msg = f"Ho recuperato le build {categoria} da UO Addicts e te le ho mandate in chat!"
+        asyncio.create_task(player.speak_tts(voice_msg, wait=False, interrupt_music=True))
+
+
+@bot.hybrid_command(
+    name="news",
+    aliases=["notizie", "uoaddicts_news", "outlands_news"],
+    description="Mostra le ultime novità e discussioni di UO Outlands da UOAddicts"
+)
+async def news_cmd(ctx: commands.Context):
+    """Mostra le ultime notizie di Ultima Online Outlands pubblicate su UOAddicts."""
+    await ctx.defer()
+    import uo_outlands_service
+    items = await uo_outlands_service.news_service.fetch_latest_news(limit=5)
+    if not items:
+        await ctx.send("⚠️ Impossibile recuperare le notizie da UOAddicts in questo momento. Riprova tra poco!")
+        return
+    embed = uo_outlands_service.build_news_list_embed(items)
+    await ctx.send(embed=embed)
+    player = player_manager.get_player(ctx.guild)
+    if player and player.voice_client and player.voice_client.is_connected():
+        voice_msg = "Ho trovato le ultime novità su Outlands da UO Addicts e le ho mandate in chat!"
+        asyncio.create_task(player.speak_tts(voice_msg, wait=False, interrupt_music=True))
 
 
 @bot.hybrid_command(
