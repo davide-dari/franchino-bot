@@ -2498,9 +2498,9 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
             query = queue_match.group(1).strip()
             if query:
                 self.player._manual_stop = False
-                await self._notify_channel(
+                asyncio.create_task(self._notify_channel(
                     f"🎙️ **{user.display_name}**: *\"Franchino aggiungi {query}\"* — Aggiungo in coda!"
-                )
+                ))
                 try:
                     songs = await asyncio.wait_for(
                         self.player.source_manager.resolve_url_or_query(query, requester=requester_arg),
@@ -2608,9 +2608,9 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
                     except Exception as e:
                         logger.debug(f"Mood refinement fallback: {e}")
 
-                await self._notify_channel(
+                asyncio.create_task(self._notify_channel(
                     f"🎙️ **{user.display_name}**: *\"Franchino metti {query}\"* — Avvio subito nel canale!"
-                )
+                ))
                 try:
                     songs = await asyncio.wait_for(
                         self.player.source_manager.resolve_url_or_query(query, requester=requester_arg),
@@ -3012,9 +3012,9 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
 
             logger.info(f"🎵 Fallback ricerca musicale per {user.display_name}: '{music_query}'")
             self.player._manual_stop = False
-            await self._notify_channel(
+            asyncio.create_task(self._notify_channel(
                 f"🎙️ **{user.display_name}**: *\"Franchino {command_part}\"* — Cerco e avvio in console! 🎶"
-            )
+            ))
             try:
                 songs = await asyncio.wait_for(
                     self.player.source_manager.resolve_url_or_query(music_query, requester=requester_arg),

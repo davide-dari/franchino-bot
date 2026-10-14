@@ -46,6 +46,8 @@ class SongInfo:
     source_type: str = "youtube"  # 'youtube', 'spotify', 'search'
     spotify_url: Optional[str] = None
     search_query: Optional[str] = None
+    http_headers: Optional[Dict[str, str]] = None
+    is_direct_stream: bool = False
 
     @property
     def duration_str(self) -> str:
@@ -88,7 +90,7 @@ class SongInfo:
 
 
 class SourceManager:
-    """Gestisce la ricerca ed estrazione dei flussi audio da YouTube e Spotify."""
+    """Gestisce la ricerca ed estrazione dei flussi audio da YouTube e Spotify con architettura ultra-rapida a bassa latenza."""
 
     def __init__(self):
         self.sp = None
@@ -105,24 +107,39 @@ class SourceManager:
             except Exception as e:
                 logger.warning(f"Errore inizializzazione Spotipy: {e}. Verrà usato il parser integrato.")
 
+        # Cache in memoria per risoluzione query ultra-veloce (TTL 1 ora)
+        self._resolution_cache: Dict[str, Tuple[SongInfo, float]] = {}
+        # Cache metadati Spotify (TTL 24 ore)
+        self._spotify_cache: Dict[str, Tuple[str, str, float]] = {}
+        # Cache directory persistente yt-dlp (evita ricaricamento JavaScript decipher player)
+        self.ytdlp_cache_dir = "/tmp/franchino_ytdlp_cache"
+        try:
+            os.makedirs(self.ytdlp_cache_dir, exist_ok=True)
+            os.makedirs("/tmp/franchino_cache", exist_ok=True)
+        except Exception:
+            pass
+
         # Client YouTube: 'default' usa automaticamente (web_embedded, tv_downgraded, web) quando ci sono i cookie,
         # mentre 'android' e 'visionos' funzionano senza cookie.
-        # IMPORTANTE: non mettere MAI solo ['android'] quando si usa cookies.txt, altrimenti yt-dlp scarta android
-        # (perché non supporta i cookie) lasciando zero client disponibili ("Requested format is not available")!
         yt_extractor_args = {
             "youtube": {
-                "player_client": ["default", "android", "web_embedded", "tv"],
+                "player_client": ["android", "default", "web_embedded"],
             }
         }
 
-        # Opzioni yt-dlp per estrazione flussi audio
+        # Opzioni yt-dlp per estrazione ultra-rapida flussi audio (prioritizza Opus 251 e AAC 140 nativi Discord)
         self.ydl_opts_stream = {
-            "format": "bestaudio/best",
+            "format": "ba[abr<=160]/251/140/bestaudio/best",
             "noplaylist": True,
             "quiet": True,
             "no_warnings": True,
             "source_address": "0.0.0.0",
             "extract_flat": False,
+            "nocheckcertificate": True,
+            "cachedir": self.ytdlp_cache_dir,
+            "concurrent_fragment_downloads": 4,
+            "buffersize": 64 * 1024,
+            "http_chunk_size": 10485760,
             "remote_components": ["ejs:github"],
             "extractor_args": yt_extractor_args,
             "socket_timeout": 12.0,
@@ -137,6 +154,8 @@ class SourceManager:
             "quiet": True,
             "no_warnings": True,
             "source_address": "0.0.0.0",
+            "nocheckcertificate": True,
+            "cachedir": self.ytdlp_cache_dir,
             "remote_components": ["ejs:github"],
             "extractor_args": yt_extractor_args,
             "socket_timeout": 12.0,
@@ -145,6 +164,44 @@ class SourceManager:
             self.ydl_opts_flat["js_runtimes"] = {"node": {}}
 
         self._configure_cookies()
+
+    def _get_cached_song(self, key: str, requester: Optional[Union[discord.Member, discord.User, str]] = None) -> Optional[SongInfo]:
+        """Restituisce un SongInfo dalla cache in memoria se ancora valido e non scaduto."""
+        import time as _t
+        now = _t.time()
+        if key in self._resolution_cache:
+            cached_song, ts = self._resolution_cache[key]
+            if now - ts < 3600:  # 1 ora TTL
+                # Clona l'oggetto per aggiornare il requester corrente
+                return SongInfo(
+                    title=cached_song.title,
+                    webpage_url=cached_song.webpage_url,
+                    stream_url=cached_song.stream_url,
+                    duration=cached_song.duration,
+                    thumbnail=cached_song.thumbnail,
+                    uploader=cached_song.uploader,
+                    requester=requester or cached_song.requester,
+                    source_type=cached_song.source_type,
+                    spotify_url=cached_song.spotify_url,
+                    search_query=cached_song.search_query,
+                    http_headers=cached_song.http_headers,
+                    is_direct_stream=cached_song.is_direct_stream,
+                )
+            else:
+                del self._resolution_cache[key]
+        return None
+
+    def _cache_song(self, key: str, song: SongInfo):
+        """Salva una risoluzione nella cache in memoria (LRU limit a 256 voci)."""
+        import time as _t
+        if len(self._resolution_cache) > 256:
+            # Rimuove le prime 32 voci più vecchie
+            oldest_keys = sorted(self._resolution_cache.keys(), key=lambda k: self._resolution_cache[k][1])[:32]
+            for ok in oldest_keys:
+                self._resolution_cache.pop(ok, None)
+        self._resolution_cache[key] = (song, _t.time())
+        if song.webpage_url:
+            self._resolution_cache[song.webpage_url.strip().lower()] = (song, _t.time())
 
     def _configure_cookies(self):
         """Rileva cookies.txt e ne crea una copia scrivibile in /tmp per evitare errori di permessi."""
@@ -165,9 +222,16 @@ class SourceManager:
     async def resolve_url_or_query(self, query: str, requester: Optional[Union[discord.Member, discord.User]] = None) -> List[SongInfo]:
         """
         Risolve un URL o termine di ricerca (YouTube o Spotify) e restituisce una lista di SongInfo.
-        Può restituire un brano singolo o un'intera playlist/album.
+        Può restituire un brano singolo o un'intera playlist/album con latenza minima grazie alla cache e single-pass.
         """
         query = query.strip()
+        cache_key = query.lower()
+
+        # Controllo immediato cache in memoria per ricerche frequenti o link già risolti (0 ms)
+        cached = self._get_cached_song(cache_key, requester)
+        if cached:
+            logger.info(f"⚡ Cache HIT in memoria per '{query}' - restituzione istantanea (0 ms)!")
+            return [cached]
 
         # Risoluzione redirect per shortlink (es. spotify.link)
         if "spotify.link/" in query:
@@ -178,17 +242,22 @@ class SourceManager:
 
         # Controllo se è un URL di Spotify
         if "spotify.com" in query:
-            return await self._process_spotify(query, requester)
+            songs = await self._process_spotify(query, requester)
+        else:
+            # Altrimenti trattalo come YouTube (URL diretto, playlist o ricerca testuale)
+            songs = await self._process_youtube(query, requester)
 
-        # Altrimenti trattalo come YouTube (URL diretto, playlist o ricerca testuale)
-        return await self._process_youtube(query, requester)
+        if songs and len(songs) == 1:
+            self._cache_song(cache_key, songs[0])
+
+        return songs
 
     def _resolve_redirect(self, url: str) -> str:
         resp = requests.head(url, allow_redirects=True, timeout=5)
         return resp.url
 
     async def _process_spotify(self, url: str, requester: Optional[Union[discord.Member, discord.User]]) -> List[SongInfo]:
-        """Estrae le tracce da Spotify (tramite Spotipy ufficiale o parser integrato)."""
+        """Estrae le tracce da Spotify e per singoli brani pre-risolve immediatamente lo stream YouTube."""
         pattern = re.compile(r"spotify\.com/(?:[a-zA-Z0-9\-_]+/)?(track|album|playlist)/([a-zA-Z0-9]+)")
         match = pattern.search(url)
         if not match:
@@ -211,13 +280,43 @@ class SourceManager:
         if not raw_tracks:
             raise ValueError("Impossibile estrarre tracce da questo link Spotify.")
 
+        # Ottimizzazione ultra-veloce per traccia singola Spotify: risoluzione immediata dello stream YouTube in single-pass!
+        if item_type == "track" and len(raw_tracks) == 1:
+            t = raw_tracks[0]
+            artist_part = t.get("artist", "")
+            title_part = t.get("title", "")
+            search_query = f"{title_part} {artist_part}".strip()
+            display_title = f"{artist_part} - {title_part}" if artist_part else title_part
+
+            try:
+                yt_song = await asyncio.to_thread(self._extract_youtube_single, f"ytsearch1:{search_query}", requester)
+                song = SongInfo(
+                    title=display_title,
+                    webpage_url=yt_song.webpage_url or url,
+                    stream_url=yt_song.stream_url,
+                    duration=t.get("duration") or yt_song.duration,
+                    thumbnail=t.get("thumbnail") or yt_song.thumbnail,
+                    uploader=artist_part or yt_song.uploader,
+                    requester=requester,
+                    source_type="spotify",
+                    spotify_url=url,
+                    search_query=search_query,
+                    http_headers=yt_song.http_headers,
+                    is_direct_stream=yt_song.is_direct_stream,
+                )
+                self._cache_song(url.strip().lower(), song)
+                self._cache_song(search_query.lower(), song)
+                return [song]
+            except Exception as e:
+                logger.warning(f"Pre-risoluzione stream YouTube per Spotify non riuscita ({e}), userò fallback on-demand.")
+
         songs = []
         for t in raw_tracks:
             search_query = f"{t['title']} {t['artist']}".strip()
             song = SongInfo(
                 title=f"{t['artist']} - {t['title']}" if t.get('artist') else t['title'],
                 webpage_url=url if item_type == "track" else "",
-                stream_url=None,  # Verrà estratto on-demand
+                stream_url=None,  # Verrà estratto on-demand per gli elementi di playlist/album
                 duration=t.get("duration", 0),
                 thumbnail=t.get("thumbnail"),
                 uploader=t.get("artist"),
@@ -372,39 +471,69 @@ class SourceManager:
                 songs.append(song)
             return songs
 
+    def _find_cached_file(self, video_id: str) -> Optional[str]:
+        """Cerca se il file audio per il video_id è già presente nella cache locale su disco."""
+        cache_dir = "/tmp/franchino_cache"
+        if not video_id or not os.path.isdir(cache_dir):
+            return None
+        try:
+            for fname in os.listdir(cache_dir):
+                if fname.startswith(f"{video_id}."):
+                    candidate = os.path.join(cache_dir, fname)
+                    if os.path.isfile(candidate) and os.path.getsize(candidate) > 1024:
+                        return candidate
+        except Exception:
+            pass
+        return None
+
     def _extract_youtube_single(self, target: str, requester: Optional[Union[discord.Member, discord.User]]) -> SongInfo:
-        """Estrae rapidamente i metadati di un singolo brano YouTube (lo scaricamento audio avviene in ensure_stream_url)."""
-        if "cookiefile" not in self.ydl_opts_flat:
+        """Estrae direttamente il flusso audio e i metadati in un unico passaggio ad altissima velocità."""
+        # Se il target contiene già un video ID, controlla se è già in cache locale su disco (avvio istantaneo 0 ms)
+        vid_match = re.search(r"(?:v=|youtu\.be/|shorts/)([a-zA-Z0-9_-]{11})", target)
+        if vid_match:
+            vid_id = vid_match.group(1)
+            cached_local = self._find_cached_file(vid_id)
+            if cached_local:
+                logger.info(f"⚡ Traccia locale già pronta in cache per '{vid_id}': {cached_local} (0 ms)!")
+                return SongInfo(
+                    title=f"YouTube {vid_id}",
+                    webpage_url=f"https://www.youtube.com/watch?v={vid_id}",
+                    stream_url=cached_local,
+                    duration=0,
+                    thumbnail=None,
+                    uploader=None,
+                    requester=requester,
+                    source_type="youtube",
+                    is_direct_stream=False
+                )
+
+        if "cookiefile" not in self.ydl_opts_stream:
             self._configure_cookies()
 
-        meta_opts = dict(self.ydl_opts_flat)
-        meta_opts["extract_flat"] = "in_playlist"
         try:
-            return self._do_extract_single(target, requester, meta_opts, download=False)
+            song = self._do_extract_single(target, requester, self.ydl_opts_stream, download=False)
+            if song:
+                self._cache_song(target.strip().lower(), song)
+            return song
         except Exception as first_err:
-            logger.warning(f"Primo tentativo metadati fallito per '{target}': {first_err}. Riprovo con fallback senza cookie...")
-            fallback_opts = {
-                "extract_flat": "in_playlist",
-                "skip_download": True,
-                "quiet": True,
-                "no_warnings": True,
-                "source_address": "0.0.0.0",
-                "remote_components": ["ejs:github"],
-                "extractor_args": {
-                    "youtube": {
-                        "player_client": ["android", "visionos"],
-                    }
-                },
-                "socket_timeout": 12.0,
+            logger.warning(f"Primo tentativo estrazione streaming per '{target}': {first_err}. Riprovo con client alternativi...")
+            fallback_opts = dict(self.ydl_opts_stream)
+            fallback_opts["extractor_args"] = {
+                "youtube": {
+                    "player_client": ["android", "web_safari", "visionos"],
+                }
             }
-            if NODE_PATH:
-                fallback_opts["js_runtimes"] = {"node": {}}
-            return self._do_extract_single(target, requester, fallback_opts, download=False)
+            if "cookiefile" in fallback_opts:
+                del fallback_opts["cookiefile"]
+            song = self._do_extract_single(target, requester, fallback_opts, download=False)
+            if song:
+                self._cache_song(target.strip().lower(), song)
+            return song
 
     def _do_extract_single(self, target: str, requester: Optional[Union[discord.Member, discord.User]], opts: Dict[str, Any], download: bool = False) -> SongInfo:
         cache_dir = "/tmp/franchino_cache"
         os.makedirs(cache_dir, exist_ok=True)
-        self._cleanup_cache(cache_dir, max_files=8)
+        self._cleanup_cache(cache_dir, max_files=32)
 
         run_opts = dict(opts)
         if download:
@@ -430,26 +559,29 @@ class SourceManager:
                 if os.path.isfile(prepared) and os.path.getsize(prepared) > 0:
                     local_file = prepared
                 elif vid_id:
-                    for fname in os.listdir(cache_dir):
-                        if fname.startswith(f"{vid_id}."):
-                            candidate = os.path.join(cache_dir, fname)
-                            if os.path.isfile(candidate) and os.path.getsize(candidate) > 0:
-                                local_file = candidate
-                                break
+                    local_file = self._find_cached_file(vid_id)
+            elif vid_id:
+                local_file = self._find_cached_file(vid_id)
+
+            stream_url = local_file or info.get("url")
+            http_headers = info.get("http_headers")
+            is_direct_stream = (local_file is None and stream_url is not None and (stream_url.startswith("http://") or stream_url.startswith("https://")))
 
             return SongInfo(
                 title=info.get("title", "Traccia sconosciuta"),
                 webpage_url=webpage_url,
-                stream_url=local_file,
+                stream_url=stream_url,
                 duration=int(info.get("duration") or 0),
                 thumbnail=info.get("thumbnail"),
                 uploader=info.get("uploader"),
                 requester=requester,
-                source_type="youtube"
+                source_type="youtube",
+                http_headers=http_headers,
+                is_direct_stream=is_direct_stream,
             )
 
-    def _cleanup_cache(self, cache_dir: str, max_files: int = 8):
-        """Mantiene solo gli ultimi max_files brani nella cache temporanea per non occupare spazio."""
+    def _cleanup_cache(self, cache_dir: str, max_files: int = 32):
+        """Mantiene gli ultimi max_files brani nella cache temporanea per riproduzioni istantanee."""
         try:
             files = [
                 os.path.join(cache_dir, f)
@@ -467,7 +599,7 @@ class SourceManager:
             pass
 
     def _download_youtube_audio(self, target: str, requester: Optional[Union[discord.Member, discord.User]]) -> SongInfo:
-        """Scarica il flusso audio in /tmp/franchino_cache con fallback multi-client."""
+        """Scarica il flusso audio in /tmp/franchino_cache (fallback se lo streaming diretto incontra blocchi di rete)."""
         if "cookiefile" not in self.ydl_opts_stream:
             self._configure_cookies()
 
@@ -476,19 +608,20 @@ class SourceManager:
         except Exception as first_err:
             logger.warning(f"Primo tentativo download fallito per '{target}': {first_err}. Riprovo con client web_safari/android...")
             fallback_opts = {
-                "format": "bestaudio/93/94/92/91/best",
+                "format": "ba[abr<=160]/251/140/bestaudio/best",
                 "noplaylist": True,
                 "quiet": True,
                 "no_warnings": True,
                 "source_address": "0.0.0.0",
                 "extract_flat": False,
+                "cachedir": self.ytdlp_cache_dir,
                 "remote_components": ["ejs:github"],
                 "extractor_args": {
                     "youtube": {
                         "player_client": ["web_safari", "android", "visionos"],
                     }
                 },
-                "socket_timeout": 12.0,
+                "socket_timeout": 8.0,
             }
             if NODE_PATH:
                 fallback_opts["js_runtimes"] = {"node": {}}
@@ -498,13 +631,18 @@ class SourceManager:
 
     async def ensure_stream_url(self, song: SongInfo) -> str:
         """
-        Assicura che la traccia abbia un file audio locale pronto in /tmp/franchino_cache.
-        Scaricare tramite yt-dlp evita l'errore HTTP 403 Forbidden di FFmpeg su googlevideo.com
-        e rispetta automaticamente il timer anti-bot 'available_at' di YouTube.
+        Assicura che la traccia abbia uno stream_url pronto (flusso HTTP diretto ad alta velocità o file locale).
+        Se stream_url è già disponibile, ritorna istantaneamente in 0 ms senza blocchi o ri-estrazioni.
         """
+        # 1. Se c'è già un file locale pronto su disco, usalo subito (0 ms)!
         if song.stream_url and os.path.isfile(song.stream_url) and os.path.getsize(song.stream_url) > 0:
             return song.stream_url
 
+        # 2. Se c'è già un flusso HTTP diretto estratto in precedenza, usalo subito (0 ms)!
+        if song.stream_url and (song.stream_url.startswith("http://") or song.stream_url.startswith("https://")):
+            return song.stream_url
+
+        # 3. Se non ancora estratto (es. brano da playlist o Spotify in coda), estrai in singolo passaggio ultra-rapido
         if song.source_type == "spotify":
             target = f"ytsearch1:{song.search_query or song.title}"
         elif song.webpage_url and (song.webpage_url.startswith("http://") or song.webpage_url.startswith("https://")):
@@ -514,18 +652,19 @@ class SourceManager:
         else:
             target = f"ytsearch1:{song.title}"
 
-        try:
-            fresh_info = await asyncio.to_thread(self._download_youtube_audio, target, song.requester)
-        except Exception as e:
-            clean_title = song.title or song.search_query
-            if clean_title and target != f"ytsearch1:{clean_title}":
-                logger.warning(f"Download fallito per '{target}': {e}. Tento ricerca alternativa per '{clean_title}'...")
-                fallback_target = f"ytsearch1:{clean_title}"
-                fresh_info = await asyncio.to_thread(self._download_youtube_audio, fallback_target, song.requester)
-            else:
-                raise e
+        # Controllo se è presente nella cache in memoria
+        cached = self._get_cached_song(target.strip().lower(), song.requester)
+        if cached and cached.stream_url:
+            song.stream_url = cached.stream_url
+            song.http_headers = cached.http_headers
+            song.is_direct_stream = cached.is_direct_stream
+            return song.stream_url
+
+        fresh_info = await asyncio.to_thread(self._extract_youtube_single, target, song.requester)
 
         song.stream_url = fresh_info.stream_url
+        song.http_headers = fresh_info.http_headers
+        song.is_direct_stream = fresh_info.is_direct_stream
         if not song.webpage_url:
             song.webpage_url = fresh_info.webpage_url
         if not song.duration:

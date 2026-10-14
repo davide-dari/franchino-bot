@@ -613,7 +613,11 @@ class GuildPlayer:
             self.current = song
             self._playing_tts = False
             self._is_tts_source = False
-            transformed_source = self._build_ffmpeg_audio_source(song.stream_url, seek_seconds=elapsed)
+            transformed_source = self._build_ffmpeg_audio_source(
+                song.stream_url,
+                seek_seconds=elapsed,
+                http_headers=getattr(song, "http_headers", None)
+            )
 
             def after_playback(error):
                 if error:
@@ -649,14 +653,23 @@ class GuildPlayer:
     # ==========================================================================
     # Effetti DJ in Tempo Reale (FFmpeg Filter Hot-Swap)
     # ==========================================================================
-    def _build_ffmpeg_audio_source(self, stream_url: str, seek_seconds: int = 0) -> discord.PCMVolumeTransformer:
-        """Crea la sorgente FFmpeg applicando l'effetto DJ attivo e l'eventuale seek in secondi."""
+    def _build_ffmpeg_audio_source(
+        self, stream_url: str, seek_seconds: int = 0, http_headers: Optional[Dict[str, str]] = None
+    ) -> discord.PCMVolumeTransformer:
+        """Crea la sorgente FFmpeg applicando probe ultra-veloce, intestazioni HTTP e filtri DJ."""
         effect_info = DJ_EFFECTS.get(self.audio_effect, DJ_EFFECTS["off"])
         af_filter = effect_info["filter"]
 
         before_parts = []
         if stream_url.startswith("http://") or stream_url.startswith("https://"):
+            # Probe ultra-veloce: abbatte il tempo di analisi da 5.0s a ~0.1s
+            before_parts.append("-probesize 65536 -analyzeduration 100000 -fflags +nobuffer+fastseek")
             before_parts.append("-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5")
+            # Passa le intestazioni HTTP (User-Agent, etc.) se presenti per evitare 403 Forbidden su YouTube
+            if http_headers:
+                header_lines = "".join(f"{k}: {v}\r\n" for k, v in http_headers.items())
+                safe_headers = header_lines.replace('"', '\\"')
+                before_parts.append(f'-headers "{safe_headers}"')
         if seek_seconds > 0:
             before_parts.append(f"-ss {seek_seconds}")
 
@@ -682,7 +695,11 @@ class GuildPlayer:
             try:
                 elapsed = max(0, int(time.monotonic() - self._track_start_monotonic))
                 old_source = self.voice_client.source
-                new_source = self._build_ffmpeg_audio_source(self.current.stream_url, seek_seconds=elapsed)
+                new_source = self._build_ffmpeg_audio_source(
+                    self.current.stream_url,
+                    seek_seconds=elapsed,
+                    http_headers=getattr(self.current, "http_headers", None),
+                )
                 self.voice_client.source = new_source
                 self._track_start_monotonic = time.monotonic() - elapsed
                 if old_source:
@@ -1295,7 +1312,9 @@ class GuildPlayer:
 
             try:
                 stream_url = await self.source_manager.ensure_stream_url(next_song)
-                transformed_source = self._build_ffmpeg_audio_source(stream_url, seek_seconds=0)
+                transformed_source = self._build_ffmpeg_audio_source(
+                    stream_url, seek_seconds=0, http_headers=getattr(next_song, "http_headers", None)
+                )
 
                 def after_playback(error):
                     if error:
@@ -1329,6 +1348,25 @@ class GuildPlayer:
                     asyncio.create_task(self._prefetch_next_song())
 
             except Exception as e:
+                # Se lo streaming diretto fallisce, tenta un download audio locale come fallback prima di arrendersi
+                if getattr(next_song, "is_direct_stream", False):
+                    try:
+                        logger.warning(f"Flusso diretto non riuscito per '{getattr(next_song, 'title', '')}', tento fallback download locale...")
+                        target = next_song.webpage_url or next_song.title
+                        dl_song = await asyncio.to_thread(self.source_manager._download_youtube_audio, target, next_song.requester)
+                        next_song.stream_url = dl_song.stream_url
+                        next_song.is_direct_stream = False
+                        transformed_source = self._build_ffmpeg_audio_source(dl_song.stream_url, seek_seconds=0)
+                        self._track_start_monotonic = time.monotonic()
+                        self.voice_client.play(transformed_source, after=after_playback)
+                        self._consecutive_play_errors = 0
+                        await self._send_now_playing_message(next_song)
+                        if self.queue:
+                            asyncio.create_task(self._prefetch_next_song())
+                        return
+                    except Exception as fb_err:
+                        logger.error(f"Fallback download fallito per '{getattr(next_song, 'title', '')}': {fb_err}")
+
                 self._consecutive_play_errors += 1
                 title = getattr(next_song, "title", "Sconosciuto")
                 logger.error(f"Errore riproduzione brano '{title}': {e}", exc_info=True)
