@@ -54,6 +54,7 @@ UO_SERVER_IP = "74.91.113.38"
 UO_SERVER_PORT = 2593
 UO_SERVER_LOCATION = "Ashburn, West Virginia (USA)"
 UO_SERVER_TIMEOUT = 3.0
+UO_PORTAL_STATUS_URL = "https://portal.uooutlands.com/server/status"
 
 # Colori Franchino
 COLOR_FRANCHINO = 0x9B59B6
@@ -239,43 +240,63 @@ class ServerStatusResult:
     location: str = UO_SERVER_LOCATION
     latency_ms: Optional[float] = None
     error: Optional[str] = None
+    portal_url: str = UO_PORTAL_STATUS_URL
+    portal_online: Optional[bool] = None
 
     def build_embed(self) -> discord.Embed:
         if self.online:
             embed = discord.Embed(
                 title="🌐 UO Outlands — Server Status: ONLINE 🟢",
+                url=self.portal_url,
                 description="Il server ufficiale di **Ultima Online Outlands** è attivo e raggiungibile!",
                 color=COLOR_ONLINE,
             )
-            embed.add_field(name="🟢 Stato", value="`ONLINE`", inline=True)
+            embed.add_field(name="🟢 Stato Game Shard", value="`ONLINE`", inline=True)
             lat_str = f"`{self.latency_ms:.1f} ms`" if self.latency_ms is not None else "`< 1 ms`"
             embed.add_field(name="⚡ Ping / Latenza", value=lat_str, inline=True)
             embed.add_field(name="🔌 Porta TCP", value=f"`{self.port}`", inline=True)
             embed.add_field(name="📡 Login / DNS", value=f"`{self.host}`", inline=True)
             embed.add_field(name="🖥️ Indirizzo IP", value=f"`{self.ip}`", inline=True)
             embed.add_field(name="📍 Posizione Server", value=f"`{self.location}`", inline=True)
-            embed.set_footer(text="Franchino Outlands Sentinel • play.uooutlands.com:2593")
+            if self.portal_online is not None:
+                p_text = "`ONLINE 🟢`" if self.portal_online else "`NON RAGGIUNGIBILE 🔴`"
+                embed.add_field(name="🌐 Portale Web", value=p_text, inline=True)
+            embed.add_field(
+                name="🔗 Portale Ufficiale Status",
+                value=f"[Monitora lo stato del server su portal.uooutlands.com]({self.portal_url})",
+                inline=False,
+            )
+            embed.set_footer(text="Franchino Outlands Sentinel • portal.uooutlands.com/server/status")
         else:
             embed = discord.Embed(
                 title="🌐 UO Outlands — Server Status: OFFLINE 🔴",
+                url=self.portal_url,
                 description="⚠️ **Attenzione!** Il server di **Ultima Online Outlands** risulta attualmente non raggiungibile o offline.",
                 color=COLOR_OFFLINE,
             )
-            embed.add_field(name="🔴 Stato", value="`OFFLINE / IRRAVALICABILE`", inline=True)
+            embed.add_field(name="🔴 Stato Game Shard", value="`OFFLINE / IRRAGGIUNGIBILE`", inline=True)
             err_msg = self.error if self.error else "Timeout connessione (> 3.0s)"
             embed.add_field(name="⚡ Diagnostica", value=f"`{err_msg[:60]}`", inline=True)
             embed.add_field(name="🔌 Porta TCP", value=f"`{self.port}`", inline=True)
             embed.add_field(name="📡 Login / DNS", value=f"`{self.host}`", inline=True)
             embed.add_field(name="🖥️ Indirizzo IP", value=f"`{self.ip}`", inline=True)
             embed.add_field(name="📍 Posizione Server", value=f"`{self.location}`", inline=True)
-            embed.set_footer(text="Franchino Outlands Sentinel • Riprova tra pochi istanti")
+            if self.portal_online is not None:
+                p_text = "`ONLINE 🟢`" if self.portal_online else "`OFFLINE 🔴`"
+                embed.add_field(name="🌐 Portale Web", value=p_text, inline=True)
+            embed.add_field(
+                name="🔗 Portale Ufficiale Status",
+                value=f"[Controlla aggiornamenti e stato su portal.uooutlands.com]({self.portal_url})",
+                inline=False,
+            )
+            embed.set_footer(text="Franchino Outlands Sentinel • portal.uooutlands.com/server/status")
         return embed
 
     def voice_text(self) -> str:
         if self.online:
             lat = int(self.latency_ms) if self.latency_ms is not None else 50
-            return f"Il server di Ultima Online Outlands è online con una latenza di {lat} millisecondi!"
-        return "Attenzione! Il server di Ultima Online Outlands risulta offline o irraggiungibile!"
+            return f"Il server di Ultima Online Outlands è online con una latenza di {lat} millisecondi! Ho mandato anche il link del portale ufficiale in chat!"
+        return "Attenzione! Il server di Ultima Online Outlands risulta offline o irraggiungibile! Controlla il portale ufficiale al link in chat!"
 
 
 @dataclass
@@ -807,17 +828,35 @@ def build_single_build_embed(build: UOAddictsBuildItem) -> discord.Embed:
 # FEATURE 3: UO OUTLANDS SERVER STATUS CHECK
 # ==============================================================================
 
+async def check_portal_status(
+    url: str = UO_PORTAL_STATUS_URL,
+    timeout: float = 3.0,
+) -> bool:
+    """Verifica se il portale ufficiale di status (https://portal.uooutlands.com/server/status) è raggiungibile."""
+    try:
+        html_doc = await fetch_html(url, timeout=timeout)
+        return bool(html_doc and len(html_doc.strip()) > 10)
+    except Exception as e:
+        logger.debug(f"Verifica portale status {url} fallita: {e}")
+        return False
+
+
 async def check_uo_server_status(
     host: str = UO_SERVER_HOST,
     fallback_ip: str = UO_SERVER_IP,
     port: int = UO_SERVER_PORT,
     timeout: float = UO_SERVER_TIMEOUT,
+    check_portal: bool = False,
 ) -> ServerStatusResult:
     """
     Verifica se il server UO Outlands è UP tramite controllo socket TCP asincrono (asyncio.open_connection)
     su play.uooutlands.com (fallback IP 74.91.113.38) su porta 2593 con timeout di 3 secondi.
     Calcola la latenza ping in millisecondi.
+    Se check_portal=True, verifica anche lo stato del portale ufficiale (https://portal.uooutlands.com/server/status).
     """
+    portal_online = None
+    if check_portal:
+        portal_online = await check_portal_status(timeout=min(timeout, 2.5))
     writer = None
     t0 = time.perf_counter()
     try:
@@ -834,6 +873,7 @@ async def check_uo_server_status(
             location=UO_SERVER_LOCATION,
             latency_ms=round(lat, 1),
             error=None,
+            portal_online=portal_online,
         )
     except Exception as err_host:
         logger.debug(f"Connessione a {host}:{port} fallita ({err_host}), provo fallback IP {fallback_ip}...")
@@ -861,6 +901,7 @@ async def check_uo_server_status(
             location=UO_SERVER_LOCATION,
             latency_ms=round(lat, 1),
             error=None,
+            portal_online=portal_online,
         )
     except Exception as err_ip:
         logger.debug(f"Connessione a {fallback_ip}:{port} fallita: {err_ip}")
@@ -875,6 +916,7 @@ async def check_uo_server_status(
             location=UO_SERVER_LOCATION,
             latency_ms=None,
             error=err_text,
+            portal_online=portal_online,
         )
     finally:
         if writer:

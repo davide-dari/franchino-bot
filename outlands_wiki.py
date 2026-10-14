@@ -2195,7 +2195,7 @@ def get_outlands_help_embed(page_count: int = 2212, creature_count: int = 1301) 
     embed.add_field(
         name="🌐 UOAddicts & Server Sentinel",
         value=(
-            "• *\"Il server è online?\"* o `/status` — Stato server, ping e IP\n"
+            "• *\"Il server è online?\"* o `/status` — Stato server, ping, IP e portale status\n"
             "• *\"Quando si riavvia il server?\"* o `/riavvio` — Info ultima patch e riavvio server\n"
             "• *\"Ultima patch\"* o `/patch` — Note di rilascio e link al forum Outlands\n"
             "• *\"Build PVM / PVP\"* o `/builds [cat]` — Build più usate da UOAddicts\n"
@@ -2482,6 +2482,7 @@ def is_wiki_question(command_part: str) -> Tuple[bool, str]:
         "guida ai pet", "guida pet", "guida tamer", "guida build", "statistiche del pet", "statistiche dei pet",
         "bardo arciere", "dexxer spada", "tamer mage", "ladro dungeon",
         "il server è online", "il server è up", "status server", "stato del server", "server status",
+        "il server è down", "server down", "portale status", "portal status", "status portale", "portale outlands", "portale server",
         "quando si riavvia il server", "quando riavvia il server", "riavvio del server", "orario del riavvio",
         "orario riavvio", "build pvm", "build pvp", "build popolari", "build recenti",
         "notizie outlands", "news outlands", "ultime novità outlands", "novità outlands",

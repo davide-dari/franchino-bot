@@ -1049,7 +1049,7 @@ async def _handle_outlands_query(ctx: commands.Context, domanda: str):
         return
 
     # Riconosce scorciatoie per status, riavvio, build e news
-    if domanda_low in ("status", "server", "server status", "online", "stato", "ping"):
+    if domanda_low in ("status", "server", "server status", "online", "stato", "ping", "portal", "portale", "up", "down", "portal status"):
         import uo_outlands_service
         s_res = await uo_outlands_service.check_uo_server_status()
         await ctx.send(embed=s_res.build_embed())
@@ -1252,11 +1252,11 @@ async def script_cmd(ctx: commands.Context, skill: Optional[str] = "lista", nume
 
 @bot.hybrid_command(
     name="status",
-    aliases=["uo_status", "server_status"],
-    description="Verifica se il server di Ultima Online Outlands è online (porta 2593, IP 74.91.113.38) e ping in ms"
+    aliases=["uo_status", "server_status", "portal", "portale", "portal_status"],
+    description="Verifica se il server di Ultima Online Outlands è online (TCP 2593 e portal.uooutlands.com/server/status)"
 )
 async def status_cmd(ctx: commands.Context):
-    """Verifica lo stato di connessione TCP e la latenza del server UO Outlands."""
+    """Verifica lo stato di connessione TCP e la latenza del server UO Outlands, e mostra il link al portale ufficiale."""
     await ctx.defer()
     import uo_outlands_service
     res = await uo_outlands_service.check_uo_server_status()
@@ -1269,7 +1269,7 @@ async def status_cmd(ctx: commands.Context):
 
 @bot.hybrid_command(
     name="server",
-    description="Verifica se il server di UO Outlands è online (play.uooutlands.com, IP 74.91.113.38:2593)"
+    description="Verifica se il server di UO Outlands è online (play.uooutlands.com:2593 e portal.uooutlands.com)"
 )
 async def server_cmd(ctx: commands.Context):
     """Verifica lo stato del server UO Outlands (alias per /status)."""

@@ -59,6 +59,8 @@ from uo_outlands_service import (
     UO_SERVER_HOST,
     UO_SERVER_IP,
     UO_SERVER_PORT,
+    UO_PORTAL_STATUS_URL,
+    check_portal_status,
 )
 from outlands_wiki import _resolve_build_query, is_wiki_question
 from jack_math_engine import jack_engine, DOMAIN_CORPUS
@@ -412,10 +414,13 @@ class TestServerStatusCheck(unittest.IsolatedAsyncioTestCase):
             self.assertIsNotNone(res.latency_ms)
             self.assertGreaterEqual(res.latency_ms, 0.0)
 
+            self.assertEqual(res.portal_url, UO_PORTAL_STATUS_URL)
             embed = res.build_embed()
             self.assertIn("ONLINE", embed.title)
+            self.assertEqual(embed.url, UO_PORTAL_STATUS_URL)
             self.assertEqual(embed.color.value, 0x2ECC71)
             self.assertIn("Ashburn, West Virginia", str(embed.fields))
+            self.assertIn("portal.uooutlands.com", str(embed.fields))
 
             voice = res.voice_text()
             self.assertIn("online", voice.lower())
@@ -457,10 +462,38 @@ class TestServerStatusCheck(unittest.IsolatedAsyncioTestCase):
 
             embed = res.build_embed()
             self.assertIn("OFFLINE", embed.title)
+            self.assertEqual(embed.url, UO_PORTAL_STATUS_URL)
             self.assertEqual(embed.color.value, 0xE74C3C)
+            self.assertIn("portal.uooutlands.com", str(embed.fields))
 
             voice = res.voice_text()
             self.assertTrue("offline" in voice.lower() or "irraggiungibile" in voice.lower())
+
+    async def test_check_portal_status_success(self):
+        """Verifica il controllo del portale ufficiale UO Outlands."""
+        with patch("uo_outlands_service.fetch_html", new_callable=AsyncMock) as mock_fetch:
+            mock_fetch.return_value = "<html><body><op-root></op-root></body></html>"
+            is_up = await check_portal_status()
+            self.assertTrue(is_up)
+
+    async def test_server_status_with_portal_online(self):
+        """Verifica check_uo_server_status con check_portal=True."""
+        mock_reader = AsyncMock()
+        mock_writer = MagicMock()
+        mock_writer.close = MagicMock()
+        mock_writer.wait_closed = AsyncMock()
+
+        with patch("asyncio.open_connection", new_callable=AsyncMock) as mock_open, \
+             patch("uo_outlands_service.check_portal_status", new_callable=AsyncMock) as mock_portal:
+            mock_open.return_value = (mock_reader, mock_writer)
+            mock_portal.return_value = True
+
+            res = await check_uo_server_status(timeout=1.0, check_portal=True)
+            self.assertTrue(res.online)
+            self.assertTrue(res.portal_online)
+            embed = res.build_embed()
+            self.assertIn("Portale Web", str(embed.fields))
+            self.assertIn("ONLINE", str(embed.fields))
 
 
 # ==============================================================================

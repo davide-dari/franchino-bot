@@ -2040,10 +2040,13 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
             "il server è online", "il server e online", "il server è up", "il server e up",
             "server online", "server up", "status server", "server status", "stato del server",
             "è online il server", "e online il server", "è up il server", "e up il server",
-            "controlla il server", "server outlands online", "il server outlands è online"
+            "controlla il server", "server outlands online", "il server outlands è online",
+            "il server è down", "il server e down", "server down", "server offline", "il server è offline",
+            "portal status", "portale status", "status portale", "portale outlands", "portale server",
+            "sito per vedere se il server è up", "dove vedo se il server è online"
         )
         if any(tr in cmd_p_low for tr in status_triggers) or (
-            ("server" in cmd_p_low or "outlands" in cmd_p_low) and any(w in cmd_p_low for w in ("online", "up", "status", "stato"))
+            ("server" in cmd_p_low or "outlands" in cmd_p_low) and any(w in cmd_p_low for w in ("online", "up", "down", "offline", "status", "stato", "portal", "portale"))
         ):
             logger.info(f"🌐 Richiesta Server Status Outlands da {user.display_name}: '{command_part}'")
             import uo_outlands_service
