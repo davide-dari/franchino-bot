@@ -1165,7 +1165,7 @@ async def _handle_outlands_query(ctx: commands.Context, domanda: str):
 @bot.hybrid_command(
     name="outlands",
     aliases=["uo", "outland"],
-    description="Cerca build, dungeon, boss o meccaniche su wiki.uooutlands.com e ottieni la guida in italiano! Usa senza argomenti o 'aiuto' per vedere tutti gli argomenti."
+    description="Cerca guide, build, dungeon o boss su UO Outlands in italiano"
 )
 async def outlands_cmd(ctx: commands.Context, *, domanda: str = "aiuto"):
     await _handle_outlands_query(ctx, domanda)
@@ -1174,7 +1174,7 @@ async def outlands_cmd(ctx: commands.Context, *, domanda: str = "aiuto"):
 @bot.hybrid_command(
     name="outlands_aiuto",
     aliases=["uo_aiuto", "outlands_help", "uo_help"],
-    description="Mostra tutti gli argomenti che Franchino conosce su UO Outlands (skill, dungeon, creature, build, aspetti, ecc.)"
+    description="Mostra tutti gli argomenti e guide disponibili per UO Outlands"
 )
 async def outlands_aiuto_cmd(ctx: commands.Context):
     """Mostra l'elenco completo degli argomenti Outlands che Franchino conosce."""
@@ -1289,7 +1289,7 @@ async def server_cmd(ctx: commands.Context):
 @bot.hybrid_command(
     name="riavvio",
     aliases=["server_riavvio", "server_restart", "uo_restart", "outlands_restart"],
-    description="Mostra il conto alla rovescia e l'orario del prossimo riavvio ordinario di UO Outlands (11:00 AM ET / 17:00 IT)"
+    description="Mostra il conto alla rovescia del prossimo riavvio di UO Outlands (ore 17:00)"
 )
 async def riavvio_cmd(ctx: commands.Context):
     """Mostra l'orario del riavvio ordinario giornaliero e il conto alla rovescia."""
@@ -1942,7 +1942,7 @@ async def timer_cmd(ctx: commands.Context, durata: str, *, motivo: Optional[str]
 @bot.hybrid_command(
     name="calcola",
     aliases=["calc", "calcolatrice"],
-    description="Esegue calcoli matematici con il motore analitico di Franchino (es. '25 * 4', '150 / 3', 'radice di 16')"
+    description="Calcola un'espressione matematica (es. '25 * 4', '150 / 3', 'radice di 16')"
 )
 async def calcola_cmd(ctx: commands.Context, *, operazione: str):
     """Calcola un'espressione matematica in sicurezza e restituisce il risultato vocale e chat."""
