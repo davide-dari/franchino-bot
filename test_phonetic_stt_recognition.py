@@ -658,3 +658,164 @@ class TestOutlandsHelpCommandAndMusicDisambiguation:
         assert is_question is True
 
 
+# ==============================================================================
+# 8. TEST RICONOSCIMENTO FONETICO GOOGLE STT "HEY FRANCHINO" & FUSIONI
+# ==============================================================================
+
+class TestPhoneticHeyFranchinoWakeRecognition:
+    """Verifica approfondita del riconoscimento della wake phrase 'Hey Franchino' con varianti fonetiche e fusioni STT."""
+
+    @pytest.mark.parametrize("stt_input, expected_wake_phrase, expected_cmd_substring", [
+        # Fusioni STT di Hey/Ehi + Franchino
+        ("heyfranchino quali sono i migliori pet", "heyfranchino", "quali sono i migliori pet"),
+        ("eifranchino come funziona il taming", "eifranchino", "come funziona il taming"),
+        ("eifranchin spiegami la mastery chain", "eifranchin", "spiegami la mastery chain"),
+        ("hefranchino dammi la guida ai drake", "hefranchino", "dammi la guida ai drake"),
+        ("efranchino che ore sono", "efranchino", "che ore sono"),
+        ("uefranchino suona jazz", "uefranchino", "suona jazz"),
+        ("ehilafranchino dimmi il meteo", "ehilafranchino", "dimmi il meteo"),
+        ("heylafranchino che ore sono", "heylafranchino", "che ore sono"),
+        ("heyfrankino suona pop", "heyfrankino", "suona pop"),
+        ("efrankino pausa", "efrankino", "pausa"),
+
+        # Varianti di interiezione e rumore d'attacco STT
+        ("he franchino metti rock", "he franchino", "metti rock"),
+        ("ue franchino metti gigi d agostino", "ue franchino", "metti gigi d agostino"),
+        ("uè franchino attiva il loop", "uè franchino", "attiva il loop"),
+        ("ué franchino suona pop", "ué franchino", "suona pop"),
+        ("we franchino metti la musica", "we franchino", "metti la musica"),
+        ("wè franchino alza il volume", "wè franchino", "alza il volume"),
+        ("weh franchino suona rock", "weh franchino", "suona rock"),
+        ("ehilá franchino dimmi il meteo", "ehilá franchino", "dimmi il meteo"),
+        ("heylá franchino che ore sono", "heylá franchino", "che ore sono"),
+        ("eyla franchino metti jazz", "eyla franchino", "metti jazz"),
+        ("eylà franchino metti rap", "eylà franchino", "metti rap"),
+        ("hai franchino metti rock", "hai franchino", "metti rock"),
+        ("ahi franchino metti pausa", "ahi franchino", "metti pausa"),
+        ("ay franchino boost", "ay franchino", "boost"),
+        ("dei franchino metti musica jazz", "dei franchino", "metti musica jazz"),
+        ("sei franchino skip", "sei franchino", "skip"),
+        ("lei franchino alza il volume", "lei franchino", "alza il volume"),
+        ("eh il franchino che build consigli", "eh il franchino", "che build consigli"),
+        ("e il franchino quanti gradi ci sono", "e il franchino", "quanti gradi ci sono"),
+        ("ehi il franchino tira un dado", "ehi il franchino", "tira un dado"),
+        ("he il franchino metti la radio", "he il franchino", "metti la radio"),
+        ("e franchino racconta una barzelletta", "e franchino", "racconta una barzelletta"),
+        ("e' franchino dimmi l'ora", "e' franchino", "dimmi l'ora"),
+        ("eh franchino metti una canzone", "eh franchino", "metti una canzone"),
+        ("hey franchina dammi una mano con le build", "hey franchina", "dammi una mano con le build"),
+        ("ehi franchì spiegami il pvm", "ehi franchì", "spiegami il pvm"),
+        ("hey franchí fammi ridere", "hey franchí", "fammi ridere"),
+
+        # Punteggiatura mista STT
+        ("Ehi, Franchino... quanto fa 25 per 4", "Ehi, Franchino", "quanto fa 25 per 4"),
+        ("Hey! Franchino... imposta un timer di 5 minuti", "Hey! Franchino", "imposta un timer di 5 minuti"),
+        ("Ehi... Franchino! Metti musica", "Ehi... Franchino", "Metti musica"),
+        ("Ehi, Franchino, metti la musica", "Ehi, Franchino", "metti la musica"),
+        ("Hey! Franchino: alza i bassi", "Hey! Franchino", "alza i bassi"),
+        ("hey fran, chino metti musica", "hey fran, chino", "metti musica"),
+        ("ehi frank, ino pausa", "ehi frank, ino", "pausa"),
+
+        # Split tokens STT
+        ("hey fran chino quali sono i migliori pet", "hey fran chino", "quali sono i migliori pet"),
+        ("ehi frank ino come tamare un drake", "ehi frank ino", "come tamare un drake"),
+        ("hey franco ino metti rock", "hey franco ino", "metti rock"),
+        ("hey franki no chiudi la sessione", "hey franki no", "chiudi la sessione"),
+        ("hey frankie no stop", "hey frankie no", "stop"),
+        ("hey franchi no metti la canzone", "hey franchi no", "metti la canzone"),
+        ("ehi fra chi no rispondi", "ehi fra chi no", "rispondi"),
+        ("hey fran kino metti rap", "hey fran kino", "metti rap"),
+        ("ehi fran cino suona pop", "ehi fran cino", "suona pop"),
+        ("hey franck ino pausa", "hey franck ino", "pausa"),
+        ("ehi franc ino riprendi", "ehi franc ino", "riprendi"),
+    ])
+    def test_google_stt_hey_franchino_variants(self, stt_input, expected_wake_phrase, expected_cmd_substring):
+        """Verifica che ogni variante STT venga rilevata e il comando isolato correttamente."""
+        has_w, cmd, tok = FranchinoVoiceSink.extract_wake_and_command(stt_input)
+        assert has_w is True, f"Mancata attivazione per: '{stt_input}'"
+        assert tok.lower() == expected_wake_phrase.lower()
+        if expected_cmd_substring:
+            assert expected_cmd_substring.lower() in cmd.lower()
+
+    @pytest.mark.parametrize("chatter_input", [
+        "io e franchino stavamo giocando",
+        "ieri sera parlavo con franchino",
+        "secondo me franchino non risponde",
+        "abbiamo comprato dei francobolli",
+        "oggi vado in francia",
+        "chi sei franchino",
+        "tu sei franchino",
+        "abbiamo parlato dei franchino",
+        "tra me e franchino nessun problema",
+        "marco e franchino vanno al cinema",
+    ])
+    def test_negative_stt_transcriptions_ignored(self, chatter_input):
+        """Verifica che conversazioni in terza persona e frasi prive di Hey non attivino il bot."""
+        has_w, cmd, tok = FranchinoVoiceSink.extract_wake_and_command(chatter_input)
+        assert has_w is False, f"Falso positivo rilevato per: '{chatter_input}' (tok='{tok}', cmd='{cmd}')"
+        assert cmd == ""
+        assert tok == ""
+
+    def test_jack_math_engine_phi_wake_for_all_variants(self):
+        """Verifica che JackIntelligenceFormula assegni phi_wake = 1.0 a tutte le nuove varianti."""
+        from jack_math_engine import jack_engine
+
+        test_cases = [
+            "he franchino metti musica",
+            "heyfranchino metti musica",
+            "hefranchino metti jazz",
+            "eifranchino dimmi il meteo",
+            "efranchino che ore sono",
+            "ue franchino attiva il boost",
+            "uè franchino alza il volume",
+            "we franchino metti pop",
+            "wè franchino metti rock",
+            "wefranchino metti techno",
+            "ehilá franchino dimmi tutto",
+            "eyla franchino che ore sono",
+            "eylà franchino dammi lo script",
+            "hey franchí suona classica",
+            "hey franchì metti musica",
+            "dei franchino fammi ridere",
+            "eh il franchino dammi lo script",
+            "he il franchino accendi la radio",
+            "hey fran chino metti musica",
+            "ehi franco ino alza il volume",
+            "hey franki no chiudi la sessione",
+            "hey frankie no metti pop",
+            "hey franck ino pausa",
+        ]
+        for query in test_cases:
+            phi = jack_engine.calculate_wake(query)
+            assert phi == 1.00, f"phi_wake fallito ({phi} != 1.00) per: {query}"
+
+        # Verifica filtro anti-chiacchiera preservato
+        assert jack_engine.calculate_wake("Secondo me Franchino lagga") <= 0.15
+        assert jack_engine.calculate_wake("Fra chi ha il boost al server?") <= 0.10
+
+    def test_jack_math_engine_strip_wake_prefix_variants(self):
+        """Verifica che strip_wake_prefix rimuova correttamente tutte le varianti dal testo operativo."""
+        from jack_math_engine import strip_wake_prefix
+
+        assert strip_wake_prefix("he franchino metti musica") == "metti musica"
+        assert strip_wake_prefix("heyfranchino metti musica") == "metti musica"
+        assert strip_wake_prefix("hefranchino metti jazz") == "metti jazz"
+        assert strip_wake_prefix("eifranchin stop") == "stop"
+        assert strip_wake_prefix("we franchino metti rap") == "metti rap"
+        assert strip_wake_prefix("wè franchino salta") == "salta"
+        assert strip_wake_prefix("wefranchino metti techno") == "metti techno"
+        assert strip_wake_prefix("ehilá franchino che ore sono") == "che ore sono"
+        assert strip_wake_prefix("Ehi, Franchino... che ore sono") == "che ore sono"
+        assert strip_wake_prefix("dei franchino metti jazz") == "metti jazz"
+        assert strip_wake_prefix("e il franchino dammi lo script") == "dammi lo script"
+        assert strip_wake_prefix("he il franchino accendi la console") == "accendi la console"
+        assert strip_wake_prefix("hey fran chino spiegami il taming") == "spiegami il taming"
+        assert strip_wake_prefix("hey franchi no metti la musica") == "metti la musica"
+        assert strip_wake_prefix("hey franki no metti pop") == "metti pop"
+        assert strip_wake_prefix("hey frankie no stop") == "stop"
+        assert strip_wake_prefix("hey franck ino pausa") == "pausa"
+        assert strip_wake_prefix("hey franchí fammi ridere") == "fammi ridere"
+        assert strip_wake_prefix("hey fran, chino suona jazz") == "suona jazz"
+
+
+

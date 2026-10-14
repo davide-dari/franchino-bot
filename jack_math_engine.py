@@ -230,12 +230,53 @@ CONFLICT_PATTERNS = {
 
 def strip_wake_prefix(text: str) -> str:
     """Rimuove il richiamo a Franchino all'inizio della frase per isolare il comando operativo."""
-    return re.sub(
-        r"^(?:(?:hey+|ehi+|hei+|heyl[àa]|heil[àa]|ehil[àa]|ey+|ei+)\s+)?(?:franchino|frankino|francino|franci|fra)\s*[,:\s]*",
+    s = text.strip()
+    # 1. Rimuove varianti fuse iniziali (es. "heyfranchino", "eifranchino", "efranchino", "wefranchino", ecc.)
+    s = re.sub(
+        r"^(?:hey+|ehi+|hei+|ehil[àáa]|heyl[àáa]|heil[àáa]|eyl[àáa]|ehila|heila|heyla|eyla|ueh*|uè+|ué+|weh*|wè+|wé+|hai+|ahi+|ay+|ai+|ey+|ei+|eh+|he+|e)"
+        r"(?:franchin[oaie]|franchin\b|frankin[oaie]|francin[oaie]|franghin[oaie]|franckin[oaie]|frannchin[oaie]|frannkin[oaie]|franceschin[oaie]|franchinn[oaie]|franch[ìí]|franch[ìíi][\'’]?)"
+        r"[\s,.:;!?\'\"-]*",
         "",
-        text.strip(),
+        s,
         flags=re.IGNORECASE,
     ).strip()
+
+    # 2. Rimuove prefissi separati con Hey/Ehi/varianti acustiche + Franchino (anche split).
+    # Nota: Le forme composte/split e con accento/apostrofo precedono tassativamente i frammenti brevi
+    # per evitare che 'franch[ìí]' o 'fra' consumino parzialmente 'franchi no' o 'fra chi no'.
+    s = re.sub(
+        r"^(?:(?:(?:eh|e|ehi|hey|he)\s+il|dei|sei|lei|"
+        r"(?:hey+|ehi+|hei+|he+|ey+|ei+|eh+)[\s,.:;!?\'\"-]+l[àáa]|heyl[àáa]|heil[àáa]|ehil[àáa]|eyl[àáa]|heyla|ehila|heila|eyla|"
+        r"hey+|ehi+|hei+|he+|ey+|ei+|eh+|e[\'’]|ueh*|uè+|ué+|weh*|wè+|wé+|hai+|ahi+|ay+|ai+|e)[\s,.:;!?\'\"-]+)?(?:"
+        r"fra[\s,.:;!?\'\"-]+chi[\s,.:;!?\'\"-]+n[oaie]|"
+        r"franchi[\s,.:;!?\'\"-]+n[oaie]|"
+        r"frankie[\s,.:;!?\'\"-]+n[oaie]|"
+        r"franki[\s,.:;!?\'\"-]+n[oaie]|"
+        r"fran[\s,.:;!?\'\"-]+chin[oaie]|"
+        r"frank[\s,.:;!?\'\"-]+in[oaie]|"
+        r"franco[\s,.:;!?\'\"-]+in[oaie]|"
+        r"fran[\s,.:;!?\'\"-]+k[iy]n[oaie]|"
+        r"fran[\s,.:;!?\'\"-]+cin[oaie]|"
+        r"franc[\s,.:;!?\'\"-]+in[oaie]|"
+        r"franck[\s,.:;!?\'\"-]+in[oaie]|"
+        r"franchin[oaie]|"
+        r"franchin\b|"
+        r"frankin[oaie]|"
+        r"francin[oaie]|"
+        r"franghin[oaie]|"
+        r"franckin[oaie]|"
+        r"franceschin[oaie]|"
+        r"franchinn[oaie]|"
+        r"franch[ìí]|"
+        r"franch[ìíi][\'’]|"
+        r"franci|"
+        r"fra\b)"
+        r"[\s,.:;!?\'\"-]*",
+        "",
+        s,
+        flags=re.IGNORECASE,
+    ).strip()
+    return s
 
 
 def jaro_winkler_distance(s1: str, s2: str, p: float = 0.1, max_l: int = 4) -> float:
@@ -400,8 +441,46 @@ class JackIntelligenceFormula:
         if CONFLICT_PATTERNS["third_person_chatter"].search(t_low):
             return 0.10
 
-        wake_aliases = ("franchino", "frankino", "francino", "franci")
-        hey_prefixes = {"hey", "ehi", "hei", "heyla", "heylà", "heila", "heilà", "ehila", "ehilà", "ey", "ei"}
+        # Rilevamento varianti fuse (es. "heyfranchino", "eifranchino", "efranchino", ecc.)
+        fused_check = re.compile(
+            r"^(?:hey+|ehi+|hei+|ehil[àáa]|heyl[àáa]|heil[àáa]|eyl[àáa]|ehila|heila|heyla|eyla|ueh*|uè+|ué+|weh*|wè+|wé+|hai+|ahi+|ay+|ai+|ey+|ei+|eh+|he+|e)"
+            r"(?:franchin[oaie]|franchin|frankin[oaie]|francin[oaie]|franghin[oaie]|franckin[oaie]|frannchin[oaie]|frannkin[oaie]|franceschin[oaie]|franchinn[oaie]|franch[ìí]|franchi)$",
+            re.IGNORECASE
+        )
+        if tokens and fused_check.match(tokens[0]):
+            return 1.00
+
+        wake_aliases = (
+            "franchino", "frankino", "francino", "franci",
+            "franghino", "franckino", "franceschino", "franchina", "franchini", "franchin", "franchi", "franchì", "franchí"
+        )
+        hey_prefixes = {
+            "hey", "ehi", "hei", "heyla", "heylà", "heylá", "heila", "heilà", "heilá", "ehila", "ehilà", "ehilá", "eyla", "eylà", "eylá",
+            "ey", "ei", "eh", "he", "ue", "uè", "ué", "ueh", "we", "wè", "wé", "weh",
+            "hai", "ahi", "ay", "ai", "dei", "sei", "lei", "e"
+        }
+
+        # Chiamata con articolo acustico "eh il", "e il", "ehi il", "hey il", "he il"
+        if len(tokens) >= 3 and tokens[0] in ("eh", "e", "ehi", "hey", "he") and tokens[1] == "il" and tokens[2] in wake_aliases:
+            return 1.00
+
+        # Split tokens come "hey fran chino", "ehi franco ino", "hey frank ino", "hey franki no"
+        if (
+            len(tokens) >= 3
+            and tokens[0] in hey_prefixes
+            and tokens[1] in ("fran", "franc", "frank", "franco", "franchi", "franki", "frankie", "franck")
+            and tokens[2] in ("chino", "china", "kino", "kina", "cino", "cina", "ino", "ina", "ine", "ini", "no", "na", "ne", "ni")
+        ):
+            return 1.00
+        if (
+            len(tokens) >= 4
+            and tokens[0] in hey_prefixes
+            and tokens[1] == "fra"
+            and tokens[2] == "chi"
+            and tokens[3] in ("no", "na", "ne", "ni")
+        ):
+            return 1.00
+
         if len(tokens) >= 2 and tokens[0] in hey_prefixes and tokens[1] in wake_aliases:
             return 1.00  # Chiamata diretta canonica "Hey Franchino ..."
         if len(tokens) >= 3 and tokens[0] in hey_prefixes and tokens[1] == "la" and tokens[2] in wake_aliases:

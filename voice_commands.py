@@ -324,15 +324,41 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
     MAX_PHRASE_SEC = 10.0         # Fino a 10 secondi per titoli lunghi + nome artista
     MAX_BUFFER_SEC = 12.0         # Limite massimo di sicurezza per speaker buffer (~2.3 MB)
     MAX_BUFFER_BYTES = int(MAX_BUFFER_SEC * BYTES_PER_SECOND)
-    START_RMS_ENERGY = 60         # Più reattivo grazie al pre-roll buffer da 300ms (cattura anche voci dolci/basse)
+    START_RMS_ENERGY = 45         # Sensibile per catturare attacchi brevi (150-250ms) di 'Hey/Ehi' a basso volume
     CONTINUE_RMS_ENERGY = 35      # Sensibile per catturare anche l'ultima sillaba debole o sospiro
-    PREROLL_CHUNKS = 15           # 300ms di pre-roll ring buffer (15 pacchetti da 20ms)
+    PREROLL_CHUNKS = 25           # 500ms di pre-roll ring buffer (25 pacchetti da 20ms) per garantire l'attacco di 'Hey/Ehi'
 
-    HEY_PREFIX_RAW = r'(?:(?:hey+|ehi+|hei+|ey+|ei+)(?:[\s,.:;!?\'"-]+l[àa])?|heyl[àa]|heil[àa]|ehil[àa])'
+    AMBIGUOUS_PREFIXES = {
+        'e', 'dei', 'sei', 'lei',
+        'eh il', 'e il', 'ehi il', 'hey il', 'he il'
+    }
+
+    HEY_PREFIX_RAW = (
+        r'(?:'
+        r'(?:(?:eh|e|ehi|hey|he)\s+il)'
+        r'|(?:dei|sei|lei)'
+        r'|(?:(?:hey+|ehi+|hei+|he+|ey+|ei+|eh+)[\s,.:;!?\'"-]+l[àáa]|heyl[àáa]|heil[àáa]|ehil[àáa]|eyl[àáa]|heyla|ehila|heila|eyla)'
+        r'|(?:hey+|ehi+|hei+|he+|ey+|ei+|eh+|e[\'’]|ueh*|uè+|ué+|weh*|wè+|wé+|hai+|ahi+|ay+|ai+)'
+        r'|e'
+        r')'
+    )
 
     FRANCHINO_NAME_RAW = (
         r'(?:'
-        r'franchin[oaie]'
+        # Varianti STT con split o spazio/punteggiatura interna (precedono tassativamente per evitare match parziali)
+        r'fran[\s,.:;!?\'"-]+chin[oaie]'
+        r'|frank[\s,.:;!?\'"-]+in[oaie]'
+        r'|franco[\s,.:;!?\'"-]+in[oaie]'
+        r'|fran[\s,.:;!?\'"-]+k[iy]n[oaie]'
+        r'|fran[\s,.:;!?\'"-]+cin[oaie]'
+        r'|franchi[\s,.:;!?\'"-]+n[oaie]'
+        r'|fra[\s,.:;!?\'"-]+chi[\s,.:;!?\'"-]+n[oaie]'
+        r'|frankie[\s,.:;!?\'"-]+n[oaie]'
+        r'|franki[\s,.:;!?\'"-]+n[oaie]'
+        r'|franc[\s,.:;!?\'"-]+in[oaie]'
+        r'|franck[\s,.:;!?\'"-]+in[oaie]'
+        # Forme canoniche e varianti fonetiche a token singolo
+        r'|franchin[oaie]'
         r'|franchin\b'               # forma tronca con word boundary esplicito
         r'|frankin[oaie]'           # frankino (k per ch)
         r'|francin[oaie]'           # francino (ch→c)
@@ -342,27 +368,27 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
         r'|frannkin[oaie]'          # frannkino
         r'|franceschin[oaie]'       # franceschino
         r'|franchinn[oaie]'         # finale doppia n
-        r'|franchì'                 # accento romanesco vocativo esplicito
-        # Varianti STT con split o spazio interno
-        r'|fran\s+chin[oaie]'       # "fran chino"
-        r'|frank\s+in[oaie]'        # "frank ino"
-        r'|franco\s+in[oaie]'       # "franco ino" (frequente su STT italiana)
-        r'|fran\s+k[iy]n[oaie]'     # "fran kino"
-        r'|fran\s+cin[oaie]'        # "fran cino"
-        r'|franchi\s*,?\s*n[oaie]'   # "franchi no", "franchi, no"
-        r'|fra\s+chi\s*,?\s*n[oaie]'  # "fra chi no", "fra chi, no"
-        r'|frankie\s*,?\s*n[oaie]'   # "frankie no"
-        r'|franki\s*,?\s*n[oaie]'    # "franki no"
-        r'|franc\s+in[oaie]'         # "franc ino"
-        r'|franck\s+in[oaie]'        # "franck ino"
+        r'|franch[ìí]|franch[ìíi][\'’]' # accento romanesco vocativo esplicito (grave o acuto)
         r')'
     )
 
+    FUSED_PREFIX_RAW = (
+        r'(?:hey+|ehi+|hei+|ehil[àáa]|heyl[àáa]|heil[àáa]|eyl[àáa]|ehila|heila|heyla|eyla|'
+        r'ueh*|uè+|ué+|weh*|wè+|wé+|hai+|ahi+|ay+|ai+|ey+|ei+|eh+|he+|e)'
+    )
+    FUSED_NAME_RAW = (
+        r'(?:franchin[oaie]|franchin\b|frankin[oaie]|francin[oaie]|franghin[oaie]|'
+        r'franckin[oaie]|frannchin[oaie]|frannkin[oaie]|franceschin[oaie]|franchinn[oaie]|'
+        r'franch[ìí]|franch[ìíi][\'’]?)'
+    )
+    FUSED_WAKE_RAW = rf'(?:{FUSED_PREFIX_RAW}{FUSED_NAME_RAW})'
+
     WAKE_PATTERN = re.compile(
-        rf'(?<!\w)({HEY_PREFIX_RAW}[\s,.:;!?\'"-]+{FRANCHINO_NAME_RAW})(?!\w)',
+        rf'(?<!\w)(?:({HEY_PREFIX_RAW}[\s,.:;!?\'"-]+{FRANCHINO_NAME_RAW})|({FUSED_WAKE_RAW}))(?!\w)',
         re.IGNORECASE
     )
 
+    PREFIX_EXTRACTOR_RE = re.compile(rf'^{HEY_PREFIX_RAW}', re.IGNORECASE)
     HEY_PREFIX_RE = re.compile(rf'(?<!\w){HEY_PREFIX_RAW}\s*$', re.IGNORECASE)
 
     # Esclusione esplicita di parole italiane comuni foneticamente vicine che NON devono mai svegliare Franchino
@@ -385,7 +411,7 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
 
     # Lista per il fallback fuzzy token-per-token
     WAKE_WORDS = (
-        "franchino", "frankino", "francino", "franchì",
+        "franchino", "frankino", "francino", "franchì", "franchí",
         "franchini", "franchin", "franghino", "franceschino",
         "franckino", "franchina", "franchinn",
     )
@@ -395,12 +421,14 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
         """
         Riconosce con la massima accuratezza la wake phrase obbligatoria 'Hey Franchino' (o varianti 'Ehi Franchino')
         e le sue varianti fonetiche/STT, evitando rigorosamente falsi positivi durante le normali conversazioni tra utenti.
-        Senza 'Hey/Ehi' precedente, il bot non si attiva mai (has_wake = False).
+        Senza 'Hey/Ehi' (o varianti/fusioni ammesse), il bot non si attiva mai (has_wake = False).
 
         Applica tre livelli di detection in cascata:
           1. Regex rigorosa: 'Hey/Ehi' + varianti fonetiche + split-word STT ('hey franco ino', 'ehi fran chino', ecc.)
-          2. Fuzzy token matching selettivo: token >= 7 caratteri (non esclusi) con SequenceMatcher >= 0.84,
-             preceduto tassativamente da Hey/Ehi.
+             nonché parole fuse STT ('heyfranchino', 'eifranchino', 'eifranchin', 'hefranchino', 'efranchino').
+          2. Fuzzy token matching selettivo:
+             - Varianti fuse con typo ('heyfranchkno')
+             - Token >= 7 caratteri (non esclusi) con SequenceMatcher >= 0.84, preceduto tassativamente da Hey/Ehi.
           3. Bigram join mirato: unisce coppie adiacenti fran/franc/frank/franco + chino/kino/ino con SequenceMatcher >= 0.84,
              preceduto tassativamente da Hey/Ehi.
 
@@ -410,17 +438,65 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
             return False, "", ""
 
         clean_text = text.strip()
-        m = cls.WAKE_PATTERN.search(clean_text)
         wake_matched = None
         start = -1
         end = -1
 
-        if m:
-            wake_matched = m.group(0)
-            start, end = m.span()
-        else:
-            # --- Livello 2: Fuzzy token-per-token (>= 0.84, token >= 7 chars, non in esclusioni) preceduto da Hey/Ehi ---
-            tokens = list(re.finditer(r'[a-zA-ZàèéìòùÀÈÉÌÒÙ]{7,}', clean_text, re.IGNORECASE))
+        filler_pat = re.compile(
+            r'^(?:ehi|hey|ei|oh|o|ciao|senti|ascolta|allora|ma|vai|grande|caro|dimmi|scusa|dai|su|amo|ueh|uè|ué|weh|wè|wé|beh|insomma)\s*',
+            re.IGNORECASE
+        )
+
+        # --- Livello 1: Regex rigorosa (separata o fusa) ---
+        for m in cls.WAKE_PATTERN.finditer(clean_text):
+            cand = m.group(0)
+            c_start, c_end = m.span()
+            c_before = clean_text[:c_start].strip(" ,.!?:;-")
+            c_before_clean = filler_pat.sub("", c_before).strip(" ,.!?:;-")
+
+            # Verifica prefissi ambigui (es. congiunzione "e", articolo "dei", "sei", "lei", "e il")
+            pm = cls.PREFIX_EXTRACTOR_RE.match(cand.strip())
+            prefix = pm.group(0).lower().strip() if pm else ""
+            if prefix in cls.AMBIGUOUS_PREFIXES and c_before_clean:
+                # Preceduto da testo discorsivo reale (es. "io e franchino siamo amici"), ignora falso positivo!
+                continue
+
+            wake_matched = cand
+            start = c_start
+            end = c_end
+            break
+
+        # --- Livello 2a: Fused typo token (es. "heyfranchkno") ---
+        if not wake_matched:
+            fused_tokens = list(re.finditer(r'[a-zA-ZàèéìòùáéíóúÀÈÉÌÒÙÁÉÍÓÚ]{8,}', clean_text, re.IGNORECASE))
+            fused_prefix_check = re.compile(
+                r'^(hey+|ehi+|hei+|ehil[àáa]|heyl[àáa]|heil[àáa]|eyl[àáa]|ehila|heila|heyla|eyla|'
+                r'ueh*|uè+|ué+|weh*|wè+|wé+|hai+|ahi+|ay+|ai+|ey+|ei+|eh+|he+|e)',
+                re.IGNORECASE
+            )
+            for ft_match in fused_tokens:
+                ft_str = ft_match.group(0).lower()
+                pm = fused_prefix_check.match(ft_str)
+                if pm:
+                    prefix_part = pm.group(0)
+                    rest_part = ft_str[len(prefix_part):]
+                    if len(rest_part) >= 6 and rest_part not in cls.EXCLUDED_WAKE_WORDS:
+                        ratio = difflib.SequenceMatcher(None, rest_part, "franchino").ratio()
+                        if ratio >= 0.84:
+                            c_start = ft_match.start()
+                            c_end = ft_match.end()
+                            c_before = clean_text[:c_start].strip(" ,.!?:;-")
+                            c_before_clean = filler_pat.sub("", c_before).strip(" ,.!?:;-")
+                            if prefix_part in cls.AMBIGUOUS_PREFIXES and c_before_clean:
+                                continue
+                            start = c_start
+                            end = c_end
+                            wake_matched = clean_text[start:end]
+                            break
+
+        # --- Livello 2b: Fuzzy token-per-token preceduto tassativamente da Hey/Ehi ---
+        if not wake_matched:
+            tokens = list(re.finditer(r'[a-zA-ZàèéìòùáéíóúÀÈÉÌÒÙÁÉÍÓÚ]{7,}', clean_text, re.IGNORECASE))
             for tok_match in tokens:
                 tok = tok_match.group(0).lower()
                 if tok in cls.EXCLUDED_WAKE_WORDS:
@@ -430,33 +506,47 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
                     prefix_str = clean_text[:tok_match.start()].rstrip(" ,.:;!?\'\"-")
                     hey_m = cls.HEY_PREFIX_RE.search(prefix_str)
                     if hey_m:
-                        start = hey_m.start()
-                        end = tok_match.end()
+                        c_start = hey_m.start()
+                        c_end = tok_match.end()
+                        c_before = clean_text[:c_start].strip(" ,.!?:;-")
+                        c_before_clean = filler_pat.sub("", c_before).strip(" ,.!?:;-")
+                        prefix = hey_m.group(0).lower().strip()
+                        if prefix in cls.AMBIGUOUS_PREFIXES and c_before_clean:
+                            continue
+                        start = c_start
+                        end = c_end
                         wake_matched = clean_text[start:end]
                         break
 
-            # --- Livello 3: Bigram join mirato preceduto da Hey/Ehi ---
-            if not wake_matched:
-                all_tokens = list(re.finditer(r'[a-zA-ZàèéìòùÀÈÉÌÒÙ]+', clean_text, re.IGNORECASE))
-                for i in range(len(all_tokens) - 1):
-                    t1 = all_tokens[i].group(0).lower()
-                    t2 = all_tokens[i + 1].group(0).lower()
-                    if not re.match(r'^(?:fran|franc|frank|franco)$', t1):
-                        continue
-                    if not re.match(r'^(?:chin[oaie]|kin[oaie]|in[oaie]|cin[oaie])$', t2):
-                        continue
-                    joined = t1 + t2
-                    if len(joined) < 8 or joined in cls.EXCLUDED_WAKE_WORDS:
-                        continue
-                    ratio = difflib.SequenceMatcher(None, joined, "franchino").ratio()
-                    if ratio >= 0.84:
-                        prefix_str = clean_text[:all_tokens[i].start()].rstrip(" ,.:;!?\'\"-")
-                        hey_m = cls.HEY_PREFIX_RE.search(prefix_str)
-                        if hey_m:
-                            start = hey_m.start()
-                            end = all_tokens[i + 1].end()
-                            wake_matched = clean_text[start:end]
-                            break
+        # --- Livello 3: Bigram join mirato preceduto da Hey/Ehi ---
+        if not wake_matched:
+            all_tokens = list(re.finditer(r'[a-zA-ZàèéìòùáéíóúÀÈÉÌÒÙÁÉÍÓÚ]+', clean_text, re.IGNORECASE))
+            for i in range(len(all_tokens) - 1):
+                t1 = all_tokens[i].group(0).lower()
+                t2 = all_tokens[i + 1].group(0).lower()
+                if not re.match(r'^(?:fran|franc|frank|franco)$', t1):
+                    continue
+                if not re.match(r'^(?:chin[oaie]|kin[oaie]|in[oaie]|cin[oaie])$', t2):
+                    continue
+                joined = t1 + t2
+                if len(joined) < 8 or joined in cls.EXCLUDED_WAKE_WORDS:
+                    continue
+                ratio = difflib.SequenceMatcher(None, joined, "franchino").ratio()
+                if ratio >= 0.84:
+                    prefix_str = clean_text[:all_tokens[i].start()].rstrip(" ,.:;!?\'\"-")
+                    hey_m = cls.HEY_PREFIX_RE.search(prefix_str)
+                    if hey_m:
+                        c_start = hey_m.start()
+                        c_end = all_tokens[i + 1].end()
+                        c_before = clean_text[:c_start].strip(" ,.!?:;-")
+                        c_before_clean = filler_pat.sub("", c_before).strip(" ,.!?:;-")
+                        prefix = hey_m.group(0).lower().strip()
+                        if prefix in cls.AMBIGUOUS_PREFIXES and c_before_clean:
+                            continue
+                        start = c_start
+                        end = c_end
+                        wake_matched = clean_text[start:end]
+                        break
 
         if not wake_matched:
             return False, "", ""
@@ -464,11 +554,6 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
         before = clean_text[:start].strip(" ,.!?:;-")
         after = clean_text[end:].strip(" ,.!?:;-")
 
-        # Rimuove parole di saluto/filler all'inizio del comando
-        filler_pat = re.compile(
-            r'^(?:ehi|hey|ei|oh|o|ciao|senti|ascolta|allora|ma|vai|grande|caro|dimmi|scusa|dai|su|amo|ueh|uè|beh|insomma)\s*',
-            re.IGNORECASE
-        )
         before_clean = filler_pat.sub("", before).strip(" ,.!?:;-")
 
         if before_clean and after:
@@ -495,7 +580,11 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
             return ""
         norm = normalize_uo_speech(text)
         norm = re.sub(
-            r'\b(?:franchi\s*,?\s*n[oaie]|fra\s+chi\s*,?\s*n[oaie]|frankie\s*,?\s*n[oaie]|franki\s*,?\s*n[oaie]|fran\s+chin[oaie]|franco\s+in[oaie]|frank\s+in[oaie]|franc\s+in[oaie]|franck\s+in[oaie])\b',
+            r'\b(?:franchi[\s,.:;!?\'"-]+n[oaie]|fra[\s,.:;!?\'"-]+chi[\s,.:;!?\'"-]+n[oaie]|'
+            r'frankie[\s,.:;!?\'"-]+n[oaie]|franki[\s,.:;!?\'"-]+n[oaie]|'
+            r'fran[\s,.:;!?\'"-]+chin[oaie]|franco[\s,.:;!?\'"-]+in[oaie]|frank[\s,.:;!?\'"-]+in[oaie]|'
+            r'franc[\s,.:;!?\'"-]+in[oaie]|franck[\s,.:;!?\'"-]+in[oaie]|'
+            r'fran[\s,.:;!?\'"-]+k[iy]n[oaie]|fran[\s,.:;!?\'"-]+cin[oaie])\b',
             'franchino',
             norm,
             flags=re.IGNORECASE
@@ -559,7 +648,7 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
 
         key = uid if uid else ssrc
 
-        # Rolling pre-roll buffer di ~300ms (15 pacchetti da 20ms) per catturare l'attacco della prima consonante ("F", "P", "S")
+        # Rolling pre-roll buffer di ~500ms (25 pacchetti da 20ms) per garantire l'attacco di 'Hey/Ehi'
         if key not in self._preroll_buffers:
             self._preroll_buffers[key] = collections.deque(maxlen=self.PREROLL_CHUNKS)
         self._preroll_buffers[key].append(pcm)
