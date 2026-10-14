@@ -218,9 +218,10 @@ def build_commands_embed() -> discord.Embed:
         value=(
             "Fai qualsiasi domanda a voce su **Ultima Online Outlands** e Franchino cercherà sulla Wiki ufficiale, "
             "tradurrà tutto in italiano e **ti risponderà a voce** (+ scheda completa in chat):\n"
-            "• **\"Franchino cos'è il Mastery Chain?\"** • **\"Franchino spiegami gli Aspect\"**\n"
-            "• **\"Franchino come si allena Animal Taming?\"** • **\"Franchino dove si trova Aegis Keep?\"**\n"
-            "• **\"Franchino parlami di Necromancy\"** • Oppure usa il comando `/wiki <domanda>` (`/outlands`)"
+            "• **\"Hey Franchino cos'è il Mastery Chain?\"** • **\"Hey Franchino spiegami gli Aspect\"**\n"
+            "• **\"Hey Franchino come si allena Animal Taming?\"** • **\"Hey Franchino dove si trova Aegis Keep?\"**\n"
+            "• **\"Hey Franchino cerca sul vendor aspect core\"** • `/vendor <oggetto>` (`/prezzi`, `/status`, `/patch`, `/builds`)\n"
+            "• Oppure usa il comando `/wiki <domanda>` (`/outlands`)"
         ),
         inline=False
     )

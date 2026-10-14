@@ -1405,6 +1405,26 @@ async def news_cmd(ctx: commands.Context):
 
 
 @bot.hybrid_command(
+    name="vendor",
+    aliases=["prezzi", "vendorsearch", "prezzo"],
+    description="Cerca oggetti e prezzi sui Player Vendor di UO Outlands (portal.uooutlands.com/vendor-search)"
+)
+async def vendor_cmd(ctx: commands.Context, *, oggetto: str):
+    """Cerca i migliori prezzi per un oggetto sui Player Vendor di Ultima Online Outlands."""
+    await ctx.defer()
+    import uo_outlands_service
+    res = await uo_outlands_service.vendor_search_service.search_vendor(oggetto)
+    embed = uo_outlands_service.build_vendor_search_embed(res)
+    await ctx.send(embed=embed)
+    player = player_manager.get_player(ctx.guild)
+    if player and player.voice_client and player.voice_client.is_connected():
+        asyncio.create_task(
+            player.speak_tts(uo_outlands_service.VOICE_VENDOR_SEARCH_REPLY, wait=False, interrupt_music=True)
+        )
+
+
+
+@bot.hybrid_command(
     name="partita",
     aliases=["streaming", "partita_live"],
     description="Cerca una partita, evento o diretta streaming (es. Milan, Juventus, NBA, F1, stasera)"

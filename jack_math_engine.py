@@ -90,7 +90,8 @@ DOMAIN_CORPUS: Dict[str, List[str]] = {
         "meditare", "swords", "archery", "chivalry", "necromancy", "spiritspeak",
         "uoaddicts", "build pvm", "build pvp", "build popolari", "build recenti",
         "server status", "status server", "server online", "server up", "riavvio",
-        "manutenzione", "restart", "orario riavvio", "ashburn", "2593"
+        "manutenzione", "restart", "orario riavvio", "ashburn", "2593",
+        "vendor", "vendor search", "prezzi vendor", "quanto costa sul vendor", "venditori outlands"
     ],
     "sports_match": [
         "partita", "partite", "match", "incontri", "gare", "sfide", "stasera", "oggi",

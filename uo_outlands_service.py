@@ -25,7 +25,7 @@ import time
 import urllib.request
 from dataclasses import dataclass, field
 from datetime import datetime, time as dtime, timedelta
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 from zoneinfo import ZoneInfo
 
 import aiohttp
@@ -72,6 +72,12 @@ UOADDICTS_BUILD_URLS = {
     "popular": "https://uoaddicts.com/builds/popular",
     "recent": "https://uoaddicts.com/builds/recent",
 }
+
+# Vendor Search Portal Outlands
+UO_PORTAL_VENDOR_SEARCH_URL = "https://portal.uooutlands.com/vendor-search"
+VOICE_VENDOR_SEARCH_REPLY = (
+    "Ragazzi, ho cercato sul vendor search! Trovate tutti i prezzi e i venditori in chat!"
+)
 
 
 # ==============================================================================
@@ -350,6 +356,49 @@ class UOPatchItem:
     def build_embed(self) -> discord.Embed:
         """Restituisce l'embed discord formattato per questa patch."""
         return build_patch_embed(self)
+
+
+@dataclass
+class VendorSearchItem:
+    item_name: str
+    price: int
+    amount: int = 1
+    vendor_name: str = ""
+    owner_name: str = ""
+    location_x: Optional[int] = None
+    location_y: Optional[int] = None
+    location_z: Optional[int] = None
+    vendor_serial: Optional[int] = None
+    last_synced: Optional[str] = None
+    properties: List[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict:
+        return {
+            "item_name": self.item_name,
+            "price": self.price,
+            "amount": self.amount,
+            "vendor_name": self.vendor_name,
+            "owner_name": self.owner_name,
+            "location_x": self.location_x,
+            "location_y": self.location_y,
+            "location_z": self.location_z,
+            "vendor_serial": self.vendor_serial,
+            "last_synced": self.last_synced,
+            "properties": self.properties,
+        }
+
+
+@dataclass
+class VendorSearchResult:
+    query: str
+    has_credentials: bool = True
+    items: List[VendorSearchItem] = field(default_factory=list)
+    total_found: int = 0
+    error_message: Optional[str] = None
+    portal_url: str = UO_PORTAL_VENDOR_SEARCH_URL
+
+    def build_embed(self) -> discord.Embed:
+        return build_vendor_search_embed(self)
 
 
 FALLBACK_PATCH_ITEMS = [
@@ -1528,3 +1577,324 @@ async def get_latest_patch() -> UOPatchItem:
 async def get_latest_restart_patch() -> Optional[UOPatchItem]:
     """Recupera l'ultima patch che cita un riavvio tramite il servizio patch."""
     return await patch_service.get_latest_restart_patch()
+
+
+# ==============================================================================
+# FEATURE 5: UO OUTLANDS PORTAL VENDOR SEARCH SERVICE
+# ==============================================================================
+
+class VendorSearchService:
+    """Gestisce la ricerca prezzi e articoli sui Player Vendor di UO Outlands tramite portal.uooutlands.com."""
+
+    def __init__(self):
+        self._jwt_token: Optional[str] = None
+        self._jwt_expiry: float = 0.0
+        self._auth_lock = asyncio.Lock()
+        self._cache: Dict[str, Tuple[VendorSearchResult, float]] = {}
+        self._cache_ttl = 300.0  # 5 minuti di cache per evitare spam e rate limit 429
+        self._rate_limited_until: float = 0.0
+
+    @property
+    def email(self) -> str:
+        return (os.getenv("OUTLANDS_PORTAL_EMAIL") or "").strip()
+
+    @property
+    def password(self) -> str:
+        return (os.getenv("OUTLANDS_PORTAL_PASSWORD") or "").strip()
+
+    @property
+    def has_credentials(self) -> bool:
+        return bool(self.email and self.password)
+
+    async def authenticate(self, force: bool = False) -> Optional[str]:
+        """Esegue il login su portal.uooutlands.com/api/user/login e memorizza il token JWT."""
+        if not self.has_credentials:
+            return None
+
+        async with self._auth_lock:
+            now = time.monotonic()
+            if not force and self._jwt_token and now < self._jwt_expiry:
+                return self._jwt_token
+
+            if now < self._rate_limited_until:
+                logger.warning("Vendor search in cooldown per rate-limit.")
+                return None
+
+            login_url = "https://portal.uooutlands.com/api/user/login"
+            payload = {"email": self.email, "password": self.password}
+            headers = {
+                "Content-Type": "application/json",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Accept": "application/json, text/plain, */*",
+                "Origin": "https://portal.uooutlands.com",
+                "Referer": "https://portal.uooutlands.com/login",
+            }
+
+            try:
+                timeout = aiohttp.ClientTimeout(total=10.0)
+                async with aiohttp.ClientSession(timeout=timeout) as session:
+                    async with session.post(login_url, json=payload, headers=headers) as resp:
+                        if resp.status == 429:
+                            self._rate_limited_until = time.monotonic() + 60.0
+                            logger.warning("Login portal.uooutlands.com ha risposto 429 Too Many Requests.")
+                            return None
+                        if resp.status == 200:
+                            data = await resp.json()
+                            token = data.get("jwt") or data.get("token") or data.get("temporaryToken")
+                            if token:
+                                self._jwt_token = token
+                                self._jwt_expiry = time.monotonic() + (3600.0 * 12)
+                                logger.info("Autenticazione riuscita su portal.uooutlands.com!")
+                                return self._jwt_token
+                            else:
+                                logger.warning(f"Login riuscito ma nessun token trovato nella risposta: {data}")
+                        else:
+                            text = await resp.text()
+                            logger.warning(f"Login portal fallito ({resp.status}): {text[:150]}")
+            except Exception as e:
+                logger.warning(f"Errore connessione login portal.uooutlands.com: {e}")
+
+            return None
+
+    async def search_vendor(self, item_name: str, max_results: int = 5) -> VendorSearchResult:
+        """Cerca un oggetto sui player vendor di UO Outlands."""
+        clean_query = item_name.strip()
+        cache_key = clean_query.lower()
+        now = time.monotonic()
+
+        # Controllo cache in memoria (5 minuti TTL)
+        if cache_key in self._cache:
+            res, ts = self._cache[cache_key]
+            if now - ts < self._cache_ttl:
+                return res
+
+        portal_direct_url = f"https://portal.uooutlands.com/vendor-search"
+
+        # Se le credenziali non sono configurate nel file .env
+        if not self.has_credentials:
+            res = VendorSearchResult(
+                query=clean_query,
+                has_credentials=False,
+                items=[],
+                total_found=0,
+                portal_url=portal_direct_url
+            )
+            self._cache[cache_key] = (res, now)
+            return res
+
+        token = await self.authenticate()
+        if not token:
+            res = VendorSearchResult(
+                query=clean_query,
+                has_credentials=False,
+                items=[],
+                total_found=0,
+                error_message="Impossibile autenticarsi sul portale con le credenziali fornite.",
+                portal_url=portal_direct_url
+            )
+            return res
+
+        search_api = "https://portal.uooutlands.com/api/VendorSearch/Search"
+        payload = {
+            "page": 0,
+            "pageSize": max_results,
+            "sortName": "Price",
+            "sortAscending": True,
+            "filterParams": {
+                "name": clean_query,
+                "category": "All",
+                "propertyFilters": []
+            }
+        }
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "application/json, text/plain, */*",
+            "Origin": "https://portal.uooutlands.com",
+            "Referer": "https://portal.uooutlands.com/vendor-search",
+        }
+
+        try:
+            timeout = aiohttp.ClientTimeout(total=10.0)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.post(search_api, json=payload, headers=headers) as resp:
+                    if resp.status == 401:
+                        # Token scaduto, ritenta forzando il login
+                        token = await self.authenticate(force=True)
+                        if token:
+                            headers["Authorization"] = f"Bearer {token}"
+                            async with session.post(search_api, json=payload, headers=headers) as retry_resp:
+                                if retry_resp.status == 200:
+                                    data = await retry_resp.json()
+                                    result = self._parse_search_data(clean_query, data, portal_direct_url, max_results)
+                                    self._cache[cache_key] = (result, time.monotonic())
+                                    return result
+                        return VendorSearchResult(
+                            query=clean_query,
+                            has_credentials=True,
+                            error_message="Sessione scaduta o non autorizzata sul portale.",
+                            portal_url=portal_direct_url
+                        )
+
+                    if resp.status == 429:
+                        self._rate_limited_until = time.monotonic() + 60.0
+                        return VendorSearchResult(
+                            query=clean_query,
+                            has_credentials=True,
+                            error_message="Rate limit raggiunto sul portale di Outlands (HTTP 429). Riprova tra poco.",
+                            portal_url=portal_direct_url
+                        )
+
+                    if resp.status == 200:
+                        data = await resp.json()
+                        result = self._parse_search_data(clean_query, data, portal_direct_url, max_results)
+                        self._cache[cache_key] = (result, time.monotonic())
+                        return result
+                    else:
+                        text = await resp.text()
+                        return VendorSearchResult(
+                            query=clean_query,
+                            has_credentials=True,
+                            error_message=f"Errore dal server del portale ({resp.status}): {text[:100]}",
+                            portal_url=portal_direct_url
+                        )
+        except Exception as e:
+            logger.error(f"Errore chiamata Vendor Search per '{clean_query}': {e}")
+            return VendorSearchResult(
+                query=clean_query,
+                has_credentials=True,
+                error_message=f"Errore di rete durante la ricerca: {e}",
+                portal_url=portal_direct_url
+            )
+
+    def _parse_search_data(self, query: str, data: Any, portal_url: str, max_results: int) -> VendorSearchResult:
+        """Estrae gli oggetti VendorSearchItem dalla risposta JSON del portale."""
+        raw_items = []
+        total = 0
+        if isinstance(data, dict):
+            raw_items = data.get("items") or data.get("data") or []
+            total = data.get("total") or data.get("totalCount") or len(raw_items)
+        elif isinstance(data, list):
+            raw_items = data
+            total = len(raw_items)
+
+        items: List[VendorSearchItem] = []
+        for ri in raw_items[:max_results]:
+            if not isinstance(ri, dict):
+                continue
+            vendor_obj = ri.get("vendor") or {}
+            item_name = ri.get("name") or ri.get("itemName") or ri.get("title") or query
+            price = int(ri.get("price") or ri.get("lowestPrice") or ri.get("totalPrice") or 0)
+            amount = int(ri.get("totalAmount") or ri.get("amount") or ri.get("count") or 1)
+            v_name = vendor_obj.get("vendorName") or vendor_obj.get("name") or ri.get("vendorName") or "Vendor sconosciuto"
+            owner = vendor_obj.get("ownerCharName") or vendor_obj.get("ownerName") or ri.get("ownerCharName") or "Sconosciuto"
+            lx = vendor_obj.get("locationX") or ri.get("vendorLocationX")
+            ly = vendor_obj.get("locationY") or ri.get("vendorLocationY")
+            lz = vendor_obj.get("locationZ") or ri.get("vendorLocationZ")
+            v_serial = ri.get("vendorSerial") or vendor_obj.get("serial")
+            last_sync = vendor_obj.get("lastSyncedAt") or ri.get("lastSyncedAt")
+
+            items.append(VendorSearchItem(
+                item_name=item_name,
+                price=price,
+                amount=amount,
+                vendor_name=v_name,
+                owner_name=owner,
+                location_x=int(lx) if lx is not None else None,
+                location_y=int(ly) if ly is not None else None,
+                location_z=int(lz) if lz is not None else None,
+                vendor_serial=int(v_serial) if v_serial is not None else None,
+                last_synced=str(last_sync) if last_sync else None,
+            ))
+
+        return VendorSearchResult(
+            query=query,
+            has_credentials=True,
+            items=items,
+            total_found=total,
+            portal_url=portal_url
+        )
+
+
+def build_vendor_search_embed(result: VendorSearchResult) -> discord.Embed:
+    """Costruisce un Discord Embed elegante per i risultati di ricerca sui vendor del portale."""
+    if not result.has_credentials:
+        embed = discord.Embed(
+            title=f"🛒 UO Outlands Vendor Search — {result.query}",
+            url=result.portal_url,
+            description=(
+                f"Franchino può cercare in tempo reale prezzi, coordinate e venditori sul server ufficiale di Outlands!\n\n"
+                f"⚠️ **Autenticazione Richiesta**: Il portale Outlands richiede un account per visualizzare i vendor.\n"
+                f"Per abilitare le ricerche live automatiche nel bot, configura nel file `.env`:\n"
+                f"```env\n"
+                f"OUTLANDS_PORTAL_EMAIL=tua_email@dominio.com\n"
+                f"OUTLANDS_PORTAL_PASSWORD=tua_password\n"
+                f"```\n"
+                f"🔗 Puoi consultare i vendor per **{result.query}** direttamente sul portale web:\n"
+                f"**[Apri Vendor Search su portal.uooutlands.com]({result.portal_url})**"
+            ),
+            color=COLOR_WARNING,
+        )
+        embed.set_footer(text="Franchino Outlands • portal.uooutlands.com/vendor-search")
+        return embed
+
+    if result.error_message:
+        embed = discord.Embed(
+            title=f"🛒 UO Outlands Vendor Search — {result.query}",
+            url=result.portal_url,
+            description=(
+                f"⚠️ **Attenzione**: {result.error_message}\n\n"
+                f"🔗 Puoi consultare manualmente i prezzi su: **[portal.uooutlands.com]({result.portal_url})**"
+            ),
+            color=COLOR_OFFLINE,
+        )
+        embed.set_footer(text="Franchino Outlands • portal.uooutlands.com/vendor-search")
+        return embed
+
+    if not result.items:
+        embed = discord.Embed(
+            title=f"🛒 UO Outlands Vendor Search — {result.query}",
+            url=result.portal_url,
+            description=(
+                f"❌ Nessun player vendor sta attualmente vendendo **\"{result.query}\"**, "
+                f"oppure l'oggetto è temporaneamente esaurito.\n\n"
+                f"💡 *Suggerimento: prova a cercare con un nome parziale o in inglese (es. 'aspect core', 'scroll', 'ingot').*\n\n"
+                f"🔗 **[Verifica sul portale portal.uooutlands.com]({result.portal_url})**"
+            ),
+            color=COLOR_INFO,
+        )
+        embed.set_footer(text="Franchino Outlands • portal.uooutlands.com/vendor-search")
+        return embed
+
+    embed = discord.Embed(
+        title=f"🛒 Prezzi Vendor Outlands: {result.query}",
+        url=result.portal_url,
+        description=f"Trovati venditori con i migliori prezzi (ordinati dal più basso in **GP**):",
+        color=COLOR_ONLINE,
+    )
+
+    for i, item in enumerate(result.items, 1):
+        coord_str = f" • 📍 `(X: {item.location_x}, Y: {item.location_y})`" if (item.location_x is not None and item.location_y is not None) else ""
+        qty_str = f" `x{item.amount}`" if item.amount > 1 else ""
+        vendor_link = f"https://portal.uooutlands.com/vendor-search/vendor/{item.vendor_serial}" if item.vendor_serial else result.portal_url
+
+        field_title = f"#{i} 🏷️ {item.price:,} GP{qty_str} — {item.item_name}"
+        field_value = (
+            f"🏪 Vendor: **[{item.vendor_name}]({vendor_link})**{coord_str}\n"
+            f"👤 Proprietario: *{item.owner_name}*"
+        )
+        embed.add_field(name=field_title, value=field_value, inline=False)
+
+    embed.set_footer(text=f"Franchino Outlands Sentinel • portal.uooutlands.com/vendor-search • Totale trovati: {result.total_found}")
+    return embed
+
+
+# Istanza singleton del servizio Vendor Search
+vendor_search_service = VendorSearchService()
+
+
+async def search_vendor(item_name: str, max_results: int = 5) -> VendorSearchResult:
+    """Cerca un oggetto sui player vendor di Outlands tramite il servizio dedicato."""
+    return await vendor_search_service.search_vendor(item_name, max_results=max_results)
+

@@ -2215,6 +2215,57 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
             )
             return
 
+        # 0C-bis-3. Ricerca VENDOR & PREZZI su UO Outlands Portal ("cerca sul vendor...", "quanto costa ... sul vendor", "vendor search...")
+        def _extract_vendor_query(text: str) -> Optional[str]:
+            low = text.strip().lower()
+            if low in ("vendor search", "cerca sul vendor", "cerca sui vendor", "vendor", "prezzi vendor", "prezzo vendor", "cerca vendor"):
+                return ""
+            m1 = re.search(r"quanto\s+costa\s+(.+?)\s+(?:sul|sui|nel|nei|dai|dai\s+player)?\s*vendor", low)
+            if m1:
+                return m1.group(1).strip()
+            m2 = re.search(r"(?:cerca|trova|vedi)\s+(?:sul|sui|nel|nei|tra\s+i|dai)\s*vendor\s+(.+)", low)
+            if m2:
+                return m2.group(1).strip()
+            m3 = re.search(r"prezz[oi]\s+(?:di\s+|del\s+|della\s+|per\s+)?(.+?)\s+(?:sul|sui|nel|nei|dai)?\s*vendor", low)
+            if m3:
+                return m3.group(1).strip()
+            m4 = re.search(r"(?:vendor\s+search|vendor)\s+(.+)", low)
+            if m4:
+                cand = m4.group(1).strip()
+                if cand and len(cand) >= 2:
+                    return cand
+            return None
+
+        vendor_item_query = _extract_vendor_query(command_part)
+        if vendor_item_query is not None:
+            clean_item = vendor_item_query or "oggetti"
+            logger.info(f"🛒 Richiesta Vendor Search da {user.display_name}: '{clean_item}' (raw: '{command_part}')")
+            import uo_outlands_service
+            res = await uo_outlands_service.vendor_search_service.search_vendor(clean_item, max_results=5)
+            embed = uo_outlands_service.build_vendor_search_embed(res)
+            voice_text = uo_outlands_service.VOICE_VENDOR_SEARCH_REPLY
+            await self._notify_channel(
+                f"🛒 **{user.display_name}** ha cercato **{clean_item}** sui vendor di Outlands:",
+                embed=embed
+            )
+            asyncio.create_task(
+                self.player.speak_tts(voice_text, wait=False, interrupt_music=True, keep_paused_after=False)
+            )
+            from central_hub import hub
+            asyncio.create_task(
+                hub.archive_interaction(
+                    user_id=str(getattr(user, "id", 0)),
+                    user_name=user.display_name,
+                    raw_query=command_part,
+                    intent="vendor_search",
+                    ai_response=f"Vendor search for {clean_item}",
+                    voice_summary=voice_text,
+                    channel_name=self.player.text_channel.name if self.player.text_channel else None,
+                    metadata={"query": clean_item, "found": len(res.items)}
+                )
+            )
+            return
+
         # 0C-ter. Domande AIUTO/GUIDA su UO OUTLANDS ("cosa puoi fare su outlands", "aiuto outlands", ecc.)
         from outlands_wiki import is_help_question, is_wiki_question, query_outlands_wiki, get_outlands_help_embed
         if is_help_question(command_part):
