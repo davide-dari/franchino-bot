@@ -62,11 +62,11 @@ Regole Fondamentali di Risposta:
 3. INFORMAZIONI, GUIDE E SPIEGAZIONI (wiki_guide, outlands_help, razor_script, sports_match, sports_schedule, jack_math_boost, smart_assistant per meteo, ora, math, random, joke): NON fare poemi o spiegazioni lunghe a voce. L'UNICA occasione in cui parli è per dire brevemente all'utente di guardare la chat perché le informazioni sono scritte lì (es. "Ragazzi, vi ho scritto tutto in chat! Date un'occhiata!").
 4. Rispondi SEMPRE in formato JSON valido con questa struttura esatta:
 {
-  "intent": "play_music" | "wiki_guide" | "razor_script" | "sports_match" | "sports_schedule" | "smart_assistant" | "jack_math_boost" | "live_fable" | "song_info" | "chat" | "dj_control" | "admin_control" | "social_interaction",
+  "intent": "play_music" | "wiki_guide" | "razor_script" | "sports_match" | "sports_schedule" | "sports_stream_voice" | "smart_assistant" | "jack_math_boost" | "live_fable" | "song_info" | "chat" | "dj_control" | "admin_control" | "social_interaction",
   "music_query": "stringa ottimizzata per ricerca YouTube" (solo se intent è play_music, altrimenti null),
   "wiki_topic": "argomento outlands" (solo se intent è wiki_guide, altrimenti null),
   "skill_slug": "slug della skill outlands" (solo se intent è razor_script, altrimenti null),
-  "sport_query": "squadra, sport o lega" (solo se intent è sports_match o sports_schedule, altrimenti null),
+  "sport_query": "squadra, sport o lega" (solo se intent è sports_match, sports_schedule o sports_stream_voice, altrimenti null),
   "voice_reply": "stringa vuota per comandi operativi/azioni; breve promemoria che rimanda alla chat per spiegazioni/guide/info (es. 'Ragazzi, vi ho scritto tutto in chat! Date un'occhiata!'); frase calda per chat amichevole",
   "chat_reply": "risposta testuale ricca, dettagliata e amichevole per la chat, formattata con markdown ed emoji"
 }
@@ -418,6 +418,39 @@ class FranchinoBrain:
                 "skill_slug": target_skill,
                 "voice_reply": f"Ragazzi, vi ho lasciato gli script Razor per {s_name} in chat! Date un'occhiata! Magia!",
                 "chat_reply": f"📜 **Franchino Razor Scripts**: Ecco gli script per **{s_name}** da outlands.uorazorscripts.com!",
+            }
+
+        # 1A. Streaming Vocale Audio / Telecronaca in Canale Vocale
+        stream_voice_triggers = (
+            "trasmetti la partita", "trasmetti il match", "streamma la partita", "streamma il match",
+            "metti la telecronaca", "metti la telecronaca di", "metti la telecronaca del", "metti la telecronaca della",
+            "ascolta la partita", "fammi ascoltare la partita", "fammi ascoltare la telecronaca",
+            "fai partire lo streaming", "fai partire la telecronaca", "metti lo streaming", "trasmetti in diretta",
+            "metti la diretta", "telecronaca di", "telecronaca del", "telecronaca della", "trasmetti", "streamma"
+        )
+        is_stream_intent = any(w in t_low for w in ("trasmetti la partita", "streamma la partita", "metti la telecronaca", "fammi ascoltare la telecronaca", "fai partire lo streaming", "fai partire la telecronaca", "metti lo streaming", "ascolta la partita", "fammi ascoltare la partita")) or (
+            any(w in t_low for w in stream_voice_triggers) and any(
+                s in t_low for s in ("partita", "match", "calcio", "diretta", "milan", "inter", "juve", "juventus", "roma", "napoli", "real madrid", "barcellona", "champions", "serie a", "telecronaca", "streaming", "squadra")
+            )
+        )
+        if is_stream_intent:
+            clean_sq = re.sub(
+                r"^(?:(?:(?:hey+|ehi+|hei+|ey+|ei+)\s+)?(?:franchino\s+)?)?"
+                r"(?:puoi\s+)?(?:per\s+favore\s+)?"
+                r"(?:trasmetti|streamma|metti|fai\s+partire|ascolta|fammi\s+ascoltare|riproduci|avvia|collega|stream|streaming)?\s*"
+                r"(?:(?:la|il|lo|l['’]|i|gli|le)\s+)?"
+                r"(?:partita|telecronaca|streaming|diretta|audio|match|palinsesto)?\s*"
+                r"(?:(?:di|del|della|dei|degli|dello|d['’])\s+)?",
+                "",
+                t_low,
+                flags=re.IGNORECASE
+            ).strip(" ,.!?:;-")
+
+            return {
+                "intent": "sports_stream_voice",
+                "sport_query": clean_sq or "live",
+                "voice_reply": f"Si va in scena ragazzi! Vi collego subito la telecronaca di {clean_sq or 'questa partita'} direttamente in console! Magia!",
+                "chat_reply": f"🔴 **Franchino Sports Live**: Avvio streaming audio telecronaca per **{clean_sq or 'partita in diretta'}**!",
             }
 
         # 1. Palinsesto Sportivo, Partite di Stasera & Grandi Match

@@ -1,6 +1,6 @@
 import discord
 from discord.ui import View, Button, Select
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional, Dict, Any
 
 if TYPE_CHECKING:
     from player import GuildPlayer
@@ -313,3 +313,122 @@ class QueuePaginationView(View):
             self._update_buttons()
             embed = self.player.create_queue_embed(page=self.current_page)
             await interaction.response.edit_message(embed=embed, view=self)
+
+
+class MatchStreamingView(View):
+    """Pannello interattivo per la gestione dello streaming audio della partita in canale vocale."""
+
+    def __init__(self, player: Optional["GuildPlayer"], match: Dict[str, Any]):
+        super().__init__(timeout=None)
+        self.player = player
+        self.match = match
+        self._add_url_buttons()
+        self._update_button_states()
+
+    def _add_url_buttons(self):
+        match_page = self.match.get("match_page_url") or self.match.get("url") or self.match.get("web_url") or "https://web01.madplay77.ru/it/football.html"
+        iframe_link = self.match.get("iframe_player_url")
+        pal_url = self.match.get("palinsesto_url")
+        if match_page:
+            self.add_item(discord.ui.Button(label="Guarda il Video su MadPlay77", url=match_page, style=discord.ButtonStyle.link, emoji="📺", row=1))
+        if iframe_link:
+            self.add_item(discord.ui.Button(label="Player Web Fullscreen", url=iframe_link, style=discord.ButtonStyle.link, emoji="🌐", row=1))
+        elif pal_url and pal_url != match_page:
+            self.add_item(discord.ui.Button(label="Palinsesto Live", url=pal_url, style=discord.ButtonStyle.link, emoji="🌐", row=1))
+
+    def _update_button_states(self):
+        direct_hls = self.match.get("direct_hls_available", False)
+        if not direct_hls or not self.player:
+            self.pause_resume_btn.disabled = not (direct_hls and self.player)
+            self.vol_down_btn.disabled = not (direct_hls and self.player)
+            self.vol_up_btn.disabled = not (direct_hls and self.player)
+            self.stop_btn.disabled = not (direct_hls and self.player)
+            return
+
+        is_paused = self.player.is_paused()
+        self.pause_resume_btn.label = "Riprendi" if is_paused else "Pausa"
+        self.pause_resume_btn.emoji = "▶️" if is_paused else "⏸️"
+        self.pause_resume_btn.style = discord.ButtonStyle.success if is_paused else discord.ButtonStyle.secondary
+        self.pause_resume_btn.disabled = False
+        self.vol_down_btn.disabled = False
+        self.vol_up_btn.disabled = False
+        self.stop_btn.disabled = False
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if not interaction.user or not self.player:
+            return True
+        bot_vc = interaction.guild.voice_client if interaction.guild else None
+        if bot_vc and bot_vc.channel:
+            in_bot_channel = interaction.user.id in bot_vc.channel.voice_states
+            if not in_bot_channel and isinstance(interaction.user, discord.Member) and interaction.user.voice:
+                in_bot_channel = (interaction.user.voice.channel == bot_vc.channel)
+            if not in_bot_channel:
+                await interaction.response.send_message(
+                    f"⚠️ Devi essere nel canale vocale **{bot_vc.channel.name}** per controllare lo streaming!",
+                    ephemeral=True
+                )
+                return False
+        return True
+
+    @discord.ui.button(emoji="⏸️", label="Pausa", style=discord.ButtonStyle.secondary, row=0)
+    async def pause_resume_btn(self, interaction: discord.Interaction, button: Button):
+        if not self.player:
+            await interaction.response.send_message("❌ Player non attivo.", ephemeral=True)
+            return
+        if self.player.is_paused():
+            self.player.resume()
+            self._update_button_states()
+            await interaction.response.edit_message(view=self)
+            await interaction.followup.send("▶️ Telecronaca ripresa!", ephemeral=True)
+        elif self.player.is_playing():
+            self.player.pause()
+            self._update_button_states()
+            await interaction.response.edit_message(view=self)
+            await interaction.followup.send("⏸️ Telecronaca in pausa!", ephemeral=True)
+        else:
+            await interaction.response.send_message("❌ Nessuna trasmissione in corso.", ephemeral=True)
+
+    @discord.ui.button(emoji="🔉", label="Vol -", style=discord.ButtonStyle.secondary, row=0)
+    async def vol_down_btn(self, interaction: discord.Interaction, button: Button):
+        if not self.player:
+            return
+        new_vol = max(0.05, self.player.volume - 0.10)
+        self.player.set_volume(new_vol)
+        await interaction.response.send_message(f"🔉 Volume telecronaca: **{int(new_vol * 100)}%**", ephemeral=True)
+
+    @discord.ui.button(emoji="🔊", label="Vol +", style=discord.ButtonStyle.secondary, row=0)
+    async def vol_up_btn(self, interaction: discord.Interaction, button: Button):
+        if not self.player:
+            return
+        new_vol = min(1.0, self.player.volume + 0.10)
+        self.player.set_volume(new_vol)
+        await interaction.response.send_message(f"🔊 Volume telecronaca: **{int(new_vol * 100)}%**", ephemeral=True)
+
+    @discord.ui.button(emoji="⏹️", label="Stop", style=discord.ButtonStyle.danger, row=0)
+    async def stop_btn(self, interaction: discord.Interaction, button: Button):
+        if self.player:
+            self.player.stop()
+        self.stop()
+        await interaction.response.send_message("⏹️ Streaming audio della partita interrotto!", ephemeral=False)
+
+    @discord.ui.button(emoji="🔄", label="Info & Live", style=discord.ButtonStyle.primary, row=0)
+    async def refresh_btn(self, interaction: discord.Interaction, button: Button):
+        try:
+            from sports_scraper import sports_scraper
+            live_matches = await sports_scraper.get_live_matches()
+            m_id = str(self.match.get("id") or self.match.get("match_id"))
+            for lm in live_matches:
+                if str(lm.get("id")) == m_id:
+                    self.match.update(lm)
+                    break
+        except Exception:
+            pass
+
+        title = self.match.get("title", "Partita")
+        score = self.match.get("score", "In corso")
+        time_str = self.match.get("time", "LIVE")
+        has_audio = "Telecronaca attiva nel canale vocale! 🎙️" if self.match.get("direct_hls_available") else "Diretta video disponibile sul sito web! 📺"
+        await interaction.response.send_message(
+            f"📊 **Stato Partita in Diretta**:\n• **{title}**\n• Punteggio: **{score}**\n• Stato: `{time_str}`\n• {has_audio}",
+            ephemeral=True
+        )

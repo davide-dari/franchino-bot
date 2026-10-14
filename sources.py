@@ -66,6 +66,8 @@ class SongInfo:
                 color = COLOR_SPOTIFY
             elif self.source_type == "youtube":
                 color = COLOR_YOUTUBE
+            elif self.source_type == "sports_stream":
+                color = discord.Color.red().value
             else:
                 color = COLOR_FRANCHINO
 
@@ -80,7 +82,12 @@ class SongInfo:
             embed.add_field(name="🎤 Canale / Artista", value=f"`{self.uploader}`", inline=True)
         embed.add_field(name="👤 Richiesto da", value=self.requester_mention, inline=True)
 
-        badge = "🟢 Spotify" if self.source_type == "spotify" else "🔴 YouTube"
+        if self.source_type == "spotify":
+            badge = "🟢 Spotify"
+        elif self.source_type == "sports_stream":
+            badge = "⚽ MadPlay77 Live"
+        else:
+            badge = "🔴 YouTube"
         embed.set_footer(text=f"Franchino DJ • {badge}", icon_url="https://cdn-icons-png.flaticon.com/512/3845/3845868.png")
 
         if self.thumbnail:
@@ -640,9 +647,24 @@ class SourceManager:
 
         # 2. Se c'è già un flusso HTTP diretto estratto in precedenza, usalo subito (0 ms)!
         if song.stream_url and (song.stream_url.startswith("http://") or song.stream_url.startswith("https://")):
-            return song.stream_url
+            if not (song.source_type == "sports_stream" and song.stream_url.endswith(".html")):
+                return song.stream_url
 
-        # 3. Se non ancora estratto (es. brano da playlist o Spotify in coda), estrai in singolo passaggio ultra-rapido
+        # 3. Flusso sportivo in streaming da MadPlay77
+        if song.source_type == "sports_stream":
+            if song.stream_url and not song.stream_url.endswith(".html"):
+                return song.stream_url
+            try:
+                from sports_scraper import sports_scraper
+                meta = await sports_scraper.resolve_match_for_streaming(song.search_query or song.title)
+                if meta and meta.get("direct_hls_available") and meta.get("stream_url") and not meta["stream_url"].endswith(".html"):
+                    song.stream_url = meta["stream_url"]
+                    return song.stream_url
+            except Exception as e:
+                logger.debug(f"Errore risoluzione stream sportivo in ensure_stream_url: {e}")
+            raise RuntimeError(f"Flusso audio live non disponibile per '{song.title}'")
+
+        # 4. Se non ancora estratto (es. brano da playlist o Spotify in coda), estrai in singolo passaggio ultra-rapido
         if song.source_type == "spotify":
             target = f"ytsearch1:{song.search_query or song.title}"
         elif song.webpage_url and (song.webpage_url.startswith("http://") or song.webpage_url.startswith("https://")):

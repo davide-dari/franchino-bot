@@ -23,7 +23,8 @@ import re
 import subprocess
 import time
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
+import urllib.parse
 from zoneinfo import ZoneInfo
 
 import aiohttp
@@ -418,6 +419,112 @@ def _build_madplay_match_url(match_id: Any, sport_type: int = 1, league: str = "
     league_slug = _slugify(league) if league else "campionato"
     team_slug = _slugify(title) if title else "partita"
     return f"https://web01.madplay77.ru/it/{sport_slug}/{league_slug}-{match_id}/{team_slug}.html"
+
+
+def _rot47(s: str) -> str:
+    """Decodifica/codifica ROT47 (usato da MadPlay77 per cifratura URL flussi e parametri)."""
+    res = []
+    for c in s:
+        o = ord(c)
+        if 33 <= o <= 126:
+            res.append(chr(33 + ((o + 14) % 94)))
+        else:
+            res.append(c)
+    return "".join(res)
+
+
+def _decode_stream_url(enc: str) -> str:
+    """Decifra l'URL dello stream HLS da MadPlay77 applicando ROT47 e tagliando i primi 8 caratteri."""
+    if not enc:
+        return ""
+    dec = _rot47(enc)
+    return dec[8:] if len(dec) > 8 else dec
+
+
+def _encrypt_rb_session(session_str: str) -> str:
+    """Genera la firma di sicurezza token AES-256-CBC per l'autenticazione del flusso audio/video."""
+    if not session_str:
+        return ""
+    # 1. Tentativo con openssl CLI (nativo su macOS e Linux, zero dipendenze esterne)
+    try:
+        key_hex = base64.b64decode("YTc5ODFjYzllYjJmNGQxOWRjZmVhNTdiMTAxZWNkODk=").hex()
+        iv_hex = base64.b64decode("ODAxN2QzYThmMTQwMGQyZg==").hex()
+        proc = subprocess.run(
+            ["openssl", "enc", "-aes-256-cbc", "-K", key_hex, "-iv", iv_hex],
+            input=session_str.encode("utf-8"),
+            capture_output=True,
+            timeout=2
+        )
+        if proc.returncode == 0 and proc.stdout:
+            return proc.stdout.hex() + "a"
+    except Exception as e:
+        logger.debug(f"Firma rb_session via openssl non riuscita: {e}")
+
+    # 2. Tentativo con Node.js se openssl non è disponibile
+    try:
+        node_code = f"""
+        const crypto = require('crypto');
+        const key = Buffer.from('YTc5ODFjYzllYjJmNGQxOWRjZmVhNTdiMTAxZWNkODk=', 'base64');
+        const iv = Buffer.from('ODAxN2QzYThmMTQwMGQyZg==', 'base64');
+        const cipher = crypto.createCipheriv('aes-256-cbc', key, iv);
+        let enc = cipher.update({json.dumps(session_str)}, 'utf8', 'hex');
+        enc += cipher.final('hex');
+        process.stdout.write(enc + 'a');
+        """
+        res = subprocess.run(["node", "-e", node_code], capture_output=True, text=True, timeout=3)
+        if res.returncode == 0 and res.stdout.strip():
+            return res.stdout.strip()
+    except Exception as e:
+        logger.debug(f"Firma rb_session via Node non riuscita: {e}")
+
+    # 3. Tentativo con modulo Python cryptography se installato
+    try:
+        from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+        from cryptography.hazmat.primitives import padding
+        key_bytes = base64.b64decode("YTc5ODFjYzllYjJmNGQxOWRjZmVhNTdiMTAxZWNkODk=")
+        iv_bytes = base64.b64decode("ODAxN2QzYThmMTQwMGQyZg==")
+        padder = padding.PKCS7(128).padder()
+        padded_data = padder.update(session_str.encode("utf-8")) + padder.finalize()
+        cipher = Cipher(algorithms.AES(key_bytes), modes.CBC(iv_bytes))
+        encryptor = cipher.encryptor()
+        ct = encryptor.update(padded_data) + encryptor.finalize()
+        return ct.hex() + "a"
+    except Exception as e:
+        logger.debug(f"Firma rb_session via cryptography non riuscita: {e}")
+
+    return ""
+
+
+def _sign_stream_url(dec_url: str, rb_session: str) -> str:
+    """Appende il token di sessione autenticato all'URL decodificato (/token-{token}/...)."""
+    if not dec_url:
+        return ""
+    if not rb_session:
+        return dec_url
+    token = _encrypt_rb_session(rb_session)
+    if not token:
+        return dec_url
+    try:
+        parsed = urllib.parse.urlparse(dec_url)
+        path = parsed.path if parsed.path.startswith("/") else f"/{parsed.path}"
+        new_path = f"/token-{token}{path}"
+        return urllib.parse.urlunparse(parsed._replace(path=new_path))
+    except Exception:
+        return dec_url
+
+
+def _build_madplay_iframe_url(match_id: Any, sport_type: int = 1) -> str:
+    """Costruisce l'URL diretto del web player iframe con payload mdata codificato in base64."""
+    try:
+        st_int = int(sport_type)
+    except (ValueError, TypeError):
+        st_int = 1
+    mdata_str = f"{match_id}_{st_int}"
+    mdata_b64 = base64.b64encode(mdata_str.encode("utf-8")).decode("utf-8")
+    mdata_enc = urllib.parse.quote(mdata_b64)
+    # Dominio primario del player iframe estratto da common:web:client
+    domain = "nadia01eo.tn76degree12ec3out.cfd"
+    return f"https://{domain}/it/player.html?mdata={mdata_enc}&ilang=it"
 
 
 class SportsScraper:
@@ -1515,6 +1622,247 @@ class SportsScraper:
         view = discord.ui.View()
         view.add_item(discord.ui.Button(label="Palinsesto MadPlay77", url=MADPLAY_FOOTBALL_PAGE, style=discord.ButtonStyle.link, emoji="🌐"))
         view.add_item(discord.ui.Button(label="Guida TV Sky Sport", url=SKY_GUIDA_TV_URL, style=discord.ButtonStyle.link, emoji="📺"))
+        return embed, view, voice_text
+
+    # =========================================================================
+    # 7. ESTRAZIONE STREAMING LIVE HLS & TRASMISSIONE VOCALE AUDIO
+    # =========================================================================
+    async def get_match_stream_info(self, match_id: Any, sport_type: int = 1) -> Dict[str, Any]:
+        """
+        Interroga le API di MadPlay77 (/api/common/bs, /api/match/detail, /api/stream/detail)
+        per estrarre il flusso live HLS (.m3u8), i canali TV, il token di sessione autenticato
+        e l'URL diretto del player web.
+        """
+        try:
+            st_int = int(sport_type)
+        except (ValueError, TypeError):
+            st_int = 1
+
+        headers = {
+            "Referer": "https://web01.madplay77.ru/it",
+            "Origin": "https://web01.madplay77.ru",
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
+            "Accept": "application/json, text/plain, */*",
+        }
+
+        token = "7011c2a84af83d5d939f3b5d8a8768eb"
+        channel_name = "MadPlay77 Live"
+        stream_id = None
+        site_type = None
+        stream_url = None
+        rb_session = None
+
+        try:
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=4.5)) as session:
+                # 1. Recupero firma bs per autorizzare /api/match/detail (codice 102)
+                bs_url = f"https://apis-data-defra10.tcpwe138stya.ru/api/common/bs?code=102&matchId={match_id}&sportType={st_int}&stream=true"
+                async with session.get(bs_url, headers=headers) as r:
+                    if r.status == 200:
+                        buf = await r.read()
+                        proto = _parse_protobuf_wire(buf)
+                        if 10 in proto and proto[10]:
+                            f10 = _parse_protobuf_wire(proto[10][0])
+                            for item in f10.get(1, []):
+                                sub = _parse_protobuf_wire(item)
+                                if 2 in sub and sub[2]:
+                                    token = sub[2][0].decode("utf-8", errors="ignore")
+
+                # 2. Richiesta dettaglio match e lista canali di trasmissione
+                det_url = f"https://apis-data-defra10.tcpwe138stya.ru/sfver{token}/api/match/detail?language=8&matchId={match_id}&sportType={st_int}&stream=true"
+                async with session.get(det_url, headers=headers) as r:
+                    if r.status == 200:
+                        buf = await r.read()
+                        proto = _parse_protobuf_wire(buf)
+                        f10 = _parse_protobuf_wire(proto.get(10, [b""])[0]) if 10 in proto else {}
+                        stream_items = f10.get(2, [])
+                        if stream_items:
+                            sp = _parse_protobuf_wire(stream_items[0])
+                            stream_id = sp.get(1, [None])[0]
+                            ch_bytes = sp.get(3, [b""])[0]
+                            if ch_bytes:
+                                channel_name = ch_bytes.decode("utf-8", errors="ignore")
+                            site_type = sp.get(8, [None])[0]
+
+                # 3. Richiesta URL del flusso HLS se stream_id è presente
+                if stream_id is not None:
+                    surl = f"https://apis-data-defra10.tcpwe138stya.ru/api/stream/detail?streamId={stream_id}&matchId={match_id}&sportType={st_int}&continent=EU&country=IT&digit=seth"
+                    if site_type:
+                        surl += f"&siteType={site_type}"
+                    async with session.get(surl, headers=headers) as sr:
+                        rb_session = sr.headers.get("rb-session")
+                        if sr.status == 200:
+                            sbuf = await sr.read()
+                            sproto = _parse_protobuf_wire(sbuf)
+                            if 10 in sproto and sproto[10]:
+                                sf10 = _parse_protobuf_wire(sproto[10][0])
+                                raw_stream_url = sf10.get(1, [b""])[0].decode("utf-8", errors="ignore")
+                                if raw_stream_url:
+                                    dec_url = _decode_stream_url(raw_stream_url)
+                                    stream_url = _sign_stream_url(dec_url, rb_session)
+        except Exception as e:
+            logger.debug(f"Errore recupero dettagli stream match {match_id}: {e}")
+
+        iframe_url = _build_madplay_iframe_url(match_id, st_int)
+        portal_url = _build_madplay_match_url(match_id, st_int)
+
+        return {
+            "match_id": match_id,
+            "sport_type": st_int,
+            "channel_name": channel_name,
+            "stream_id": stream_id,
+            "stream_url": stream_url,
+            "direct_hls_available": bool(stream_url),
+            "rb_session": rb_session,
+            "iframe_player_url": iframe_url,
+            "match_page_url": portal_url,
+        }
+
+    async def resolve_match_for_streaming(self, query: str) -> Optional[Dict[str, Any]]:
+        """
+        Cerca una partita in base alla query dell'utente (squadra, evento, sport)
+        e ne estrae i metadati completi con flusso streaming audio/video.
+        """
+        clean_q = re.sub(
+            r"^(?:(?:(?:hey+|ehi+|hei+|ey+|ei+)\s+)?(?:franchino\s+)?)?"
+            r"(?:puoi\s+)?(?:per\s+favore\s+)?"
+            r"(?:trasmetti|streamma|metti|fai\s+partire|ascolta|fammi\s+ascoltare|riproduci|avvia|collega|stream|streaming)?\s*"
+            r"(?:(?:la|il|lo|l['’]|i|gli|le)\s+)?"
+            r"(?:partita|telecronaca|streaming|diretta|audio|match|palinsesto)?\s*"
+            r"(?:(?:di|del|della|dei|degli|dello|d['’])\s+)?",
+            "",
+            query,
+            flags=re.IGNORECASE
+        )
+        clean_q = re.sub(r"\b(stream|streamma|telecronaca|trasmetti|audio|ascolta)\b", "", clean_q, flags=re.IGNORECASE).strip(" ,.!?:;-")
+
+        target_q = clean_q or query or "live"
+        search_res = await self.search_event(target_q)
+        match = search_res.get("best_match")
+
+        if not match:
+            # Prova prima dai match live
+            live_matches = await self.get_live_matches()
+            if live_matches:
+                if target_q.lower() in ("live", "stasera", "oggi", "partita", "tutte"):
+                    match = live_matches[0]
+                else:
+                    q_tokens = [t for t in target_q.lower().split() if len(t) >= 2]
+                    for lm in live_matches:
+                        lm_title = lm.get("title", "").lower()
+                        lm_league = lm.get("league", "").lower()
+                        if target_q.lower() in lm_title or target_q.lower() in lm_league:
+                            match = lm
+                            break
+                        if q_tokens and all(tok in lm_title or tok in lm_league for tok in q_tokens):
+                            match = lm
+                            break
+
+        if not match:
+            return None
+
+        # Arricchisci con le informazioni di streaming avanzate
+        stream_meta = await self.get_match_stream_info(match["id"], match.get("sport_type", 1))
+        match_copy = dict(match)
+        s_url = stream_meta.get("stream_url")
+        if not s_url or s_url.endswith(".html"):
+            cand_url = match_copy.get("stream_url")
+            s_url = cand_url if (cand_url and not cand_url.endswith(".html")) else None
+
+        has_direct = bool(s_url) and not s_url.endswith(".html")
+        match_copy.update({
+            "channel_name": stream_meta.get("channel_name") or match_copy.get("tv_channels", "MadPlay77 Live"),
+            "stream_url": s_url,
+            "direct_hls_available": has_direct,
+            "iframe_player_url": stream_meta.get("iframe_player_url"),
+            "web_url": match_copy.get("url") or stream_meta.get("match_page_url"),
+            "match_page_url": stream_meta.get("match_page_url") or match_copy.get("url"),
+        })
+        return match_copy
+
+    def build_match_streaming_embed(
+        self,
+        match: Dict[str, Any],
+        player: Optional[Any] = None,
+        requester: Optional[Union[discord.Member, discord.User, str]] = None,
+    ) -> Tuple[discord.Embed, discord.ui.View, str]:
+        """
+        Costruisce l'embed Discord ricco con statistiche live, canale telecronaca,
+        comandi del player vocale e link web per aprire il video su MadPlay77.
+        """
+        from views import MatchStreamingView
+
+        title = match.get("title", "Partita")
+        league = match.get("league") or match.get("sport_name") or "🏆 Live Sport"
+        time_str = match.get("time", "LIVE")
+        score = match.get("score") or "0 - 0"
+        channel = match.get("channel_name") or match.get("tv_channels") or "MadPlay77 Live"
+        web_link = match.get("match_page_url") or match.get("url") or match.get("web_url") or MADPLAY_FOOTBALL_PAGE
+        iframe_link = match.get("iframe_player_url")
+        s_url = match.get("stream_url")
+        direct_hls = match.get("direct_hls_available", False) or (bool(s_url) and not str(s_url).endswith(".html"))
+
+        clean_title = title.replace(" vs ", " contro ")
+        if direct_hls:
+            embed_title = f"🔴 TELECRONACA LIVE: {title}"
+            embed_desc = (
+                f"🎙️ **Audio della partita collegato in diretta nel canale vocale!**\n"
+                f"Ascolta la telecronaca con tutti gli amici nella stanza o apri la diretta video dal link qui sotto!"
+            )
+            embed_color = discord.Color.red()
+            voice_text = f"Si va in scena ragazzi! Vi ho collegato la telecronaca di {clean_title} direttamente in console! Magia!"
+        else:
+            embed_title = f"⚽ PARTITA / STREAMING: {title}"
+            embed_desc = (
+                f"📺 **Flusso video e dettagli match disponibili su MadPlay77!**\n"
+                f"Il flusso audio diretto non è ancora attivo sul server (partita non iniziata o segnale in attesa). "
+                f"Puoi aprire la diretta video tramite il player web cliccando sui link qui sotto!"
+            )
+            embed_color = discord.Color.gold()
+            voice_text = f"Ragazzi, vi ho trovato {clean_title}! Il flusso video è pronto sul player web di MadPlay77, cliccate sul link per seguirla!"
+
+        embed = discord.Embed(
+            title=embed_title,
+            description=embed_desc,
+            color=embed_color,
+        )
+
+        embed.add_field(name="🏆 Competizione", value=f"`{league}`", inline=True)
+        embed.add_field(name="⏰ Stato / Orario", value=f"`{time_str}`", inline=True)
+        embed.add_field(name="📊 Risultato Live", value=f"**{score}**", inline=True)
+        embed.add_field(name="📺 Canale Telecronaca", value=f"**{channel}**", inline=True)
+
+        req_name = "Anonimo"
+        if requester:
+            if hasattr(requester, "display_name"):
+                req_name = requester.display_name
+            elif hasattr(requester, "mention"):
+                req_name = requester.mention
+            else:
+                req_name = str(requester)
+        embed.add_field(name="👤 Richiesto da", value=f"`{req_name}`", inline=True)
+
+        if direct_hls:
+            voice_tips = (
+                "• *\"Franchino pausa\"* / *\"riprendi\"* — Metti in pausa o riprendi\n"
+                "• *\"Franchino alza\"* / *\"abbassa\"* — Regola il volume telecronaca\n"
+                "• *\"Franchino stop\"* — Interrompi la trasmissione"
+            )
+            embed.add_field(name="🎧 Controlli Vocali Console", value=voice_tips, inline=False)
+
+        video_links = f"• [📺 **Guarda il Video in Diretta su MadPlay77**]({web_link})"
+        if iframe_link:
+            video_links += f"\n• [🌐 Player Web Fullscreen]({iframe_link})"
+        embed.add_field(name="🔗 Guarda il Video sul Sito", value=video_links, inline=False)
+
+        if match.get("league_logo"):
+            embed.set_thumbnail(url=match["league_logo"])
+
+        embed.set_footer(
+            text="Franchino DJ Sports • MadPlay77 Live Audio Stream",
+            icon_url="https://cdn-icons-png.flaticon.com/512/3845/3845868.png",
+        )
+
+        view = MatchStreamingView(player=player, match=match)
         return embed, view, voice_text
 
 

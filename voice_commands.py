@@ -1631,12 +1631,20 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
         sport_detected = False
         sport_query = ""
 
+        # Match avvio streaming telecronaca audio diretta
+        stream_voice_match = re.search(
+            r"(?:trasmetti|streamma|metti\s+(?:la\s+)?telecronaca|fammi\s+ascoltare|fai\s+partire\s+(?:lo\s+)?streaming|metti\s+(?:lo\s+)?streaming|ascolta)\s+(?:(?:la|il|lo|l['’]|i|gli|le)\s+)?(?:partita|telecronaca|streaming|diretta|audio|match)?(?:\s+(?:di|del|della|dei|degli|dello|d['’]))?\s*(.+)?",
+            cmd_lower
+        )
         # Match ricerca puntuale team / streaming
         specific_match = re.search(
             r"(?:cerca\s+(?:la\s+)?partita|dove\s+(?:fanno\s+vedere|posso\s+vedere|vedere|trasmettono)|streaming\s+(?:della\s+)?partita|trova\s+(?:la\s+)?partita|partita\s+(?:del|della|di|dei)|streaming\s+di|guarda\s+(?:la\s+)?partita)\s+(.+)",
             cmd_lower
         )
-        if specific_match:
+        if stream_voice_match:
+            sport_detected = True
+            sport_query = (stream_voice_match.group(1) or "live").strip(" ,.!?:;-") or "live"
+        elif specific_match:
             sport_detected = True
             sport_query = specific_match.group(1).strip(" ,.!?:;-")
         else:
@@ -1667,6 +1675,30 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
         if sport_detected and sport_query:
             from sports_scraper import sports_scraper
             from central_hub import hub
+
+            is_stream_request = any(w in cmd_lower for w in ("trasmetti", "streamma", "telecronaca", "fammi ascoltare", "fai partire lo streaming", "metti la telecronaca", "metti lo streaming"))
+            if is_stream_request:
+                match = await sports_scraper.resolve_match_for_streaming(sport_query)
+                if match:
+                    vc = user.voice.channel if hasattr(user, "voice") and user.voice else None
+                    await self.player.stream_sports_match(
+                        match=match,
+                        voice_channel=vc,
+                        text_channel=self.text_channel,
+                        requester=user
+                    )
+                    asyncio.create_task(
+                        hub.archive_interaction(
+                            user_id=str(user.id),
+                            user_name=user.display_name,
+                            raw_query=f"voce_sport_stream {sport_query}",
+                            intent="sports_stream_voice",
+                            ai_response=match.get("title", "Telecronaca"),
+                            voice_summary=f"Streaming telecronaca di {match.get('title')}",
+                            metadata={"query": sport_query, "match_id": match.get("id")}
+                        )
+                    )
+                    return
 
             res = await sports_scraper.search_event(sport_query)
             embed, view, voice_msg = sports_scraper.build_sports_embed(res)
@@ -3345,6 +3377,40 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
                     asyncio.create_task(
                         self.player.speak_tts(voice_ans, wait=False, interrupt_music=True, keep_paused_after=False)
                     )
+        if intent == "sports_stream_voice":
+            from sports_scraper import sports_scraper
+            from central_hub import hub
+            sq = decision.get("sport_query") or command_part
+            match = await sports_scraper.resolve_match_for_streaming(sq)
+            if match:
+                vc = user.voice.channel if hasattr(user, "voice") and user.voice else None
+                await self.player.stream_sports_match(
+                    match=match,
+                    voice_channel=vc,
+                    text_channel=self.text_channel,
+                    requester=user
+                )
+                asyncio.create_task(
+                    hub.archive_interaction(
+                        user_id=str(user.id),
+                        user_name=user.display_name,
+                        raw_query=f"brain_sport_stream {sq}",
+                        intent=intent,
+                        ai_response=match.get("title", "Telecronaca"),
+                        voice_summary=f"Streaming telecronaca di {match.get('title')}",
+                        metadata={"query": sq, "match_id": match.get("id")},
+                    )
+                )
+                return True
+            else:
+                res = await sports_scraper.search_event(sq)
+                embed, view, voice_msg = sports_scraper.build_sports_embed(res)
+                await self._notify_channel(
+                    message=f"🎙️⚽ **Franchino Sports ({user.display_name}):**\n> *\"{voice_msg}\"*",
+                    embed=embed,
+                    view=view,
+                )
+                asyncio.create_task(self.player.speak_tts(voice_msg, wait=False, interrupt_music=True))
                 return True
 
         if intent in ("sports_match", "sports_schedule"):

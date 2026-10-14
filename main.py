@@ -1458,16 +1458,81 @@ async def sync_cmd(ctx: commands.Context):
 
 @bot.hybrid_command(
     name="partita",
-    aliases=["streaming", "partita_live"],
-    description="Cerca una partita, evento o diretta streaming (es. Milan, Juventus, NBA, F1, stasera)"
+    aliases=["partita_live"],
+    description="Cerca una partita, palinsesto o diretta streaming audio (es. /partita stream Milan, /partita Juve)"
 )
-async def partita_cmd(ctx: commands.Context, *, squadra_o_evento: Optional[str] = "stasera"):
-    """Cerca una partita o evento sportivo con link allo streaming diretto e dettagli."""
+async def partita_cmd(
+    ctx: commands.Context,
+    squadra_o_evento: Optional[str] = "stasera",
+    *,
+    dettaglio: Optional[str] = None
+):
+    """Cerca una partita o evento sportivo, o trasmetti la telecronaca in diretta nel canale vocale."""
     await ctx.defer()
     from sports_scraper import sports_scraper
     from central_hub import hub
 
-    query = (squadra_o_evento or "stasera").strip()
+    raw_parts = []
+    if squadra_o_evento:
+        raw_parts.append(str(squadra_o_evento))
+    if dettaglio:
+        raw_parts.append(str(dettaglio))
+    raw_query = " ".join(raw_parts).strip() or "stasera"
+
+    is_stream = bool(re.search(r"\b(stream|streamma|telecronaca|trasmetti|audio|ascolta)\b", raw_query, flags=re.IGNORECASE))
+
+    if is_stream:
+        clean_q = re.sub(
+            r"^(?:(?:(?:hey+|ehi+|hei+|ey+|ei+)\s+)?(?:franchino\s+)?)?"
+            r"(?:puoi\s+)?(?:per\s+favore\s+)?"
+            r"(?:trasmetti|streamma|metti|fai\s+partire|ascolta|fammi\s+ascoltare|riproduci|avvia|collega|stream|streaming)?\s*"
+            r"(?:(?:la|il|lo|l['’]|i|gli|le)\s+)?"
+            r"(?:partita|telecronaca|streaming|diretta|audio|match|palinsesto)?\s*"
+            r"(?:(?:di|del|della|dei|degli|dello|d['’])\s+)?",
+            "",
+            raw_query,
+            flags=re.IGNORECASE
+        )
+        clean_q = re.sub(r"\b(stream|streamma|telecronaca|trasmetti|audio|ascolta)\b", "", clean_q, flags=re.IGNORECASE).strip(" ,.!?:;-") or "live"
+
+        player = player_manager.get_player(ctx.guild)
+        voice_ch = getattr(getattr(ctx.author, "voice", None), "channel", None)
+        if not voice_ch and (not player.voice_client or not player.voice_client.is_connected()):
+            await ctx.send(
+                "⚠️ **Devi essere connesso a un canale vocale** per far trasmettere la telecronaca a Franchino!",
+                ephemeral=True
+            )
+            return
+
+        match = await sports_scraper.resolve_match_for_streaming(clean_q)
+        if match:
+            song, embed, view, voice_msg = await player.stream_sports_match(
+                match=match,
+                voice_channel=voice_ch,
+                text_channel=ctx.channel,
+                requester=ctx.author,
+                send_embed=False
+            )
+            await ctx.send(
+                content=f"🎙️ **Franchino**: *\"{voice_msg}\"*",
+                embed=embed,
+                view=view
+            )
+            asyncio.create_task(
+                hub.archive_interaction(
+                    user_id=str(ctx.author.id),
+                    user_name=ctx.author.display_name,
+                    raw_query=f"partita stream {clean_q}",
+                    intent="sports_stream_voice",
+                    ai_response=match.get("title", "Telecronaca"),
+                    voice_summary=voice_msg,
+                    channel_name=ctx.channel.name if hasattr(ctx.channel, 'name') else None,
+                    metadata={"query": clean_q, "match_id": match.get("id")}
+                )
+            )
+            return
+
+    query = raw_query
     res = await sports_scraper.search_event(query)
     embed, view, voice_msg = sports_scraper.build_sports_embed(res)
 
@@ -1493,6 +1558,69 @@ async def partita_cmd(ctx: commands.Context, *, squadra_o_evento: Optional[str] 
     player = player_manager.get_player(ctx.guild)
     if player.voice_client and player.voice_client.is_connected() and voice_msg:
         await player.speak_tts(voice_msg, wait=False, interrupt_music=True)
+
+
+@bot.hybrid_command(
+    name="stream",
+    aliases=["stream_partita", "telecronaca", "ascolta_partita"],
+    description="Ascolta la telecronaca e la partita in diretta nel canale vocale da MadPlay77!"
+)
+async def stream_cmd(ctx: commands.Context, *, partita_o_squadra: Optional[str] = "live"):
+    """Avvia la trasmissione audio in diretta della telecronaca della partita scelta nel canale vocale."""
+    await ctx.defer()
+    from sports_scraper import sports_scraper
+    from central_hub import hub
+
+    query = (partita_o_squadra or "live").strip()
+    player = player_manager.get_player(ctx.guild)
+
+    voice_ch = getattr(getattr(ctx.author, "voice", None), "channel", None)
+    if not voice_ch and (not player.voice_client or not player.voice_client.is_connected()):
+        await ctx.send(
+            "⚠️ **Devi essere connesso a un canale vocale** per far trasmettere la telecronaca a Franchino!",
+            ephemeral=True
+        )
+        return
+
+    match = await sports_scraper.resolve_match_for_streaming(query)
+    if not match:
+        res = await sports_scraper.search_event(query)
+        embed, view, voice_msg = sports_scraper.build_sports_embed(res)
+        await ctx.send(
+            content=f"🎙️ **Franchino**: *\"{voice_msg}\"*",
+            embed=embed,
+            view=view
+        )
+        if player.voice_client and player.voice_client.is_connected() and voice_msg:
+            await player.speak_tts(voice_msg, wait=False, interrupt_music=True)
+        return
+
+    song, embed, view, voice_msg = await player.stream_sports_match(
+        match=match,
+        voice_channel=voice_ch,
+        text_channel=ctx.channel,
+        requester=ctx.author,
+        send_embed=False
+    )
+
+    await ctx.send(
+        content=f"🎙️ **Franchino**: *\"{voice_msg}\"*",
+        embed=embed,
+        view=view
+    )
+
+    asyncio.create_task(
+        hub.archive_interaction(
+            user_id=str(ctx.author.id),
+            user_name=ctx.author.display_name,
+            raw_query=f"stream {query}",
+            intent="sports_stream_voice",
+            ai_response=match.get("title", "Telecronaca"),
+            voice_summary=voice_msg,
+            channel_name=ctx.channel.name if hasattr(ctx.channel, 'name') else None,
+            metadata={"query": query, "match_id": match.get("id")}
+        )
+    )
 
 
 @bot.hybrid_command(

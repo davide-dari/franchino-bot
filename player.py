@@ -5,7 +5,7 @@ import logging
 import os
 import random
 import time
-from typing import Optional, List, Dict, Tuple
+from typing import Optional, List, Dict, Tuple, Union, Any
 import discord
 from discord.ext import commands
 
@@ -1202,6 +1202,81 @@ class GuildPlayer:
         if voice_announce and songs:
             asyncio.create_task(self.speak_tts(voice_announce, wait=False))
 
+    async def stream_sports_match(
+        self,
+        match: Dict[str, Any],
+        voice_channel: Optional[discord.VoiceChannel] = None,
+        text_channel: Optional[discord.TextChannel] = None,
+        requester: Optional[Union[discord.Member, discord.User, str]] = None,
+        send_embed: bool = True,
+    ) -> Tuple[Optional[SongInfo], discord.Embed, discord.ui.View, str]:
+        """
+        Avvia lo streaming audio della telecronaca della partita scelta nel canale vocale di Discord,
+        e pubblica un Discord Embed ricco con statistiche live, comandi del player e link video web.
+        """
+        from sports_scraper import sports_scraper
+
+        if (not self.voice_client or not self.voice_client.is_connected()) and voice_channel:
+            await self.connect(voice_channel, text_channel or self.text_channel)
+
+        # Se il match non ha ancora i dettagli completi dello stream, risolvili
+        if not match.get("direct_hls_available") and not match.get("stream_url"):
+            stream_meta = await sports_scraper.get_match_stream_info(
+                match.get("id") or match.get("match_id"), match.get("sport_type", 1)
+            )
+            match.update(stream_meta)
+
+        title = match.get("title", "Partita Live")
+        league = match.get("league") or match.get("sport_name") or "🏆 Live Sport"
+        channel = match.get("channel_name") or match.get("tv_channels") or "MadPlay77 Live"
+        match_web_url = match.get("match_page_url") or match.get("url") or match.get("web_url") or "https://web01.madplay77.ru/it/football.html"
+        stream_url = match.get("stream_url")
+        direct_hls = match.get("direct_hls_available", False) and bool(stream_url) and not str(stream_url).endswith(".html")
+
+        stream_headers = {
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
+            "Referer": "https://web01.madplay77.ru/",
+            "Origin": "https://web01.madplay77.ru",
+        }
+
+        song = None
+        if direct_hls:
+            song = SongInfo(
+                title=f"⚽ {title} - Telecronaca Live ({league})",
+                webpage_url=match_web_url,
+                stream_url=stream_url,
+                duration=0,
+                thumbnail=match.get("league_logo"),
+                uploader=f"MadPlay77 ({channel})",
+                requester=requester,
+                source_type="sports_stream",
+                http_headers=stream_headers,
+                is_direct_stream=True,
+            )
+
+        embed, view, voice_msg = sports_scraper.build_match_streaming_embed(match, player=self, requester=requester)
+
+        target_ch = resolve_preferred_text_channel(self.guild, text_channel or self.text_channel)
+
+        if direct_hls and song:
+            await self.play_now([song], text_channel=target_ch, voice_announce=voice_msg)
+        else:
+            # Flusso audio non ancora attivo su CDN: annuncia via TTS vocale se connesso
+            if self.voice_client and self.voice_client.is_connected() and voice_msg:
+                asyncio.create_task(self.speak_tts(voice_msg, wait=False, interrupt_music=True))
+
+        if send_embed and target_ch:
+            try:
+                await target_ch.send(
+                    content=f"🎙️ **Franchino**: *\"{voice_msg}\"*",
+                    embed=embed,
+                    view=view,
+                )
+            except Exception as e:
+                logger.debug(f"Errore invio embed streaming sportivo: {e}")
+
+        return song, embed, view, voice_msg
+
     async def _prefetch_next_song(self):
         """Pre-scarica in background il prossimo brano in coda per evitare attese al cambio traccia."""
         if not self.queue:
@@ -1349,8 +1424,8 @@ class GuildPlayer:
                     asyncio.create_task(self._prefetch_next_song())
 
             except Exception as e:
-                # Se lo streaming diretto fallisce, tenta un download audio locale come fallback prima di arrendersi
-                if getattr(next_song, "is_direct_stream", False):
+                # Se lo streaming diretto fallisce, tenta un download audio locale come fallback prima di arrendersi (solo brani multimediali, non telecronache live)
+                if getattr(next_song, "is_direct_stream", False) and getattr(next_song, "source_type", "") != "sports_stream":
                     try:
                         logger.warning(f"Flusso diretto non riuscito per '{getattr(next_song, 'title', '')}', tento fallback download locale...")
                         target = next_song.webpage_url or next_song.title
@@ -1396,6 +1471,9 @@ class GuildPlayer:
 
     async def _send_now_playing_message(self, song: SongInfo):
         """Invia un messaggio ricco con i controlli chat interattivi nel canale #musica (o nella chat di avvio)."""
+        if getattr(song, "source_type", "") == "sports_stream":
+            return  # Lo streaming sportivo ha il proprio MatchStreamingView dedicato
+
         self.text_channel = resolve_preferred_text_channel(
             self.guild,
             self.text_channel or (self.voice_client.channel if self.voice_client else None)
