@@ -307,17 +307,19 @@ async def on_ready():
     # 3. Sincronizza i comandi slash in background (così eventuali rate-limit Discord non bloccano mai la voce)
     asyncio.create_task(_sync_slash_commands_bg())
 
-    # 4. Ottimizzazione Hardware per server ARM 2 vCPU (ThreadPool limitato a 4 workers & GC ARM tuning)
-    import concurrent.futures
-    from jack_math_engine import hardware_optimizer
-    try:
-        hardware_optimizer.configure_for_arm()
-        loop = asyncio.get_running_loop()
-        bounded_pool = concurrent.futures.ThreadPoolExecutor(max_workers=4, thread_name_prefix="FranchinoARM")
-        loop.set_default_executor(bounded_pool)
-        logger.info("⚡ ThreadPoolExecutor ottimizzato per 2 core ARM (max_workers=4, low memory footprint).")
-    except Exception as e:
-        logger.debug(f"ThreadPool setup: {e}")
+    # 4. Ottimizzazione Hardware per server ARM (ThreadPool a 16 workers & GC ARM tuning, configurato una sola volta)
+    if not hasattr(bot, "_executor_configured"):
+        import concurrent.futures
+        from jack_math_engine import hardware_optimizer
+        try:
+            hardware_optimizer.configure_for_arm()
+            loop = asyncio.get_running_loop()
+            bounded_pool = concurrent.futures.ThreadPoolExecutor(max_workers=16, thread_name_prefix="FranchinoARM")
+            loop.set_default_executor(bounded_pool)
+            bot._executor_configured = True
+            logger.info("⚡ ThreadPoolExecutor ottimizzato e configurato con max_workers=16 per evitare starvation.")
+        except Exception as e:
+            logger.debug(f"ThreadPool setup: {e}")
 
     # 5. Avvia in background l'indicizzazione completa della wiki e sincronizzazione catalogo Razor Scripts
     from outlands_wiki import preload_outlands_wiki_index
@@ -680,6 +682,11 @@ async def resume(ctx: commands.Context):
 async def skip(ctx: commands.Context):
     player = player_manager.get_player(ctx.guild)
     if not player.is_active or not player.current:
+        if player.queue:
+            player._consecutive_play_errors = 0
+            await player.play_next()
+            await ctx.send("⏭️ Riavvio riproduzione dal brano successivo in coda!")
+            return
         await ctx.send("❌ Nessun brano da saltare.")
         return
 

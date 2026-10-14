@@ -125,6 +125,7 @@ class SourceManager:
             "extract_flat": False,
             "remote_components": ["ejs:github"],
             "extractor_args": yt_extractor_args,
+            "socket_timeout": 12.0,
         }
         if NODE_PATH:
             self.ydl_opts_stream["js_runtimes"] = {"node": {}}
@@ -138,6 +139,7 @@ class SourceManager:
             "source_address": "0.0.0.0",
             "remote_components": ["ejs:github"],
             "extractor_args": yt_extractor_args,
+            "socket_timeout": 12.0,
         }
         if NODE_PATH:
             self.ydl_opts_flat["js_runtimes"] = {"node": {}}
@@ -393,6 +395,7 @@ class SourceManager:
                         "player_client": ["android", "visionos"],
                     }
                 },
+                "socket_timeout": 12.0,
             }
             if NODE_PATH:
                 fallback_opts["js_runtimes"] = {"node": {}}
@@ -485,6 +488,7 @@ class SourceManager:
                         "player_client": ["web_safari", "android", "visionos"],
                     }
                 },
+                "socket_timeout": 12.0,
             }
             if NODE_PATH:
                 fallback_opts["js_runtimes"] = {"node": {}}

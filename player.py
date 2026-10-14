@@ -318,6 +318,7 @@ class GuildPlayer:
         self._is_ducked: bool = False
         self._duck_restore_task: Optional[asyncio.Task] = None
         self._last_entrance_greeting_time: float = 0.0
+        self._consecutive_play_errors: int = 0
 
     @property
     def is_speaking_tts(self) -> bool:
@@ -616,15 +617,25 @@ class GuildPlayer:
 
             def after_playback(error):
                 if error:
-                    logger.error(f"Errore durante la riproduzione: {error}")
-                if self._playing_tts:
+                    if self._manual_stop:
+                        return
+                    try:
+                        if self.bot.loop and self.bot.loop.is_running():
+                            self.bot.loop.call_soon_threadsafe(
+                                lambda: asyncio.create_task(self._handle_after_playback_error(song, error))
+                            )
+                    except Exception as e:
+                        logger.error(f"Errore nella schedulazione after_playback: {e}")
                     return
-                coro = self.play_next()
-                fut = asyncio.run_coroutine_threadsafe(coro, self.bot.loop)
+
+                self._consecutive_play_errors = 0
+                if self._manual_stop or self._playing_tts:
+                    return
                 try:
-                    fut.result()
+                    if self.bot.loop and self.bot.loop.is_running():
+                        self.bot.loop.call_soon_threadsafe(lambda: asyncio.create_task(self.play_next()))
                 except Exception as e:
-                    logger.error(f"Errore nella callback after: {e}")
+                    logger.error(f"Errore nella schedulazione after_playback: {e}")
 
             self._track_start_monotonic = time.monotonic() - elapsed
             self.voice_client.play(transformed_source, after=after_playback)
@@ -927,13 +938,6 @@ class GuildPlayer:
                             break
                     continue
 
-                conn = getattr(self.voice_client, "_connection", None)
-                if conn and getattr(conn, "_runner", None) and conn._runner.done():
-                    logger.warning("🔄 Voice WebSocket poller terminato: riavvio immediato per ascoltare tutti...")
-                    conn._runner = self.bot.loop.create_task(
-                        conn._poll_voice_ws(True), name="Voice websocket poller"
-                    )
-
                 reader = getattr(self.voice_client, "_reader", None)
                 router_dead = bool(
                     reader
@@ -1064,6 +1068,7 @@ class GuildPlayer:
 
     def skip(self):
         """Salta il brano corrente forzando l'interruzione senza fermare il microfono."""
+        self._consecutive_play_errors = 0
         if self.voice_client and (self.voice_client.is_playing() or self.voice_client.is_paused()):
             if self.loop_mode == "song":
                 self.loop_mode = "off"
@@ -1083,6 +1088,7 @@ class GuildPlayer:
         - Mantiene il microfono aperto e pronto in ascolto per i prossimi comandi vocali.
         """
         self._manual_stop = True
+        self._consecutive_play_errors = 0
         self.queue.clear()
         self.current = None
         self.autoplay = False
@@ -1141,6 +1147,7 @@ class GuildPlayer:
     async def add_songs(self, songs: List[SongInfo], text_channel: Optional[discord.TextChannel] = None):
         """Aggiunge una o più tracce alla coda e avvia la riproduzione se non già attiva."""
         self._manual_stop = False
+        self._consecutive_play_errors = 0
         self.text_channel = resolve_preferred_text_channel(self.guild, text_channel or self.text_channel)
 
         self._cancel_inactivity_timer()
@@ -1161,6 +1168,7 @@ class GuildPlayer:
     ):
         """Avvia immediatamente il brano richiesto (usato dai comandi vocali 'Franchino metti...')."""
         self._manual_stop = False
+        self._consecutive_play_errors = 0
         self.text_channel = resolve_preferred_text_channel(self.guild, text_channel or self.text_channel)
 
         self._cancel_inactivity_timer()
@@ -1188,6 +1196,45 @@ class GuildPlayer:
             logger.info(f"Pre-caricato in cache il prossimo brano: {next_in_queue.title}")
         except Exception as e:
             logger.debug(f"Pre-caricamento non riuscito per {next_in_queue.title}: {e}")
+
+    async def _send_circuit_breaker_warning(self):
+        """Invia un avviso in chat quando scatta il circuit breaker anti-crash loop."""
+        if self.text_channel:
+            try:
+                await self.text_channel.send(
+                    "🛑 Franchino ha riscontrato troppi errori consecutivi durante la riproduzione. Riproduzione interrotta per sicurezza!"
+                )
+            except Exception:
+                pass
+
+    async def _handle_after_playback_error(self, song: Optional[SongInfo], error: Exception):
+        """Gestisce in modo difensivo gli errori di riproduzione asincroni nel thread audio."""
+        self._consecutive_play_errors += 1
+        title = getattr(song, "title", "Sconosciuto")
+        logger.error(f"Errore durante la riproduzione del brano '{title}': {error}")
+        self.current = None
+        if self.loop_mode == "song":
+            self.loop_mode = "off"
+
+        if self._consecutive_play_errors > 3:
+            logger.warning(
+                f"🛑 Raggiunto limite errori consecutivi ({self._consecutive_play_errors}) per guild {self.guild.id}. Interruzione riproduzione."
+            )
+            await self._send_circuit_breaker_warning()
+            self._reset_inactivity_timer()
+            return
+
+        if self.text_channel:
+            try:
+                await self.text_channel.send(
+                    f"⚠️ Franchino non è riuscito a riprodurre **{title}**: `{error}`. Salto al prossimo brano!"
+                )
+            except Exception:
+                pass
+
+        await asyncio.sleep(1.0)
+        if not self._manual_stop:
+            asyncio.create_task(self.play_next())
 
     async def play_next(self):
         """Prepara e riproduce la traccia successiva nella coda (o un brano correlato se AutoPlay Radio è attivo)."""
@@ -1228,6 +1275,7 @@ class GuildPlayer:
 
             if not next_song:
                 self.current = None
+                self._consecutive_play_errors = 0
                 self._reset_inactivity_timer()
                 if self.now_playing_message:
                     try:
@@ -1251,18 +1299,29 @@ class GuildPlayer:
 
                 def after_playback(error):
                     if error:
-                        logger.error(f"Errore durante la riproduzione: {error}")
+                        if self._manual_stop:
+                            return
+                        try:
+                            if self.bot.loop and self.bot.loop.is_running():
+                                self.bot.loop.call_soon_threadsafe(
+                                    lambda: asyncio.create_task(self._handle_after_playback_error(next_song, error))
+                                )
+                        except Exception as e:
+                            logger.error(f"Errore nella schedulazione after_playback: {e}")
+                        return
+
+                    self._consecutive_play_errors = 0
                     if self._manual_stop or self._playing_tts:
                         return
-                    coro = self.play_next()
-                    fut = asyncio.run_coroutine_threadsafe(coro, self.bot.loop)
                     try:
-                        fut.result()
+                        if self.bot.loop and self.bot.loop.is_running():
+                            self.bot.loop.call_soon_threadsafe(lambda: asyncio.create_task(self.play_next()))
                     except Exception as e:
-                        logger.error(f"Errore nella callback after: {e}")
+                        logger.error(f"Errore nella schedulazione after_playback: {e}")
 
                 self._track_start_monotonic = time.monotonic()
                 self.voice_client.play(transformed_source, after=after_playback)
+                self._consecutive_play_errors = 0
 
                 await self._send_now_playing_message(next_song)
 
@@ -1270,15 +1329,31 @@ class GuildPlayer:
                     asyncio.create_task(self._prefetch_next_song())
 
             except Exception as e:
-                logger.error(f"Errore riproduzione brano '{next_song.title}': {e}", exc_info=True)
+                self._consecutive_play_errors += 1
+                title = getattr(next_song, "title", "Sconosciuto")
+                logger.error(f"Errore riproduzione brano '{title}': {e}", exc_info=True)
+                self.current = None
+                if self.loop_mode == "song":
+                    self.loop_mode = "off"
+
+                if self._consecutive_play_errors > 3:
+                    logger.warning(
+                        f"🛑 Raggiunto limite errori consecutivi ({self._consecutive_play_errors}) per guild {self.guild.id}. Interruzione riproduzione."
+                    )
+                    await self._send_circuit_breaker_warning()
+                    self._reset_inactivity_timer()
+                    return
+
                 if self.text_channel:
                     try:
                         await self.text_channel.send(
-                            f"⚠️ Franchino non è riuscito a riprodurre **{next_song.title}**: `{e}`. Salto al prossimo brano!"
+                            f"⚠️ Franchino non è riuscito a riprodurre **{title}**: `{e}`. Salto al prossimo brano!"
                         )
                     except Exception:
                         pass
-                asyncio.create_task(self.play_next())
+                await asyncio.sleep(1.0)
+                if not self._manual_stop:
+                    asyncio.create_task(self.play_next())
 
     async def _send_now_playing_message(self, song: SongInfo):
         """Invia un messaggio ricco con i controlli chat interattivi nel canale #musica (o nella chat di avvio)."""

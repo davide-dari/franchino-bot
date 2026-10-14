@@ -91,7 +91,7 @@ services:
       resources:
         limits:
           cpus: "1.5"
-          memory: 1536M
+          memory: 2560M
         reservations:
           cpus: "0.2"
           memory: 256M

@@ -322,6 +322,8 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
     SILENCE_THRESHOLD_SEC = 0.65  # Rileva la fine della frase in soli 650ms per risposte ultra-veloci!
     MIN_PHRASE_SEC = 0.45         # 450ms minimi per eliminare rumori brevi di microfono, respiri e colpi di tosse
     MAX_PHRASE_SEC = 10.0         # Fino a 10 secondi per titoli lunghi + nome artista
+    MAX_BUFFER_SEC = 12.0         # Limite massimo di sicurezza per speaker buffer (~2.3 MB)
+    MAX_BUFFER_BYTES = int(MAX_BUFFER_SEC * BYTES_PER_SECOND)
     START_RMS_ENERGY = 60         # Più reattivo grazie al pre-roll buffer da 300ms (cattura anche voci dolci/basse)
     CONTINUE_RMS_ENERGY = 35      # Sensibile per catturare anche l'ultima sillaba debole o sospiro
     PREROLL_CHUNKS = 15           # 300ms di pre-roll ring buffer (15 pacchetti da 20ms)
@@ -506,6 +508,7 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
         self.recognizer = sr.Recognizer()
         self.recognizer.energy_threshold = 280
         self.recognizer.dynamic_energy_threshold = False
+        self.recognizer.operation_timeout = 8.0
         self._stt_semaphore = asyncio.Semaphore(2)  # Limita a 2 chiamate STT concorrenti per risparmiare CPU/RAM
         self._loop_tick = 0
         self._buffers: Dict[int, bytearray] = {}
@@ -570,9 +573,9 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
             for pre_chunk in self._preroll_buffers[key]:
                 self._buffers[key].extend(pre_chunk)
 
-        # Una volta che l'utente ha iniziato a parlare, conserva TUTTI i frame (anche consonanti
-        # deboli e pause naturali tra le parole) così Google Speech non taglia mai metà titolo!
-        self._buffers[key].extend(pcm)
+        # Una volta che l'utente ha iniziato a parlare, conserva i frame con limite massimo anti-OOM (max 12s, ~2.3 MB)
+        if len(self._buffers[key]) < self.MAX_BUFFER_BYTES:
+            self._buffers[key].extend(pcm)
 
         # Aggiorna il timer di fine parlato anche se l'utente pronuncia a bassa voce la fine del titolo
         if rms >= self.CONTINUE_RMS_ENERGY:
@@ -715,23 +718,42 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
     def _prune_stale_buffers(self, now: float) -> None:
         """Rimuove dati inattivi e pulisce la memoria RAM per prevenire accumuli e memory leak."""
         stale_keys = [
-            k for k, t in self._last_packet_time.items()
-            if now - t > 25.0 and k not in self._buffers
+            k for k, t in list(self._last_packet_time.items())
+            if now - t > 15.0
         ]
         for k in stale_keys:
+            self._buffers.pop(k, None)
             self._last_packet_time.pop(k, None)
             self._preroll_buffers.pop(k, None)
             self._users.pop(k, None)
 
+        # Buffer orfani in self._buffers senza timestamp o rimasti inattivi da oltre 15 secondi
+        for k in list(self._buffers.keys()):
+            last_t = self._last_packet_time.get(k)
+            if last_t is None or (now - last_t > 15.0):
+                self._buffers.pop(k, None)
+                self._last_packet_time.pop(k, None)
+                self._preroll_buffers.pop(k, None)
+                self._users.pop(k, None)
+
+        # Buffer orfani in self._preroll_buffers senza attività recente
+        for k in list(self._preroll_buffers.keys()):
+            if k not in self._last_packet_time and k not in self._buffers:
+                self._preroll_buffers.pop(k, None)
+                self._users.pop(k, None)
+
+        if not self._buffers and hasattr(self.player, "restore_duck_volume"):
+            self.player.restore_duck_volume()
+
         expired_wakes = [
-            uid for uid, (t, _) in self._pending_wake.items()
+            uid for uid, (t, _) in list(self._pending_wake.items())
             if now - t > 12.0
         ]
         for uid in expired_wakes:
             self._pending_wake.pop(uid, None)
 
         expired_dms = [
-            uid for uid, (t, _) in self._pending_dm.items()
+            uid for uid, (t, _) in list(self._pending_dm.items())
             if now - t > 40.0
         ]
         for uid in expired_dms:
@@ -832,11 +854,14 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
 
             # 7. Riconoscimento vocale regolato dal semaforo anti-sovraccarico CPU
             async with self._stt_semaphore:
-                res = await asyncio.to_thread(
-                    self.recognizer.recognize_google,
-                    audio_data,
-                    language="it-IT",
-                    show_all=True,
+                res = await asyncio.wait_for(
+                    asyncio.to_thread(
+                        self.recognizer.recognize_google,
+                        audio_data,
+                        language="it-IT",
+                        show_all=True,
+                    ),
+                    timeout=10.0,
                 )
         except sr.UnknownValueError:
             return
