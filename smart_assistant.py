@@ -68,18 +68,18 @@ def get_current_time_info(query: str = "") -> Dict[str, Any]:
 
     if is_date_only:
         voice_reply = (
-            f"Oggi è {day_name} {day_num} {month_name} {year} ragazzi! "
-            "Il tempo corre veloce, ma la nostra musica è eterna! Magia!"
+            f"Oggi è {day_name} {day_num} {month_name} {year} in console ragazzi! "
+            "Vi ho scritto tutta la data in chat! Date un'occhiata! Magia!"
         )
     elif is_time_only:
         voice_reply = (
-            f"In console sono esattamente le {time_str} ragazzi! "
-            "La notte è giovane e il ritmo sale forte! Magia!"
+            f"In console sono le {time_str} ragazzi! "
+            "Vi ho scritto l'ora esatta in chat! Date un'occhiata! Magia!"
         )
     else:
         voice_reply = (
             f"In console sono le {time_str} di {day_name} {day_num} {month_name} ragazzi! "
-            "Carichi a mille per vivere una favola!"
+            "Vi ho scritto tutto in chat! Date un'occhiata! Magia!"
         )
 
     embed = discord.Embed(
@@ -193,7 +193,7 @@ async def get_weather_info(city_query: str = "") -> Dict[str, Any]:
             results = geo_data.get("results")
             if not results:
                 # Nessuna città trovata
-                voice_err = f"Non ho trovato la città di {city} sulla mappa ragazzi! Provate con un'altra città!"
+                voice_err = f"Non ho trovato la città di {city} sulla mappa ragazzi! Vi ho scritto i dettagli in chat! Magia!"
                 embed_err = discord.Embed(
                     title=f"❓ Città non trovata: {city}",
                     description=f"Franchino non è riuscito a localizzare **{city}** nei sensori meteo mondiali. Prova a specificare una città nota (es. `/meteo Milano` o `/meteo Roma`).",
@@ -243,8 +243,8 @@ async def get_weather_info(city_query: str = "") -> Dict[str, Any]:
             )
 
             voice_reply = (
-                f"A {city_name} ci sono {temp:.0f} gradi con {cond_text.lower()} ragazzi! "
-                f"{comment} Magia!"
+                f"Ragazzi, vi ho scritto le condizioni meteo per {city_name} in chat! "
+                "Date un'occhiata! Magia!"
             )
 
             embed = discord.Embed(
@@ -280,7 +280,7 @@ async def get_weather_info(city_query: str = "") -> Dict[str, Any]:
 
     except Exception as e:
         logger.warning(f"Errore recupero meteo per '{city}': {e}")
-        fallback_voice = f"I radar meteo di Franchino sono momentaneamente offline, ma in console ragazzi splende sempre la magia!"
+        fallback_voice = f"I radar meteo di Franchino sono momentaneamente offline ragazzi, vi ho scritto i dettagli in chat! Magia!"
         fallback_embed = discord.Embed(
             title=f"🌤️ Meteo: {city.capitalize()}",
             description=(
@@ -688,8 +688,8 @@ def evaluate_math_expression(query: str) -> Dict[str, Any]:
             fmt_res = f"{result:.4f}".rstrip("0").rstrip(".")
 
         voice_reply = (
-            f"{human_repr} fa {fmt_res} ragazzi! "
-            "Matematico e preciso come il bpm della console! Magia!"
+            f"Ragazzi, vi ho scritto il calcolo in chat! {human_repr} fa {fmt_res}! "
+            "Date un'occhiata! Magia!"
         )
 
         embed = discord.Embed(
@@ -711,7 +711,7 @@ def evaluate_math_expression(query: str) -> Dict[str, Any]:
         }
 
     except ZeroDivisionError:
-        err_msg = "Non si può dividere per zero ragazzi! Neanche alla console dell'Insomnia si piega la fisica!"
+        err_msg = "Non si può dividere per zero ragazzi! Vi ho scritto i dettagli in chat! Magia!"
         return {
             "success": False,
             "error": "Divisione per zero",
@@ -720,7 +720,7 @@ def evaluate_math_expression(query: str) -> Dict[str, Any]:
             "embed": discord.Embed(title="⚠️ Errore Matematico", description=err_msg, color=0xE74C3C),
         }
     except Exception as e:
-        err_msg = f"Non sono riuscito a calcolare l'operazione ragazzi! Prova con numeri semplici come '25 per 4' o '150 diviso 3'!"
+        err_msg = "Non sono riuscito a calcolare l'operazione ragazzi! Vi ho scritto i dettagli in chat! Magia!"
         return {
             "success": False,
             "error": str(e),
@@ -738,8 +738,8 @@ def flip_coin() -> Dict[str, Any]:
     """Lancia una moneta (Testa o Croce)."""
     outcome = random.choice(["Testa", "Croce"])
     voice_reply = (
-        f"Ho lanciato la moneta della notte in aria... Ed è uscito: {outcome} ragazzi! "
-        "Il destino ha parlato! Magia!"
+        f"Ho lanciato la moneta della notte in aria... Ragazzi, vi ho scritto il risultato ({outcome}) in chat! "
+        "Date un'occhiata! Magia!"
     )
     embed = discord.Embed(
         title="🪙 Lancio della Moneta",
@@ -762,14 +762,7 @@ def roll_dice(sides: int = 6) -> Dict[str, Any]:
     sides = max(2, min(sides, 1000))
     val = random.randint(1, sides)
 
-    if val == sides:
-        comment = "Il punteggio massimo ragazzi! Pura energia da fuoriclasse!"
-    elif val == 1:
-        comment = "Numero uno ragazzi! Da qui si può solo decollare!"
-    else:
-        comment = "Punteggio solido, la console approva!"
-
-    voice_reply = f"Ho tirato il dado da {sides} facce... Ed è uscito un bel {val} ragazzi! {comment} Magia!"
+    voice_reply = f"Ho tirato il dado da {sides} facce ragazzi... Vi ho scritto il risultato ({val}) in chat! Date un'occhiata! Magia!"
 
     embed = discord.Embed(
         title=f"🎲 Lancio del Dado (D{sides})",
@@ -805,7 +798,8 @@ def choose_option(text: str) -> Dict[str, Any]:
 
     chosen = random.choice(options)
     voice_reply = (
-        f"Ho ascoltato il cuore della console ragazzi... E tra tutte scelgo senza dubbi: {chosen}! Magia!"
+        f"Ho ascoltato il cuore della console ragazzi... Tra le opzioni scelgo {chosen}! "
+        "Vi ho scritto tutto in chat! Date un'occhiata! Magia!"
     )
 
     embed = discord.Embed(
@@ -878,9 +872,7 @@ VOCALIST_JOKES = [
 def get_vocalist_joke() -> Dict[str, Any]:
     """Restituisce una barzelletta simpatica in stile vocalist della notte."""
     question, punchline = random.choice(VOCALIST_JOKES)
-    voice_reply = (
-        f"Ascoltate questa ragazzi... {question} ... {punchline} Magia!"
-    )
+    voice_reply = "Ragazzi, vi ho scritto una barzelletta da vocalist in chat! Date un'occhiata e ridete con me! Magia!"
     embed = discord.Embed(
         title="😄 La Battuta della Notte di Franchino",
         description=f"**{question}**\n\n> *\"{punchline}\"*",

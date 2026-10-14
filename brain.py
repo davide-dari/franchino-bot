@@ -58,14 +58,16 @@ La tua personalità e il tuo stile:
 
 Regole Fondamentali di Risposta:
 1. Comprendi a fondo l'intenzione dell'utente.
-2. Rispondi SEMPRE in formato JSON valido con questa struttura esatta:
+2. COMANDI OPERATIVI E AZIONI (play_music, dj_control, admin_control, timer_set, timer_cancel, social_interaction): NON dare MAI conferme vocali o risposte a voce! Esegui l'azione in perfetto SILENZIO VOCALE (voice_reply deve essere una stringa vuota ""). In chat invece scrivi la risposta normalmente.
+3. INFORMAZIONI, GUIDE E SPIEGAZIONI (wiki_guide, outlands_help, razor_script, sports_match, sports_schedule, jack_math_boost, smart_assistant per meteo, ora, math, random, joke): NON fare poemi o spiegazioni lunghe a voce. L'UNICA occasione in cui parli è per dire brevemente all'utente di guardare la chat perché le informazioni sono scritte lì (es. "Ragazzi, vi ho scritto tutto in chat! Date un'occhiata!").
+4. Rispondi SEMPRE in formato JSON valido con questa struttura esatta:
 {
-  "intent": "play_music" | "wiki_guide" | "razor_script" | "sports_match" | "sports_schedule" | "smart_assistant" | "jack_math_boost" | "live_fable" | "song_info" | "chat",
+  "intent": "play_music" | "wiki_guide" | "razor_script" | "sports_match" | "sports_schedule" | "smart_assistant" | "jack_math_boost" | "live_fable" | "song_info" | "chat" | "dj_control" | "admin_control" | "social_interaction",
   "music_query": "stringa ottimizzata per ricerca YouTube" (solo se intent è play_music, altrimenti null),
   "wiki_topic": "argomento outlands" (solo se intent è wiki_guide, altrimenti null),
   "skill_slug": "slug della skill outlands" (solo se intent è razor_script, altrimenti null),
   "sport_query": "squadra, sport o lega" (solo se intent è sports_match o sports_schedule, altrimenti null),
-  "voice_reply": "breve frase parlata da leggere col microfono (15-28 parole, ritmica, calda, teatrale con pause '...' stile vocalist, MAI link)",
+  "voice_reply": "stringa vuota per comandi operativi/azioni; breve promemoria che rimanda alla chat per spiegazioni/guide/info (es. 'Ragazzi, vi ho scritto tutto in chat! Date un'occhiata!'); frase calda per chat amichevole",
   "chat_reply": "risposta testuale ricca, dettagliata e amichevole per la chat, formattata con markdown ed emoji"
 }
 Non aggiungere alcun testo prima o dopo il blocco JSON.
@@ -223,10 +225,14 @@ class FranchinoBrain:
                 clean = clean[:-3]
             data = json.loads(clean.strip())
             if isinstance(data, dict) and "intent" in data:
-                if (data.get("intent") == "dj_control" and data.get("action") == "stop") or any(
+                intent = data.get("intent")
+                # Comandi operativi ed esecuzioni di azioni: silenzio vocale totale (nessun annuncio TTS)
+                if intent in ("play_music", "dj_control", "admin_control", "timer_set", "timer_cancel", "social_interaction"):
+                    data["voice_reply"] = ""
+                if (intent == "dj_control" and data.get("action") == "stop") or any(
                     w in original_text.lower() for w in ("stop", "stoppa", "ferma", "fermati", "basta", "zitto", "stai zitto", "muto", "silenzio", "fai silenzio", "taci", "spegni", "smettila", "svuota")
                 ):
-                    if data.get("intent") == "dj_control":
+                    if intent == "dj_control":
                         data["action"] = "stop"
                     data["voice_reply"] = ""
                     data["chat_reply"] = ""
@@ -271,7 +277,7 @@ class FranchinoBrain:
             if jack_res.intent == "jack_math_boost" and jack_res.probability >= 0.25:
                 return {
                     "intent": "jack_math_boost",
-                    "voice_reply": "Magia ragazzi! Ecco la formula del super matematico Jack! Ho ottimizzato la console con Okapi BM25 e Jaro-Winkler per i due core ARM!",
+                    "voice_reply": "Ragazzi, vi ho scritto i dettagli della formula Jack in chat! Date un'occhiata! Magia!",
                     "chat_reply": (
                         "🧠 **Super Matematico Jack**: Formula di intelligenza e telemetria hardware ARM pronte!\n"
                         "$$\\mathcal{S}(\\text{Intent}, q) = w_{\\text{wake}} \\cdot \\phi_{\\text{wake}} + "
@@ -317,7 +323,7 @@ class FranchinoBrain:
                     "intent": "smart_assistant",
                     "subintent": "weather",
                     "city": city,
-                    "voice_reply": f"Consulto subito i radar meteo per {city} ragazzi! Tenetevi pronti!",
+                    "voice_reply": f"Ragazzi, vi ho scritto le condizioni meteo per {city} in chat! Date un'occhiata!",
                     "chat_reply": f"🌤️ **Franchino Meteo**: Controllo le condizioni meteo per **{city}**...",
                 }
             elif smart_type == "timer":
@@ -325,14 +331,14 @@ class FranchinoBrain:
                     return {
                         "intent": "smart_assistant",
                         "subintent": "timer_status",
-                        "voice_reply": "Controllo subito quanto manca ai tuoi timer ragazzi!",
+                        "voice_reply": "Ragazzi, vi ho scritto lo stato dei timer in chat! Date un'occhiata!",
                         "chat_reply": "⏰ Controllo stato timer...",
                     }
                 elif is_timer_cancel_query(t_low):
                     return {
                         "intent": "smart_assistant",
                         "subintent": "timer_cancel",
-                        "voice_reply": "Cancello subito i timer attivi fratelli!",
+                        "voice_reply": "",
                         "chat_reply": "⏰ Cancellazione timer...",
                     }
                 else:
@@ -344,7 +350,7 @@ class FranchinoBrain:
                         "subintent": "timer_set",
                         "duration_seconds": dur,
                         "label": lbl,
-                        "voice_reply": f"Timer di {dur_str} per {lbl} impostato ragazzi! Vi avviso appena scade! Magia!",
+                        "voice_reply": "",
                         "chat_reply": f"⏰ **Timer impostato**: `{dur_str}` per **{lbl}**!",
                     }
             elif smart_type == "math":
@@ -410,7 +416,7 @@ class FranchinoBrain:
             return {
                 "intent": "razor_script",
                 "skill_slug": target_skill,
-                "voice_reply": f"Magia ragazzi! Ho trovato gli script Razor ufficiali per {s_name}! Ti ho messo il codice e il download in chat!",
+                "voice_reply": f"Ragazzi, vi ho lasciato gli script Razor per {s_name} in chat! Date un'occhiata! Magia!",
                 "chat_reply": f"📜 **Franchino Razor Scripts**: Ecco gli script per **{s_name}** da outlands.uorazorscripts.com!",
             }
 
@@ -424,21 +430,21 @@ class FranchinoBrain:
         )
         if any(w in t_low for w in sport_triggers):
             clean_q = re.sub(
-                r"^(?:franchino|mi\s+dici|quali\s+sono|dimmi|trova|cerca|dove\s+(?:fanno\s+vedere|posso\s+vedere)|streaming\s+di|partita\s+(?:del|della|di)?)\s*",
+                r"^(?:(?:(?:hey+|ehi+|hei+|ey+|ei+)\s+)?franchino|mi\s+dici|quali\s+sono|dimmi|trova|cerca|dove\s+(?:fanno\s+vedere|posso\s+vedere)|streaming\s+di|partita\s+(?:del|della|di)?)\s*",
                 "",
                 t_low
             ).strip()
 
             if any(w in t_low for w in ("f1", "formula 1", "motogp", "gran premio", "prossima gara", "ferrari", "leclerc")):
-                v_sport = "Magia sui motori ragazzi! Scaldate i motori, vi ho messo tutti gli orari del Gran Premio in chat!"
+                v_sport = "Magia sui motori ragazzi! Tutti i dettagli e gli orari della Formula 1 sono in chat! Date un'occhiata!"
             elif any(w in t_low for w in ("eurolega", "euroleague")):
-                v_sport = "Notte infuocata sul parquet europeo ragazzi! Grandi match di Eurolega pronti a far tremare i canestri! Ecco il palinsesto in chat!"
+                v_sport = "Notte infuocata sul parquet europeo ragazzi! Vi ho scritto tutti i match di Eurolega in chat! Date un'occhiata! Si decolla!"
             elif any(w in t_low for w in ("basket", "nba")):
-                v_sport = "Notte infuocata sui parquet ragazzi! Grandi canestri e spettacolo, ecco le partite in chat!"
+                v_sport = "Notte di basket NBA ragazzi! Vi ho scritto tutti i match in chat! Date un'occhiata! Si vola!"
             elif "champions" in t_low:
-                v_sport = "La notte delle stelle ragazzi! La Champions League fa tremare gli stadi stasera! Ecco i big match in chat!"
+                v_sport = "La notte delle stelle ragazzi! Vi ho scritto tutto il palinsesto di Champions League in chat! Date un'occhiata! Magia!"
             elif "serie a" in t_low:
-                v_sport = "Il grande calcio italiano ragazzi! Ecco il quadro delle sfide e gli orari in chat!"
+                v_sport = "Il grande calcio italiano ragazzi! Vi ho scritto tutti i match e gli orari in chat! Date un'occhiata!"
             else:
                 v_sport = "Stasera in campo c'è il fuoco ragazzi! Vi ho preparato tutto il palinsesto con i big match in chat! Magia!"
 
@@ -454,7 +460,7 @@ class FranchinoBrain:
         if is_help_question(t_low):
             return {
                 "intent": "outlands_help",
-                "voice_reply": "Sono Franchino, la tua guida nei meandri oscuri di Ultima Online Outlands! Ho indicizzato oltre duemila pagine della wiki. Chiedimi di dungeon, build, pet e aspetti!",
+                "voice_reply": "Ragazzi, vi ho scritto la guida completa di Outlands in chat! Date un'occhiata!",
                 "chat_reply": "🗺️ **Franchino UO Outlands Guide**: Dalle profondità di Aegis alle vette di Mount Petram, chiedimi qualsiasi cosa su skill, template da 700 punti, aspect armor e creature!",
             }
 
@@ -473,7 +479,7 @@ class FranchinoBrain:
             return {
                 "intent": "wiki_guide",
                 "wiki_topic": target_topic,
-                "voice_reply": f"Magia ragazzi! Scavo nella conoscenza di Outlands per {target_topic}! Tenetevi pronti!",
+                "voice_reply": f"Ragazzi, vi ho scritto tutte le informazioni su {target_topic} in chat! Date un'occhiata!",
                 "chat_reply": c_reply,
             }
 
@@ -512,7 +518,7 @@ class FranchinoBrain:
             return {
                 "intent": "dj_control",
                 "action": act,
-                "voice_reply": "Subito ragazzi! Controllo console operativo!",
+                "voice_reply": "",
                 "chat_reply": "🎛️ **Franchino DJ**: Comando console eseguito!",
             }
 
@@ -532,7 +538,7 @@ class FranchinoBrain:
             return {
                 "intent": "play_music",
                 "music_query": music_q,
-                "voice_reply": f"Subito fratello! In console sale {music_q}! Alziamo il volume!",
+                "voice_reply": "",
                 "chat_reply": f"🎵 **Franchino DJ**: Accendo il piatto per: **{music_q}**! Buon viaggio!",
             }
 
@@ -552,7 +558,7 @@ class FranchinoBrain:
         ):
             return {
                 "intent": "social_interaction",
-                "voice_reply": "Magia pura! Un grande abbraccio e un brindisi a tutta la sala da Franchino!",
+                "voice_reply": "",
                 "chat_reply": "🥂 **Franchino**: Alziamo i calici fratelli! Un brindisi alla musica e alla vita!",
             }
 
@@ -562,7 +568,7 @@ class FranchinoBrain:
         ):
             return {
                 "intent": "admin_control",
-                "voice_reply": "Ricevuto capo! Moderazione e console allineate!",
+                "voice_reply": "",
                 "chat_reply": "🛡️ **Franchino Admin**: Comando moderazione elaborato!",
             }
 

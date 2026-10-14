@@ -1029,59 +1029,45 @@ class SportsScraper:
         """Genera una frase parlata calda, energica e coinvolgente da Franchino il Vocalist."""
         if alt_note and is_upcoming and matches:
             top_t = matches[0]["title"].replace(" vs ", " contro ")
-            first_dt = matches[0].get("datetime")
-            dt_s = first_dt.strftime("%d/%m ore %H:%M") if first_dt else "presto"
             league_n = filter_name or "quella lega"
             return (
-                f"Oggi la {league_n} riposa ragazzi! Ma non ci fermiamo mai: lo spettacolo torna il {dt_s} "
-                f"con {top_t}! Vi ho preparato tutto il prossimo turno in chat, andiamo a volare!"
+                f"Oggi la {league_n} riposa ragazzi! Vi ho preparato tutto il prossimo turno con {top_t} in chat! Date un'occhiata! Andiamo a volare!"
             )
 
         if not matches:
             return (
-                "Al momento non ci sono incontri in diretta ragazzi, ma la notte è giovane! "
-                "Consultate il palinsesto in chat per i prossimi eventi!"
+                "Al momento non ci sono incontri in diretta ragazzi! Consultate il palinsesto in chat! Date un'occhiata! Magia!"
             )
 
         live_count = sum(1 for m in matches if m.get("is_live"))
-        top_match = matches[0]["title"].replace(" vs ", " contro ")
-        second_match = matches[1]["title"].replace(" vs ", " contro ") if len(matches) > 1 else ""
 
         if filter_name and any(f in filter_name.lower() for f in ("f1", "formula", "motogp", "motori", "ferrari")):
             return (
-                f"Magia sui motori ragazzi! Pista infuocata e rombo che fa tremare la terra! "
-                f"Tutti i dettagli del Gran Premio sono in chat, scaldate i motori!"
+                "Magia sui motori ragazzi! Tutti i dettagli e gli orari della Formula 1 sono in chat! Date un'occhiata!"
             )
 
         if filter_name and any(f in filter_name.lower() for f in ("eurolega", "euroleague")):
             return (
-                f"Notte infuocata sul parquet europeo ragazzi! Grandi match di Eurolega tra cui {top_match}! "
-                f"Canestri che fanno tremare il ferro, ecco tutti i link in chat! Si decolla!"
+                "Notte infuocata sul parquet europeo ragazzi! Grandi match di Eurolega e canestri, ecco tutti i link in chat! Si decolla!"
             )
 
         if filter_name and any(f in filter_name.lower() for f in ("nba", "basket usa")):
             return (
-                f"Sul parquet americano stanotte si vola altissimo ragazzi! "
-                f"Ecco i big match NBA pronti a regalarci canestri da favola! Chiudi gli occhi e goditi la notte!"
+                "Notte di basket NBA ragazzi! Vi ho scritto tutti i match e canestri in chat! Date un'occhiata da favola! Si vola!"
             )
 
         if filter_name and "champions" in filter_name.lower():
             return (
-                f"La notte delle stelle ragazzi! La Champions League accende il cielo con match da brividi tra cui {top_match}! "
-                f"In campo c'è il fuoco, ecco il palinsesto completo in chat! Magia!"
+                "La notte delle stelle ragazzi! In campo c'è il fuoco, ecco il palinsesto di Champions League in chat! Magia!"
             )
 
         if live_count > 0:
-            extra = f" e {second_match}" if second_match else ""
             return (
-                f"Stasera in campo c'è il fuoco ragazzi! Abbiamo {live_count} match caldissimi in diretta "
-                f"tra cui {top_match}{extra}! Vi ho lasciato tutti i link e gli orari in chat! Si decolla!"
+                "Stasera in campo c'è il fuoco ragazzi! Vi ho lasciato tutti i link e gli orari in chat! Si decolla!"
             )
 
-        extra = f" e {second_match}" if second_match else ""
         return (
-            f"Stasera in campo c'è il fuoco ragazzi! Grandi sfide in programma, a partire da {top_match}{extra}! "
-            f"Vi ho messo tutti gli orari e i link in chat! Vivere una favola!"
+            "Stasera in campo c'è il fuoco ragazzi! Vi ho messo tutti gli orari e i link delle partite in chat! Date un'occhiata! Vivere una favola!"
         )
 
     # =========================================================================
@@ -1101,10 +1087,7 @@ class SportsScraper:
         if any(w in q for w in ("f1", "formula 1", "formula1", "motogp", "moto gp", "gran premio", "prossima gara", "prossimo gp", "ferrari", "leclerc", "hamilton", "verstappen", "quando corre la ferrari")):
             if "motogp" in q or "moto gp" in q:
                 mgp = await self.get_motogp_info()
-                voice = (
-                    f"Gas a martello ragazzi! La MotoGP vola a {mgp['circuit']} per il {mgp['name']}! "
-                    f"Spettacolo puro sui due ruoli, vi ho lasciato tutti i dettagli in chat!"
-                )
+                voice = "Gas a martello ragazzi! Vi ho lasciato tutti i dettagli della MotoGP in chat! Date un'occhiata!"
                 return {
                     "found": True,
                     "type": "motorsport",
@@ -1121,10 +1104,7 @@ class SportsScraper:
                 }
             else:
                 f1 = await self.get_f1_info()
-                voice = (
-                    f"Magia sui motori ragazzi! La Formula 1 torna ad accendere la notte con il {f1['name']} a {f1['circuit']}! "
-                    f"Tenetevi forte, vi ho messo il programma completo in chat!"
-                )
+                voice = "Magia sui motori ragazzi! La Formula 1 accende la notte, vi ho messo il programma completo in chat! Date un'occhiata!"
                 return {
                     "found": True,
                     "type": "motorsport",
@@ -1211,7 +1191,7 @@ class SportsScraper:
             scored.sort(key=lambda x: x[0], reverse=True)
             best = scored[0][1]
             top_t = best['title'].replace(" vs ", " contro ")
-            voice = f"Magia ragazzi! Ho trovato {top_t} in diretta streaming su MadPlay77! Vi ho lasciato il link in chat!"
+            voice = f"Magia ragazzi! Vi ho lasciato il link in chat per {top_t}! Date un'occhiata!"
             return {
                 "found": True,
                 "type": "single_match",
@@ -1234,7 +1214,7 @@ class SportsScraper:
                         score += 3
                 if score > 0:
                     v_top = ev["title"].replace(" vs ", " contro ")
-                    voice = f"Magia ragazzi! Ho trovato {v_top} in programma alle {ev['time']}! Vi ho messo tutti i dettagli in chat!"
+                    voice = f"Magia ragazzi! Vi ho messo tutti i dettagli per {v_top} in chat! Date un'occhiata!"
                     return {
                         "found": True,
                         "type": "single_match",
@@ -1252,7 +1232,7 @@ class SportsScraper:
             "query": query,
             "message": f"Non ho trovato nessuna partita per *\"{clean_q or query}\"* in questo momento.",
             "featured": tonight_fallback.get("matches", [])[:5],
-            "voice_summary": f"Non ho trovato partite per {clean_q or query} al momento ragazzi, vi ho mostrato gli eventi attivi stasera in chat!",
+            "voice_summary": f"Non ho trovato partite per {clean_q or query} al momento ragazzi, vi ho mostrato gli eventi attivi stasera in chat! Date un'occhiata!",
             "portal_url": "https://web01.madplay77.ru/it",
         }
 
@@ -1262,7 +1242,7 @@ class SportsScraper:
     def build_sports_embed(self, result: Dict[str, Any]) -> Tuple[discord.Embed, discord.ui.View, str]:
         """Costruisce un Discord Embed completo, una View con pulsanti e la frase vocale da recitare."""
         res_type = result.get("type", "schedule")
-        voice_text = result.get("voice_summary") or "Magia ragazzi! Ecco gli eventi sportivi pronti per voi!"
+        voice_text = result.get("voice_summary") or "Ragazzi, vi ho scritto gli eventi sportivi in chat! Date un'occhiata! Magia!"
 
         # A. Motorsport (F1 / MotoGP)
         if res_type == "motorsport":

@@ -477,8 +477,8 @@ class TestEdgeCasesAndBoundaries:
     def test_candidate_scoring_prefers_gaming_terms(self):
         """Simula la selezione candidati in _process_and_transcribe_audio."""
         raw_candidates = [
-            "franchino quali sono i migliori pat per farmare",
-            "franchino quali sono i migliori pad per farmare",
+            "hey franchino quali sono i migliori pat per farmare",
+            "hey franchino quali sono i migliori pad per farmare",
         ]
         # Arricchimento candidati
         all_candidates = []

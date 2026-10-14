@@ -227,7 +227,12 @@ CONFLICT_PATTERNS = {
 
 def strip_wake_prefix(text: str) -> str:
     """Rimuove il richiamo a Franchino all'inizio della frase per isolare il comando operativo."""
-    return re.sub(r"^(?:franchino|frankino|francino|franci|fra)\s*[,:\s]*", "", text.strip(), flags=re.IGNORECASE).strip()
+    return re.sub(
+        r"^(?:(?:hey+|ehi+|hei+|heyl[àa]|heil[àa]|ehil[àa]|ey+|ei+)\s+)?(?:franchino|frankino|francino|franci|fra)\s*[,:\s]*",
+        "",
+        text.strip(),
+        flags=re.IGNORECASE,
+    ).strip()
 
 
 def jaro_winkler_distance(s1: str, s2: str, p: float = 0.1, max_l: int = 4) -> float:
@@ -393,6 +398,12 @@ class JackIntelligenceFormula:
             return 0.10
 
         wake_aliases = ("franchino", "frankino", "francino", "franci")
+        hey_prefixes = {"hey", "ehi", "hei", "heyla", "heylà", "heila", "heilà", "ehila", "ehilà", "ey", "ei"}
+        if len(tokens) >= 2 and tokens[0] in hey_prefixes and tokens[1] in wake_aliases:
+            return 1.00  # Chiamata diretta canonica "Hey Franchino ..."
+        if len(tokens) >= 3 and tokens[0] in hey_prefixes and tokens[1] == "la" and tokens[2] in wake_aliases:
+            return 1.00  # "Hey la Franchino ..."
+
         for idx, tok in enumerate(tokens):
             if tok in wake_aliases:
                 if idx == 0:

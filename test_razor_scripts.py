@@ -241,9 +241,9 @@ class TestDeepOutlandsWikiGuides:
         assert any("Script Razor" in fn for fn in field_names), "Dovrebbe contenere il riferimento agli script Razor"
         assert any("Sezione Ufficiale" in fn for fn in field_names)
 
-        # La risposta vocale deve essere esaustiva
+        # La risposta vocale deve rimandare brevemente alla chat
         voice_ans = res["voice_answer"]
-        assert len(voice_ans) > 80
+        assert "chat" in voice_ans.lower()
         assert "Magery" in voice_ans
 
     def test_lockpicking_deep_guide(self):

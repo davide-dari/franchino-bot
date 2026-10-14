@@ -169,7 +169,7 @@ class TestVoicePresenceAndVocalist(unittest.IsolatedAsyncioTestCase):
                     mock_player.speak_tts.reset_mock()
                     sink._notify_channel.reset_mock()
 
-                    await sink._handle_transcribed_text(user, f"Franchino {phrase}", detected_cmd=phrase)
+                    await sink._handle_transcribed_text(user, f"Hey Franchino {phrase}", detected_cmd=phrase)
                     mock_player.stop.assert_called_once()
                     sink._notify_channel.assert_not_called()
                     mock_player.speak_tts.assert_not_called()

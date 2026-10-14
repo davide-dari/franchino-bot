@@ -442,17 +442,6 @@ async def execute_interaction(
         except Exception as e:
             logger.debug(f"SFX {sfx} non completato o timeout: {e}")
 
-    # 3. Voce di Franchino in console con modalità vocalist (calore + eco/delay notturno)
-    if hasattr(player, "speak_tts"):
-        asyncio.create_task(
-            player.speak_tts(
-                quote,
-                wait=False,
-                interrupt_music=True,
-                dramatic_fable=True,
-            )
-        )
-
     # 4. Archiviazione nell'Hub Centrale
     try:
         from central_hub import hub

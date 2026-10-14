@@ -81,9 +81,20 @@ class TestWakeWordFalsePositivePrevention:
         "Il giocatore è mancino",
         "Un tiro mancino imparabile",
         "La macchina è dal meccanico",
+
+        # Richiamo al solo Franchino SENZA Hey/Ehi (deve essere rigorosamente ignorato!)
+        "Franchino",
+        "franchino metti musica",
+        "Franchino metti Gigi D'Agostino",
+        "franchino che ore sono",
+        "franchino stop",
+        "franchino boost",
+        "Franchino come funziona il taming",
+        "ho parlato con franchino",
+        "secondo me franchino non funziona",
     ])
     def test_ordinary_conversation_does_not_trigger_wake(self, ordinary_phrase):
-        """Nessuna frase di conversazione comune deve far scattare la wake word."""
+        """Nessuna frase di conversazione comune o senza 'Hey/Ehi' deve far scattare la wake word."""
         has_wake, cmd, tok = FranchinoVoiceSink.extract_wake_and_command(ordinary_phrase)
         assert not has_wake, (
             f"FALSO POSITIVO RILEVATO! Frase: '{ordinary_phrase}' -> matched token: '{tok}', cmd: '{cmd}'"
@@ -95,40 +106,40 @@ class TestWakeWordFalsePositivePrevention:
 # ==============================================================================
 
 class TestWakeWordPositiveDetection:
-    """Verifica che tutte le forme legittime di richiamo a Franchino vengano sempre riconosciute."""
+    """Verifica che tutte le forme legittime di richiamo a Franchino con prefisso Hey/Ehi vengano sempre riconosciute."""
 
     @pytest.mark.parametrize("valid_call, expected_wake, expected_cmd", [
         # Canonica
-        ("Franchino", "Franchino", ""),
-        ("franchino metti musica", "franchino", "metti musica"),
-        ("ehi franchino metti i preferiti", "franchino", "metti i preferiti"),
-        ("Franchino come funziona il taming", "Franchino", "come funziona il taming"),
+        ("Hey Franchino", "Hey Franchino", ""),
+        ("hey franchino metti musica", "hey franchino", "metti musica"),
+        ("ehi franchino metti i preferiti", "ehi franchino", "metti i preferiti"),
+        ("Hey Franchino come funziona il taming", "Hey Franchino", "come funziona il taming"),
 
         # Chiamate /boost e bass boost
-        ("franchino boost", "franchino", "boost"),
-        ("franchino /boost", "franchino", "/boost"),
-        ("franchino bass boost", "franchino", "bass boost"),
-        ("franchino metti il boost", "franchino", "metti il boost"),
-        ("Franchino alza i bassi", "Franchino", "alza i bassi"),
-        ("franchino togli il boost", "franchino", "togli il boost"),
-        ("franchino no boost", "franchino", "no boost"),
+        ("hey franchino boost", "hey franchino", "boost"),
+        ("hey franchino /boost", "hey franchino", "/boost"),
+        ("hey franchino bass boost", "hey franchino", "bass boost"),
+        ("hey franchino metti il boost", "hey franchino", "metti il boost"),
+        ("Hey Franchino alza i bassi", "Hey Franchino", "alza i bassi"),
+        ("hey franchino togli il boost", "hey franchino", "togli il boost"),
+        ("hey franchino no boost", "hey franchino", "no boost"),
 
         # Comandi diretti
-        ("franchino stop", "franchino", "stop"),
-        ("franchino salta", "franchino", "salta"),
-        ("Franchino comandi", "Franchino", "comandi"),
+        ("hey franchino stop", "hey franchino", "stop"),
+        ("hey franchino salta", "hey franchino", "salta"),
+        ("Hey Franchino comandi", "Hey Franchino", "comandi"),
 
         # Varianti fonetiche da STT
-        ("frankino metti una canzone", "frankino", "metti una canzone"),
-        ("francino suona rock", "francino", "suona rock"),
-        ("franckino alza il volume", "franckino", "alza il volume"),
-        ("a franchì dimmi tutto", "franchì", "dimmi tutto"),
-        ("franceschino ci sei", "franceschino", "ci sei"),
+        ("ehi frankino metti una canzone", "ehi frankino", "metti una canzone"),
+        ("hey francino suona rock", "hey francino", "suona rock"),
+        ("hei franckino alza il volume", "hei franckino", "alza il volume"),
+        ("ehi franchì dimmi tutto", "ehi franchì", "dimmi tutto"),
+        ("hey franceschino ci sei", "hey franceschino", "ci sei"),
 
         # Varianti separate con spazio tipiche di Google STT
-        ("fran chino metti jazz", "fran chino", "metti jazz"),
-        ("franco ino metti pop", "franco ino", "metti pop"),
-        ("frank ino pausa", "frank ino", "pausa"),
+        ("hey fran chino metti jazz", "hey fran chino", "metti jazz"),
+        ("ehi franco ino metti pop", "ehi franco ino", "metti pop"),
+        ("hey frank ino pausa", "hey frank ino", "pausa"),
     ])
     def test_valid_calls_detected_correctly(self, valid_call, expected_wake, expected_cmd):
         has_wake, cmd, tok = FranchinoVoiceSink.extract_wake_and_command(valid_call)
@@ -349,7 +360,7 @@ class TestMultiCandidateDisambiguation:
 
     def test_valid_alternative_candidate_accepted_for_real_commands(self):
         """Se l'ipotesi primaria non ha wake word ma non è un intercalare ed è un comando chiaro, viene accettata."""
-        candidates = ["metti musica rock", "franchino metti musica rock"]
+        candidates = ["metti musica rock", "hey franchino metti musica rock"]
         top_cand = candidates[0]
         top_has_wake, _, _ = FranchinoVoiceSink.extract_wake_and_command(top_cand)
         primary_has_wake = top_has_wake
@@ -369,7 +380,7 @@ class TestMultiCandidateDisambiguation:
                 wake_hits.append(cand)
 
         assert len(wake_hits) == 1
-        assert wake_hits[0] == "franchino metti musica rock"
+        assert wake_hits[0] == "hey franchino metti musica rock"
 
 
 # ==============================================================================
@@ -571,13 +582,13 @@ class TestVoiceCommandDispatchEndToEnd(unittest.IsolatedAsyncioTestCase):
         mock_user.display_name = "Mario"
 
         with patch("brain.brain.process_user_speech", new=AsyncMock(return_value={"intent": "chat", "chat_reply": "Non c'è il boost", "voice_reply": "Tutto ok"})):
-            await sink._handle_transcribed_text(mock_user, "franchino chi ha il boost", detected_cmd="chi ha il boost")
+            await sink._handle_transcribed_text(mock_user, "hey franchino chi ha il boost", detected_cmd="chi ha il boost")
 
         mock_player.set_effect.assert_not_awaited()
         mock_player.play_now.assert_not_awaited()
 
     async def test_boost_positive_activation(self):
-        """'franchino metti il boost' deve attivare set_effect('bassboost')."""
+        """'hey franchino metti il boost' deve attivare set_effect('bassboost')."""
         mock_player = MagicMock()
         mock_player.bot.loop.create_task = MagicMock(side_effect=lambda coro: (coro.close(), MagicMock())[1])
         mock_player.set_effect = AsyncMock(return_value="🔊 Bass Boost (Club)")
@@ -591,11 +602,11 @@ class TestVoiceCommandDispatchEndToEnd(unittest.IsolatedAsyncioTestCase):
         mock_user.id = 12345
         mock_user.display_name = "Mario"
 
-        await sink._handle_transcribed_text(mock_user, "franchino metti il boost", detected_cmd="metti il boost")
+        await sink._handle_transcribed_text(mock_user, "hey franchino metti il boost", detected_cmd="metti il boost")
         mock_player.set_effect.assert_awaited_with("bassboost")
 
     async def test_boost_turn_off(self):
-        """'franchino togli il boost' deve attivare set_effect('off')."""
+        """'hey franchino togli il boost' deve attivare set_effect('off')."""
         mock_player = MagicMock()
         mock_player.bot.loop.create_task = MagicMock(side_effect=lambda coro: (coro.close(), MagicMock())[1])
         mock_player.set_effect = AsyncMock(return_value="⚪ Disattivato")
@@ -609,11 +620,11 @@ class TestVoiceCommandDispatchEndToEnd(unittest.IsolatedAsyncioTestCase):
         mock_user.id = 12345
         mock_user.display_name = "Mario"
 
-        await sink._handle_transcribed_text(mock_user, "franchino togli il boost", detected_cmd="togli il boost")
+        await sink._handle_transcribed_text(mock_user, "hey franchino togli il boost", detected_cmd="togli il boost")
         mock_player.set_effect.assert_awaited_with("off")
 
     async def test_music_request_with_concerto(self):
-        """'franchino metti il concerto di Vasco Rossi' deve avviare play_now e non set_effect."""
+        """'hey franchino metti il concerto di Vasco Rossi' deve avviare play_now e non set_effect."""
         mock_player = MagicMock()
         mock_player.bot.loop.create_task = MagicMock(side_effect=lambda coro: (coro.close(), MagicMock())[1])
         mock_player.set_effect = AsyncMock()
@@ -632,7 +643,7 @@ class TestVoiceCommandDispatchEndToEnd(unittest.IsolatedAsyncioTestCase):
         mock_user.id = 12345
         mock_user.display_name = "Mario"
 
-        await sink._handle_transcribed_text(mock_user, "franchino metti il concerto di Vasco Rossi", detected_cmd="metti il concerto di Vasco Rossi")
+        await sink._handle_transcribed_text(mock_user, "hey franchino metti il concerto di Vasco Rossi", detected_cmd="metti il concerto di Vasco Rossi")
         mock_player.set_effect.assert_not_awaited()
         mock_player.play_now.assert_awaited()
 
@@ -664,4 +675,216 @@ class TestSlashBoostCommand(unittest.IsolatedAsyncioTestCase):
         await boost_cmd.callback(ctx)
         mock_player.set_effect.assert_awaited_with("off")
         ctx.send.assert_awaited_with("🎛️ Effetto Bass Boost impostato su: **⚪ Disattivato**!")
+
+
+# ==============================================================================
+# 7. TEST REGOLA TASSATIVA: 'HEY/EHI FRANCHINO' OBBLIGATORIO
+# ==============================================================================
+
+class TestStrictHeyFranchinoRuleDetection:
+    """
+    Test suite approfondita sulla regola tassativa:
+    Franchino risponde e si attiva SOLO ED ESCLUSIVAMENTE se preceduto da 'Hey'/'Ehi'.
+    Se l'utente non pronuncia 'Hey Franchino' (es. 'Franchino metti la musica'),
+    il bot NON deve rispondere e deve rimanere in silenzio assoluto.
+    """
+
+    @pytest.mark.parametrize("valid_wake", [
+        "Hey Franchino",
+        "ehi franchino",
+        "hei franchino",
+        "ey franchino",
+        "ei franchino",
+        "heylà franchino",
+        "heyla franchino",
+        "heilà franchino",
+        "heila franchino",
+        "ehilà franchino",
+        "ehila franchino",
+        "hey la franchino",
+        "ehi la franchino",
+        "Hey, Franchino",
+        "Ehi... Franchino!",
+        "Hey Franchina",
+        "Hey Franchini",
+        "hey frankino",
+        "ehi francino",
+        "hei franghino",
+        "hey franckino",
+        "hey franceschino",
+        "ehi franchì",
+        "hey fran chino",
+        "ehi frank ino",
+        "hey franco ino",
+        "hey franchi no",
+        "ehi fra chi no",
+        "hey frankie no",
+        "hey franchi, no metti musica",
+        "ehi fra chi, no come stai",
+        "Hey Franchino metti musica",
+        "ehi franchino stop",
+        "ciao hey franchino metti pop",
+    ])
+    def test_all_hey_variants_activate_bot(self, valid_wake):
+        """Tutte le varianti fonetiche di 'Hey/Ehi' attivano correttamente la wake word."""
+        has_wake, cmd, tok = FranchinoVoiceSink.extract_wake_and_command(valid_wake)
+        assert has_wake is True, f"Mancata attivazione per frase con Hey: '{valid_wake}'"
+        assert len(tok) > 0
+
+    @pytest.mark.parametrize("invalid_call", [
+        "Franchino",
+        "franchino metti la musica",
+        "Franchino che ore sono?",
+        "franchino stop",
+        "franchino salta",
+        "franchino pausa",
+        "franchino comandi",
+        "franchino boost",
+        "franchino /boost",
+        "franchino bass boost",
+        "franchino togli il boost",
+        "franchi no ci sei",
+        "fra chi no rispondi",
+        "franco ino metti pop",
+        "frank ino pausa",
+        "frankino metti una canzone",
+        "francino suona rock",
+        "franckino alza il volume",
+        "franceschino ci sei",
+        "franchì dimmi tutto",
+        "a franchì dimmi tutto",
+        "secondo me franchino non funziona",
+        "anche franchino lagga stasera",
+        "ho parlato con franchino",
+        "grazie franchino",
+        "ciao franchino",
+        "dimmi franchino",
+    ])
+    def test_franchino_without_hey_strictly_rejected(self, invalid_call):
+        """Qualsiasi frase con 'Franchino' ma SENZA 'Hey/Ehi' viene tassativamente scartata."""
+        has_wake, cmd, tok = FranchinoVoiceSink.extract_wake_and_command(invalid_call)
+        assert has_wake is False, f"FALSO POSITIVO: '{invalid_call}' ha attivato la wake word senza 'Hey'!"
+        assert cmd == ""
+        assert tok == ""
+
+    def test_fuzzy_and_bigram_strictly_require_hey_prefix(self):
+        """Il fuzzy matching di livello 2 e bigram join di livello 3 richiedono tassativamente Hey/Ehi."""
+        # Livello 2 (Fuzzy typo 'franchkno'):
+        has_w_with_hey, _, _ = FranchinoVoiceSink.extract_wake_and_command("hey franchkno metti musica")
+        assert has_w_with_hey is True, "Fuzzy con 'hey' deve attivare la wake word"
+
+        has_w_no_hey, _, _ = FranchinoVoiceSink.extract_wake_and_command("franchkno metti musica")
+        assert has_w_no_hey is False, "Fuzzy senza 'hey' NON deve attivare la wake word"
+
+        has_w_wrong_prefix, _, _ = FranchinoVoiceSink.extract_wake_and_command("ragazzi franchkno metti musica")
+        assert has_w_wrong_prefix is False, "Fuzzy con parola diversa da 'hey' NON deve attivare la wake word"
+
+        # Livello 3 (Bigram):
+        has_w_bigram_hey, _, _ = FranchinoVoiceSink.extract_wake_and_command("ehi franco ino metti rock")
+        assert has_w_bigram_hey is True, "Bigram con 'ehi' deve attivare la wake word"
+
+        has_w_bigram_no_hey, _, _ = FranchinoVoiceSink.extract_wake_and_command("franco ino metti rock")
+        assert has_w_bigram_no_hey is False, "Bigram senza 'ehi' NON deve attivare la wake word"
+
+
+class TestStrictHeyFranchinoAsyncDispatch(unittest.IsolatedAsyncioTestCase):
+    """Verifica il comportamento asincrono di _process_utterance e _handle_transcribed_text."""
+
+    async def test_process_utterance_silent_on_franchino_without_hey(self):
+        """In _process_utterance, trascrizioni senza 'Hey Franchino' non attivano il bot e restano in silenzio."""
+        mock_player = MagicMock()
+        mock_player.bot.loop.create_task = MagicMock(side_effect=lambda coro: (coro.close(), MagicMock())[1])
+        mock_player.voice_client = MagicMock()
+        mock_player.is_speaking_tts = False
+
+        sink = FranchinoVoiceSink(mock_player)
+        sink._handle_transcribed_text = AsyncMock()
+
+        phrase_pcm = b"\xd0\x00\xd0\x00" * int(48000 * 0.8)
+        speaker = MagicMock(id=888, display_name="User")
+
+        # 1. Trascrizione "franchino metti la musica" (SENZA Hey)
+        with patch.object(sink.recognizer, "recognize_google", return_value={"alternative": [{"transcript": "franchino metti la musica"}]}):
+            await sink._process_utterance(888, speaker, phrase_pcm)
+            sink._handle_transcribed_text.assert_not_called()
+
+        # 2. Trascrizione "hey franchino metti la musica" (CON Hey)
+        with patch.object(sink.recognizer, "recognize_google", return_value={"alternative": [{"transcript": "hey franchino metti la musica"}]}):
+            await sink._process_utterance(888, speaker, phrase_pcm)
+            sink._handle_transcribed_text.assert_awaited_once()
+
+    async def test_handle_transcribed_text_silent_when_no_hey(self):
+        """Chiamate dirette a _handle_transcribed_text senza 'Hey Franchino' sono ignorate in silenzio."""
+        mock_player = MagicMock()
+        mock_player.bot.loop.create_task = MagicMock(side_effect=lambda coro: (coro.close(), MagicMock())[1])
+        mock_player.play_now = AsyncMock()
+        mock_player.set_effect = AsyncMock()
+        mock_player.speak_tts = AsyncMock()
+
+        sink = FranchinoVoiceSink(mock_player)
+        sink._notify_channel = AsyncMock()
+
+        user = MagicMock(id=777, display_name="Davide")
+
+        # Se l'utente dice "Franchino metti la musica" o "Franchino stop"
+        await sink._handle_transcribed_text(user, "Franchino metti la musica")
+        await sink._handle_transcribed_text(user, "Franchino stop")
+        await sink._handle_transcribed_text(user, "Franchino", detected_cmd="")
+
+        mock_player.play_now.assert_not_awaited()
+        mock_player.set_effect.assert_not_awaited()
+        mock_player.speak_tts.assert_not_called()
+        sink._notify_channel.assert_not_awaited()
+
+    async def test_active_session_flow_after_hey_franchino(self):
+        """Dopo aver detto 'Hey Franchino', il bot risponde e apre la sessione per completare il comando."""
+        mock_player = MagicMock()
+        mock_player.bot.loop.create_task = MagicMock(side_effect=lambda coro: asyncio.create_task(coro))
+        mock_player.play_now = AsyncMock()
+        mock_player.speak_tts = AsyncMock()
+        mock_player.source_manager.resolve_url_or_query = AsyncMock(return_value=["mock_song"])
+        mock_player.current = None
+
+        sink = FranchinoVoiceSink(mock_player)
+        sink._notify_channel = AsyncMock()
+
+        user = MagicMock(id=4242, display_name="TestFan")
+
+        # 1. Utente dice solo "Hey Franchino"
+        await sink._handle_transcribed_text(user, "Hey Franchino", detected_cmd="")
+        mock_player.speak_tts.assert_called_once()
+        assert "Magia! Dimmi tutto" in mock_player.speak_tts.call_args[0][0]
+        assert 4242 in sink._pending_wake
+
+        # 2. Entro 10 secondi, l'utente pronuncia il titolo "metti Albachiara" (senza ripetere Hey Franchino)
+        await sink._handle_transcribed_text(user, "metti Albachiara", detected_cmd="metti Albachiara")
+        mock_player.play_now.assert_awaited_once()
+
+    async def test_pending_prefix_deduplication_in_active_session(self):
+        """Verifica che un prefisso (es. 'metti') non venga duplicato se l'utente lo ripete nel follow-up."""
+        mock_player = MagicMock()
+        mock_player.bot.loop.create_task = MagicMock(side_effect=lambda coro: asyncio.create_task(coro))
+        mock_player.play_now = AsyncMock()
+        mock_player.speak_tts = AsyncMock()
+        mock_player.source_manager.resolve_url_or_query = AsyncMock(return_value=["mock_song"])
+        mock_player.current = None
+
+        sink = FranchinoVoiceSink(mock_player)
+        sink._notify_channel = AsyncMock()
+
+        user = MagicMock(id=5555, display_name="PrefixTester")
+
+        # 1. Utente dice "Hey Franchino metti" -> pending_wake memorizza "metti"
+        await sink._handle_transcribed_text(user, "Hey Franchino metti", detected_cmd="metti")
+        assert 5555 in sink._pending_wake
+        assert sink._pending_wake[5555][1] == "metti"
+
+        # 2. Utente nel follow-up ripete "metti Vasco Rossi"
+        await sink._handle_transcribed_text(user, "metti Vasco Rossi", detected_cmd="metti Vasco Rossi")
+        mock_player.source_manager.resolve_url_or_query.assert_awaited_once()
+        query_arg = mock_player.source_manager.resolve_url_or_query.call_args[0][0]
+        # La query musicale deve essere 'Vasco Rossi' e non 'metti Vasco Rossi'
+        assert query_arg.strip().lower() == "vasco rossi"
+
+
 

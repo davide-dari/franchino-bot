@@ -23,6 +23,7 @@ if TYPE_CHECKING:
     from player import GuildPlayer
 
 from outlands_wiki import normalize_uo_speech
+from config import DEFAULT_CHAT_REMINDER
 
 logger = logging.getLogger("Franchino.VoiceCommands")
 
@@ -325,9 +326,10 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
     CONTINUE_RMS_ENERGY = 35      # Sensibile per catturare anche l'ultima sillaba debole o sospiro
     PREROLL_CHUNKS = 15           # 300ms di pre-roll ring buffer (15 pacchetti da 20ms)
 
-    WAKE_PATTERN = re.compile(
-        r'(?<!\w)('
-        # Varianti canoniche con flessioni finali complete (richiede vocale finale [oaie])
+    HEY_PREFIX_RAW = r'(?:(?:hey+|ehi+|hei+|ey+|ei+)(?:[\s,.:;!?\'"-]+l[àa])?|heyl[àa]|heil[àa]|ehil[àa])'
+
+    FRANCHINO_NAME_RAW = (
+        r'(?:'
         r'franchin[oaie]'
         r'|franchin\b'               # forma tronca con word boundary esplicito
         r'|frankin[oaie]'           # frankino (k per ch)
@@ -351,9 +353,15 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
         r'|franki\s*,?\s*n[oaie]'    # "franki no"
         r'|franc\s+in[oaie]'         # "franc ino"
         r'|franck\s+in[oaie]'        # "franck ino"
-        r')(?!\w)',
+        r')'
+    )
+
+    WAKE_PATTERN = re.compile(
+        rf'(?<!\w)({HEY_PREFIX_RAW}[\s,.:;!?\'"-]+{FRANCHINO_NAME_RAW})(?!\w)',
         re.IGNORECASE
     )
+
+    HEY_PREFIX_RE = re.compile(rf'(?<!\w){HEY_PREFIX_RAW}\s*$', re.IGNORECASE)
 
     # Esclusione esplicita di parole italiane comuni foneticamente vicine che NON devono mai svegliare Franchino
     EXCLUDED_WAKE_WORDS = {
@@ -383,14 +391,16 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
     @classmethod
     def extract_wake_and_command(cls, text: str) -> tuple[bool, str, str]:
         """
-        Riconosce con la massima accuratezza la wake word 'Franchino' e le sue varianti fonetiche/STT,
-        evitando rigorosamente falsi positivi durante le normali conversazioni tra utenti.
+        Riconosce con la massima accuratezza la wake phrase obbligatoria 'Hey Franchino' (o varianti 'Ehi Franchino')
+        e le sue varianti fonetiche/STT, evitando rigorosamente falsi positivi durante le normali conversazioni tra utenti.
+        Senza 'Hey/Ehi' precedente, il bot non si attiva mai (has_wake = False).
 
         Applica tre livelli di detection in cascata:
-          1. Regex rigorosa: varianti fonetiche + split-word STT ('franco ino', 'fran chino', ecc.)
-          2. Fuzzy token matching selettivo: SequenceMatcher >= 0.84 su token >= 7 caratteri (non esclusi)
-          3. Bigram join mirato: unisce coppie adiacenti solo se il prefisso è fran/franc/frank/franco
-             e il suffisso è chino/kino/ino con SequenceMatcher >= 0.84
+          1. Regex rigorosa: 'Hey/Ehi' + varianti fonetiche + split-word STT ('hey franco ino', 'ehi fran chino', ecc.)
+          2. Fuzzy token matching selettivo: token >= 7 caratteri (non esclusi) con SequenceMatcher >= 0.84,
+             preceduto tassativamente da Hey/Ehi.
+          3. Bigram join mirato: unisce coppie adiacenti fran/franc/frank/franco + chino/kino/ino con SequenceMatcher >= 0.84,
+             preceduto tassativamente da Hey/Ehi.
 
         Ritorna: (has_wake: bool, command_part: str, matched_wake_token: str)
         """
@@ -407,7 +417,7 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
             wake_matched = m.group(0)
             start, end = m.span()
         else:
-            # --- Livello 2: Fuzzy token-per-token (>= 0.84, token >= 7 chars, non in esclusioni) ---
+            # --- Livello 2: Fuzzy token-per-token (>= 0.84, token >= 7 chars, non in esclusioni) preceduto da Hey/Ehi ---
             tokens = list(re.finditer(r'[a-zA-ZàèéìòùÀÈÉÌÒÙ]{7,}', clean_text, re.IGNORECASE))
             for tok_match in tokens:
                 tok = tok_match.group(0).lower()
@@ -415,11 +425,15 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
                     continue
                 ratio = difflib.SequenceMatcher(None, tok, "franchino").ratio()
                 if ratio >= 0.84:
-                    wake_matched = tok_match.group(0)
-                    start, end = tok_match.span()
-                    break
+                    prefix_str = clean_text[:tok_match.start()].rstrip(" ,.:;!?\'\"-")
+                    hey_m = cls.HEY_PREFIX_RE.search(prefix_str)
+                    if hey_m:
+                        start = hey_m.start()
+                        end = tok_match.end()
+                        wake_matched = clean_text[start:end]
+                        break
 
-            # --- Livello 3: Bigram join mirato (solo prefissi fran/franc/frank/franco + suffissi chino/kino/ino) ---
+            # --- Livello 3: Bigram join mirato preceduto da Hey/Ehi ---
             if not wake_matched:
                 all_tokens = list(re.finditer(r'[a-zA-ZàèéìòùÀÈÉÌÒÙ]+', clean_text, re.IGNORECASE))
                 for i in range(len(all_tokens) - 1):
@@ -434,10 +448,13 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
                         continue
                     ratio = difflib.SequenceMatcher(None, joined, "franchino").ratio()
                     if ratio >= 0.84:
-                        wake_matched = all_tokens[i].group(0) + " " + all_tokens[i + 1].group(0)
-                        start = all_tokens[i].start()
-                        end = all_tokens[i + 1].end()
-                        break
+                        prefix_str = clean_text[:all_tokens[i].start()].rstrip(" ,.:;!?\'\"-")
+                        hey_m = cls.HEY_PREFIX_RE.search(prefix_str)
+                        if hey_m:
+                            start = hey_m.start()
+                            end = all_tokens[i + 1].end()
+                            wake_matched = clean_text[start:end]
+                            break
 
         if not wake_matched:
             return False, "", ""
@@ -1069,12 +1086,6 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
                     await self._notify_channel(
                         f"❌ **{user.display_name}** ha annullato l'invio del messaggio privato a **{target_member.display_name}**."
                     )
-                    await self.player.speak_tts(
-                        "Va bene, messaggio annullato!",
-                        wait=True,
-                        interrupt_music=True,
-                        keep_paused_after=False,
-                    )
                     return
 
                 dm_embed = discord.Embed(
@@ -1098,35 +1109,31 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
                     await self._notify_channel(
                         f"📨 **{user.display_name}** ha inviato un messaggio privato a **{target_member.display_name}** tramite Franchino!"
                     )
-                    await self.player.speak_tts(
-                        f"Messaggio inviato a {target_member.display_name}!",
-                        wait=True,
-                        interrupt_music=True,
-                        keep_paused_after=False,
-                    )
                 except discord.Forbidden:
                     await self._notify_channel(
                         f"⚠️ {target_member.mention} ha i messaggi privati chiusi! Ecco il messaggio vocale di **{user.display_name}**: *\"{msg_body}\"*"
                     )
-                    await self.player.speak_tts(
-                        f"{target_member.display_name} ha i messaggi privati chiusi, gliel'ho scritto nella chat musica!",
-                        wait=True,
-                        interrupt_music=True,
-                        keep_paused_after=False,
-                    )
                 except Exception as e:
                     logger.error(f"Errore nell'invio DM a {target_member}: {e}")
-                    await self.player.resume_interrupted_song()
                 return
 
-        command_part = self._clean_transcription(detected_cmd) if detected_cmd is not None else None
+        # Verifica se l'utente è in sessione attiva (pending wake da precedente 'Hey Franchino' o dettatura DM)
+        in_active_session = (uid in self._pending_wake and now - self._pending_wake[uid][0] <= 10.0)
 
-        if command_part is None:
-            has_w, cmd, _ = self.extract_wake_and_command(text)
-            if has_w:
-                command_part = self._clean_transcription(cmd)
+        if not in_active_session:
+            has_w, cmd_extracted, _ = self.extract_wake_and_command(text)
+            if not has_w:
+                logger.debug(f"🔇 Ignorato comando vocale senza wake phrase 'Hey Franchino' da {user.display_name}: '{text}'")
+                return
+            command_part = self._clean_transcription(cmd_extracted if detected_cmd is None else detected_cmd)
+        else:
+            command_part = self._clean_transcription(detected_cmd) if detected_cmd is not None else None
+            if command_part is None:
+                has_w, cmd_extracted, _ = self.extract_wake_and_command(text)
+                if has_w:
+                    command_part = self._clean_transcription(cmd_extracted)
 
-        # Se l'utente era in sessione di attesa (aveva detto "Franchino" o "Franchino metti" e ora dice il comando/brano):
+        # Se l'utente era in sessione di attesa (aveva detto "Hey Franchino" o "Hey Franchino metti" e ora dice il comando/brano):
         if uid in self._pending_wake:
             wake_time, pending_prefix = self._pending_wake.pop(uid)
             if now - wake_time <= 10.0:
@@ -1136,11 +1143,13 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
                 # Se l'utente ha detto un comando di stop, cancellazione o liveness, non anteporre il prefisso musicale
                 if any(rf_low.startswith(w) for w in ("stop", "stoppa", "basta", "ferma", "fermati", "zitto", "silenzio", "muto", "spegni", "annulla", "niente", "lascia stare", "taci", "smettila")):
                     command_part = raw_followup
+                elif pending_prefix and rf_low.startswith(pending_prefix.lower()):
+                    command_part = raw_followup
                 else:
                     command_part = f"{pending_prefix} {raw_followup}".strip() if pending_prefix else raw_followup
                 logger.info(f"🔗 Continuazione comando vocale per {user.display_name}: '{command_part}'")
 
-        # NESSUN RICHIAMO A FRANCHINO: Ignora totalmente! Non risponde mai se non viene chiamato per nome.
+        # NESSUN RICHIAMO A FRANCHINO: Ignora totalmente! Non risponde mai se non viene chiamato con la wake phrase.
         if command_part is None:
             logger.debug(f"🔇 Ignorato comando vocale senza richiamo Franchino da {user.display_name}: '{text}'")
             return
@@ -1166,7 +1175,6 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
             await self._notify_channel(
                 f"🎙️ **Franchino**: Ricevuto **{user.display_name}**, nessun problema! Sono sempre qui in console quando vuoi. ✨"
             )
-            asyncio.create_task(self.player.speak_tts("Va bene, sono sempre qui se hai bisogno!", wait=False, interrupt_music=True))
             return
 
         # 3. Ringraziamenti e saluti amichevoli
@@ -1174,7 +1182,6 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
             await self._notify_channel(
                 f"🎙️✨ **Franchino**: Prego **{user.display_name}**! Sempre un piacere farvi divertire in console! 🚀"
             )
-            asyncio.create_task(self.player.speak_tts(f"Prego {user.display_name}! La magia della notte è sempre accesa!", wait=False, interrupt_music=True))
             return
 
         # 4. Feedback audio / microfono / qualità connessione
@@ -1326,7 +1333,6 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
             await self._notify_channel(
                 "🎧 **Franchino si è riavviato ed è di nuovo in ascolto!** Pronti per la magia! ✨"
             )
-            asyncio.create_task(self.player.speak_tts("Eccomi ragazzi! Console riavviata e pronta per la magia!"))
             return
 
         # 0A-bis. Comando STOP / FERMA / BASTA / ZITTO / SILENZIO / MUTO / SPEGNI (Funziona SEMPRE al 100%!)
@@ -1381,14 +1387,16 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
                     f"📬 **{user.display_name}** ha chiesto i comandi — glieli ho inviati in **messaggio privato**!"
                 )
                 asyncio.create_task(
-                    self.player.speak_tts(f"Ti ho mandato la lista dei comandi in messaggio privato, {user.display_name}!")
+                    self.player.speak_tts(DEFAULT_CHAT_REMINDER, wait=False, interrupt_music=True, keep_paused_after=False)
                 )
             else:
                 await self._notify_channel(
                     f"🎙️ **{user.display_name}** ha chiesto i comandi *(messaggi privati chiusi, li mostro qui)*:",
                     embed=embed,
                 )
-                asyncio.create_task(self.player.speak_tts("Hai i messaggi privati chiusi, ti ho mandato i comandi nella chat musica!"))
+                asyncio.create_task(
+                    self.player.speak_tts(DEFAULT_CHAT_REMINDER, wait=False, interrupt_music=True, keep_paused_after=False)
+                )
             return
 
         # 0B-bis. Comandi VOCE DEL VERO FRANCHINO IL VOCALIST (Favole, Magia, Eco da Console)
@@ -1397,7 +1405,6 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
         )):
             self.player.vocalist_mode = False
             await self._notify_channel("🎙️ **Voce di Franchino impostata su: Nitida (senza eco da console).**")
-            asyncio.create_task(self.player.speak_tts("Perfetto ragazzi, ho tolto l'eco del microfono da discoteca.", interrupt_music=True))
             return
 
         if any(w in cmd_lower for w in (
@@ -1405,7 +1412,6 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
         )):
             self.player.vocalist_mode = True
             await self._notify_channel("🎙️✨ **Voce del Vero Franchino il Vocalist attiva (Timbro profondo + Eco da Console Insomnia)!**")
-            asyncio.create_task(self.player.speak_tts("Magia... Il microfono della notte è acceso. Chiudi gli occhi e vola...", interrupt_music=True, dramatic_fable=True))
             return
 
         if any(w in cmd_lower for w in (
@@ -1431,10 +1437,16 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
                 from brain import brain
                 commentary = await brain.explain_song_context(cur.title, cur.uploader or "")
                 await self._notify_channel(f"🎙️🎧 **Franchino DJ ({user.display_name})**:\n> *\"{commentary}\"*")
-                asyncio.create_task(self.player.speak_tts(commentary, wait=True, interrupt_music=True))
+                asyncio.create_task(
+                    self.player.speak_tts(
+                        "Ragazzi, vi ho scritto tutti i dettagli sul brano in chat! Date un'occhiata!",
+                        wait=False,
+                        interrupt_music=True,
+                        keep_paused_after=False,
+                    )
+                )
             else:
                 await self._notify_channel("⚠️ Al momento non sta suonando nessuna traccia!")
-                asyncio.create_task(self.player.speak_tts("Non c'è musica attiva al momento ragazzi!"))
             return
 
         # 0B-sexies. Ricerca Sport, Palinsesto & Partite di Stasera (Calcio, Basket, F1, MotoGP, Tennis, ecc.)
@@ -1531,9 +1543,6 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
                 await self._notify_channel(
                     f"⚠️ **{user.display_name}**, non ho trovato nessuno chiamato **\"{target_query}\"** qui nel canale vocale! "
                     f"*(Presenti nella stanza: {present_str})*"
-                )
-                asyncio.create_task(
-                    self.player.speak_tts(f"Non trovo {target_query} qui nella stanza vocale!")
                 )
                 return
 
@@ -1643,7 +1652,7 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
                 inline=False,
             )
             embed.set_footer(text="Franchino Bot • Super Matematico Jack Intelligence")
-            voice_jack = "Magia ragazzi! Ecco la formula del super matematico Jack! Ho ottimizzato la console con Okapi BM25 e Jaro-Winkler per 2 core ARM!"
+            voice_jack = "Ragazzi, vi ho scritto tutta la formula del Super Matematico Jack in chat! Date un'occhiata!"
             await self._notify_channel(
                 f"🧠 **{user.display_name}** ha invocato la formula del **Super Matematico Jack**! Ecco i dettagli completi:",
                 embed=embed,
@@ -1751,13 +1760,13 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
                     if not timers:
                         timers = timer_manager.get_timers(guild_id)
                     if not timers:
-                        ans = f"Non c'è nessun timer attivo al momento {user.display_name}!"
+                        ans = "Ragazzi, vi ho scritto lo stato dei timer in chat! Date un'occhiata!"
                         await self._notify_channel(f"⏰ **{user.display_name}**: Nessun timer attivo.")
                         asyncio.create_task(self.player.speak_tts(ans, wait=False, interrupt_music=True, keep_paused_after=False))
                     else:
                         t = timers[0]
                         rem_str = format_duration_italian(int(t.remaining_seconds))
-                        ans = f"Mancano ancora {rem_str} al timer per {t.label} ragazzi!"
+                        ans = "Ragazzi, vi ho scritto lo stato dei timer in chat! Date un'occhiata!"
                         await self._notify_channel(f"⏰ **{user.display_name}**: Mancano ancora **{rem_str}** al timer per **{t.label}**.")
                         asyncio.create_task(self.player.speak_tts(ans, wait=False, interrupt_music=True, keep_paused_after=False))
                     return
@@ -1768,13 +1777,9 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
                         cancelled = timer_manager.cancel_timers(guild_id)
                     if cancelled:
                         labels = ", ".join([c.label for c in cancelled])
-                        ans = f"Timer per {labels} cancellato con successo ragazzi!"
                         await self._notify_channel(f"⏰ **{user.display_name}**: Timer per **{labels}** cancellato.")
-                        asyncio.create_task(self.player.speak_tts(ans, wait=False, interrupt_music=True, keep_paused_after=False))
                     else:
-                        ans = f"Nessun timer attivo da cancellare {user.display_name}!"
                         await self._notify_channel(f"⏰ **{user.display_name}**: Nessun timer da cancellare.")
-                        asyncio.create_task(self.player.speak_tts(ans, wait=False, interrupt_music=True, keep_paused_after=False))
                     return
 
                 else:
@@ -1803,9 +1808,6 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
                     await self._notify_channel(
                         f"⏰ **{user.display_name}** ha impostato un timer in console:",
                         embed=embed,
-                    )
-                    asyncio.create_task(
-                        self.player.speak_tts(v_msg, wait=False, interrupt_music=True, keep_paused_after=False)
                     )
                     from central_hub import hub
                     asyncio.create_task(
@@ -2061,7 +2063,6 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
                 await self._notify_channel(
                     "⚠️ La playlist **Preferiti del Server** è ancora vuota! Dì *\"Franchino salva questa canzone\"* mentre suona un brano."
                 )
-                asyncio.create_task(self.player.speak_tts("Non avete ancora salvato canzoni nei preferiti!"))
             else:
                 random.shuffle(fav_songs)
                 await self._notify_channel(
@@ -2070,7 +2071,7 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
                 await self.player.play_now(
                     fav_songs,
                     text_channel=self.player.text_channel,
-                    voice_announce=f"Subito! Metto i vostri {len(fav_songs)} brani preferiti!",
+                    voice_announce=None,
                 )
             return
 
@@ -2084,11 +2085,6 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
                 self.player.autoplay = not self.player.autoplay
             stato = "ATTIVATA ✅ (a fine coda metterò brani correlati!)" if self.player.autoplay else "DISATTIVATA ❌"
             await self._notify_channel(f"📻 **{user.display_name}**: Modalità Radio AutoPlay **{stato}**")
-            asyncio.create_task(
-                self.player.speak_tts(
-                    "Modalità radio infinita attivata!" if self.player.autoplay else "Modalità radio disattivata!"
-                )
-            )
             return
 
         # 0F. Comando 12 EFFETTI AUDIO DJ DAL VIVO (Filtri sulla canzone in corso)
@@ -2329,7 +2325,7 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
                         await self.player.play_now(
                             songs,
                             text_channel=self.player.text_channel,
-                            voice_announce=f"Subito! Metto {query}",
+                            voice_announce=None,
                         )
                         from central_hub import hub
                         asyncio.create_task(
@@ -2468,7 +2464,7 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
                     inline=False,
                 )
                 embed.set_footer(text="Franchino Bot • Super Matematico Jack Intelligence")
-                voice_jack = "Magia ragazzi! Ecco la formula del super matematico Jack! Ho ottimizzato la console con Okapi BM25 e Jaro-Winkler per 2 core ARM!"
+                voice_jack = "Ragazzi, vi ho scritto tutta la formula del Super Matematico Jack in chat! Date un'occhiata! Magia!"
                 await self._notify_channel(
                     f"🧠 **{user.display_name}**, ecco la formula del **Super Matematico Jack**:",
                     embed=embed,
@@ -2604,7 +2600,6 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
                 ]
                 v_msg = random.choice(vocalist_greetings)
                 await self._notify_channel(f"🎙️ **Franchino**: *\"{v_msg}\"*")
-                asyncio.create_task(self.player.speak_tts(v_msg, wait=False, interrupt_music=True))
                 return
 
             # Feedback audio o microfono
@@ -2734,7 +2729,7 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
                     await self.player.play_now(
                         songs,
                         text_channel=self.player.text_channel,
-                        voice_announce=f"Subito! Metto {music_query}",
+                        voice_announce=None,
                     )
                 else:
                     await self._notify_channel(
@@ -2797,7 +2792,7 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
                 inline=False,
             )
             embed.set_footer(text="Franchino Bot • Super Matematico Jack Intelligence")
-            voice_jack = decision.get("voice_reply") or "Magia ragazzi! Ecco la formula del super matematico Jack! Ho ottimizzato la console con Okapi BM25 e Jaro-Winkler per 2 core ARM!"
+            voice_jack = decision.get("voice_reply") or "Ragazzi, vi ho scritto tutta la formula del Super Matematico Jack in chat! Date un'occhiata!"
             await self._notify_channel(
                 f"🧠 **{user.display_name}**, ecco la formula del **Super Matematico Jack**:",
                 embed=embed,
@@ -2881,7 +2876,6 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
                     color=0x3498DB,
                 )
                 await self._notify_channel(f"⏰ **{user.display_name}** ha impostato un timer in console:", embed=embed)
-                asyncio.create_task(self.player.speak_tts(v_msg, wait=False, interrupt_music=True, keep_paused_after=False))
                 return True
             elif sub == "timer_status":
                 guild_id = self.player.guild.id if self.player.guild else 0
@@ -2889,13 +2883,13 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
                 if not timers:
                     timers = timer_manager.get_timers(guild_id)
                 if not timers:
-                    ans = f"Non c'è nessun timer attivo al momento {user.display_name}!"
+                    ans = "Ragazzi, vi ho scritto lo stato dei timer in chat! Date un'occhiata!"
                     await self._notify_channel(f"⏰ **{user.display_name}**: Nessun timer attivo.")
                     asyncio.create_task(self.player.speak_tts(ans, wait=False, interrupt_music=True, keep_paused_after=False))
                 else:
                     t = timers[0]
                     rem_str = format_duration_italian(int(t.remaining_seconds))
-                    ans = f"Mancano ancora {rem_str} al timer per {t.label} ragazzi!"
+                    ans = "Ragazzi, vi ho scritto lo stato dei timer in chat! Date un'occhiata!"
                     await self._notify_channel(f"⏰ **{user.display_name}**: Mancano ancora **{rem_str}** al timer per **{t.label}**.")
                     asyncio.create_task(self.player.speak_tts(ans, wait=False, interrupt_music=True, keep_paused_after=False))
                 return True
@@ -2906,13 +2900,9 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
                     cancelled = timer_manager.cancel_timers(guild_id)
                 if cancelled:
                     labels = ", ".join([c.label for c in cancelled])
-                    ans = f"Timer per {labels} cancellato con successo ragazzi!"
                     await self._notify_channel(f"⏰ **{user.display_name}**: Timer per **{labels}** cancellato.")
-                    asyncio.create_task(self.player.speak_tts(ans, wait=False, interrupt_music=True, keep_paused_after=False))
                 else:
-                    ans = f"Nessun timer attivo da cancellare {user.display_name}!"
                     await self._notify_channel(f"⏰ **{user.display_name}**: Nessun timer da cancellare.")
-                    asyncio.create_task(self.player.speak_tts(ans, wait=False, interrupt_music=True, keep_paused_after=False))
                 return True
             elif sub == "random":
                 c_low = command_part.lower()
@@ -2933,14 +2923,15 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
                 )
                 return True
             else:
-                voice_msg = decision.get("voice_reply") or "Magia ragazzi! Assistente pronto in console!"
+                voice_msg = decision.get("voice_reply") if decision.get("voice_reply") is not None else DEFAULT_CHAT_REMINDER
                 chat_msg = decision.get("chat_reply") or voice_msg
                 emb = decision.get("embed")
                 if emb:
                     await self._notify_channel(f"🎙️ **Franchino**: {chat_msg}", embed=emb)
                 else:
                     await self._notify_channel(f"🎙️ **Franchino**: {chat_msg}")
-                asyncio.create_task(self.player.speak_tts(voice_msg, wait=False, interrupt_music=True, keep_paused_after=False))
+                if voice_msg and voice_msg.strip():
+                    asyncio.create_task(self.player.speak_tts(voice_msg, wait=False, interrupt_music=True, keep_paused_after=False))
                 return True
 
         if intent == "razor_script":
@@ -3126,7 +3117,6 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
                 return True
             v_msg = "Magia pura! Un grande abbraccio e un brindisi a tutta la sala da Franchino!"
             await self._notify_channel(f"🥂 **Franchino**: *\"{v_msg}\"*")
-            asyncio.create_task(self.player.speak_tts(v_msg, wait=False, interrupt_music=True, keep_paused_after=False))
             return True
 
         if intent == "admin_control":
@@ -3141,18 +3131,19 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
 
         # Chat / generale
         chat_reply = decision.get("chat_reply") or "🎧 **Franchino**: Sempre presente in console! Dimmi tutto!"
-        voice_reply = decision.get("voice_reply") or chat_reply
+        voice_reply = decision.get("voice_reply") if decision.get("voice_reply") is not None else chat_reply
         await self._notify_channel(
             f"🎙️ **Franchino** risponde a **{user.display_name}**:\n> *\"{chat_reply or voice_reply}\"*"
         )
-        asyncio.create_task(
-            self.player.speak_tts(
-                voice_reply,
-                wait=False,
-                interrupt_music=True,
-                keep_paused_after=False,
+        if voice_reply and voice_reply.strip():
+            asyncio.create_task(
+                self.player.speak_tts(
+                    voice_reply,
+                    wait=False,
+                    interrupt_music=True,
+                    keep_paused_after=False,
+                )
             )
-        )
         return True
 
     async def _notify_channel(

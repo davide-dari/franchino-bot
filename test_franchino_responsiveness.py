@@ -15,17 +15,17 @@ class TestSplitSTTWakeWordRecognition:
     """Verifica che tutte le forme tronche e spezzate prodotte da Google STT vengano riconosciute."""
 
     @pytest.mark.parametrize("phrase, expected_wake_sub, expected_cmd", [
-        ("franchi no ci sei", "franchi", "ci sei"),
-        ("fra chi no rispondi", "fra chi", "rispondi"),
-        ("frankie no metti pop", "frankie", "metti pop"),
-        ("franki no suona rock", "franki", "suona rock"),
-        ("franc ino ci senti", "franc", "ci senti"),
-        ("franck ino metti gigi", "franck", "metti gigi"),
-        ("franchi, no metti musica", "franchi", "metti musica"),
-        ("fra chi, no come stai", "fra chi", "come stai"),
-        ("franchino", "franchino", ""),
-        ("franchi no", "franchi", ""),
-        ("fra chi no", "fra chi", ""),
+        ("hey franchi no ci sei", "franchi", "ci sei"),
+        ("ehi fra chi no rispondi", "fra chi", "rispondi"),
+        ("hey frankie no metti pop", "frankie", "metti pop"),
+        ("ehi franki no suona rock", "franki", "suona rock"),
+        ("hey franc ino ci senti", "franc", "ci senti"),
+        ("ehi franck ino metti gigi", "franck", "metti gigi"),
+        ("hey franchi, no metti musica", "franchi", "metti musica"),
+        ("ehi fra chi, no come stai", "fra chi", "come stai"),
+        ("hey franchino", "franchino", ""),
+        ("ehi franchi no", "franchi", ""),
+        ("hey fra chi no", "fra chi", ""),
     ])
     def test_split_wake_detected(self, phrase, expected_wake_sub, expected_cmd):
         has_wake, cmd, tok = FranchinoVoiceSink.extract_wake_and_command(phrase)
@@ -70,34 +70,54 @@ class TestDirectAddressVsThirdPerson(unittest.IsolatedAsyncioTestCase):
         return sink, mock_player
 
     async def test_direct_feedback_audio_handled(self):
-        """'Franchino non ti sento' deve ricevere risposta vocale di feedback audio e non essere scartato."""
+        """'Hey Franchino non ti sento' deve ricevere risposta vocale di feedback audio e non essere scartato."""
         sink, mock_player = self._setup_sink()
         mock_user = MagicMock(id=111, display_name="Davide")
 
-        await sink._handle_transcribed_text(mock_user, "Franchino non ti sento", detected_cmd="non ti sento")
+        await sink._handle_transcribed_text(mock_user, "Hey Franchino non ti sento", detected_cmd="non ti sento")
         mock_player.speak_tts.assert_called_once()
         args, kwargs = mock_player.speak_tts.call_args
         assert "Ti sento forte e chiaro" in args[0] or "riavviati" in args[0]
 
     async def test_direct_liveness_question_handled(self):
-        """'Franchino non rispondi?' e 'Franchino funziona?' non devono essere scartati come terza persona."""
+        """'Hey Franchino non rispondi?' e 'Hey Franchino funziona?' non devono essere scartati come terza persona."""
         sink, mock_player = self._setup_sink()
         mock_user = MagicMock(id=222, display_name="Andrea")
 
-        await sink._handle_transcribed_text(mock_user, "Franchino non rispondi?", detected_cmd="non rispondi?")
+        await sink._handle_transcribed_text(mock_user, "Hey Franchino non rispondi?", detected_cmd="non rispondi?")
         mock_player.speak_tts.assert_called_once()
         args, _ = mock_player.speak_tts.call_args
         assert any(term in args[0].lower() for term in ("magia", "console", "vivo", "forte e chiaro", "sveglio"))
 
     async def test_empty_wake_call_handled(self):
-        """Dire solo 'Franchino' apre il microfono e fa rispondere il bot."""
+        """Dire solo 'Hey Franchino' apre il microfono e fa rispondere il bot."""
         sink, mock_player = self._setup_sink()
         mock_user = MagicMock(id=333, display_name="Elena")
 
-        await sink._handle_transcribed_text(mock_user, "Franchino", detected_cmd="")
+        await sink._handle_transcribed_text(mock_user, "Hey Franchino", detected_cmd="")
         mock_player.speak_tts.assert_called_once()
         args, _ = mock_player.speak_tts.call_args
         assert "Magia! Dimmi tutto" in args[0]
+
+    async def test_franchino_without_hey_ignored(self):
+        """Pronunciare 'Franchino ...' SENZA 'Hey/Ehi' non attiva mai il bot e non produce alcuna risposta."""
+        sink, mock_player = self._setup_sink()
+        mock_user = MagicMock(id=999, display_name="Silente")
+
+        test_phrases = [
+            "Franchino non ti sento",
+            "Franchino non rispondi?",
+            "Franchino",
+            "Franchino metti la musica",
+            "Franchino che ore sono?",
+            "Franchino stop",
+        ]
+        for phrase in test_phrases:
+            mock_player.speak_tts.reset_mock()
+            has_w, cmd, _ = sink.extract_wake_and_command(phrase)
+            self.assertFalse(has_w, f"'{phrase}' non deve essere considerata wake phrase!")
+            await sink._handle_transcribed_text(mock_user, phrase)
+            mock_player.speak_tts.assert_not_called()
 
     async def test_genuine_third_person_filtered(self):
         """Chiacchiere in terza persona su Franchino tra utenti vengono ignorate."""
@@ -270,18 +290,18 @@ class TestDeepVoiceChainEdgeCases(unittest.IsolatedAsyncioTestCase):
         sink, mock_player = self._setup_sink()
         mock_user = MagicMock(id=555, display_name="Luca")
 
-        # "Franchino non rispondi" senza '?'
-        await sink._handle_transcribed_text(mock_user, "Franchino non rispondi", detected_cmd="non rispondi")
+        # "Hey Franchino non rispondi" senza '?'
+        await sink._handle_transcribed_text(mock_user, "Hey Franchino non rispondi", detected_cmd="non rispondi")
         mock_player.speak_tts.assert_called_once()
         mock_player.speak_tts.reset_mock()
 
-        # "Franchino funziona" senza '?'
-        await sink._handle_transcribed_text(mock_user, "Franchino funziona", detected_cmd="funziona")
+        # "Hey Franchino funziona" senza '?'
+        await sink._handle_transcribed_text(mock_user, "Hey Franchino funziona", detected_cmd="funziona")
         mock_player.speak_tts.assert_called_once()
         mock_player.speak_tts.reset_mock()
 
-        # "Franchino non va la musica"
-        await sink._handle_transcribed_text(mock_user, "Franchino non va la musica", detected_cmd="non va la musica")
+        # "Hey Franchino non va la musica"
+        await sink._handle_transcribed_text(mock_user, "Hey Franchino non va la musica", detected_cmd="non va la musica")
         mock_player.speak_tts.assert_called_once()
         mock_player.speak_tts.reset_mock()
 
@@ -318,7 +338,7 @@ class TestDeepVoiceChainEdgeCases(unittest.IsolatedAsyncioTestCase):
         silence_post = b"\x14\x00\x14\x00" * int(48000 * 0.65)
         phrase_pcm = silence_pre + speech + silence_post
 
-        with patch.object(sink.recognizer, "recognize_google", return_value={"alternative": [{"transcript": "franchino ci sei"}]}) as mock_stt:
+        with patch.object(sink.recognizer, "recognize_google", return_value={"alternative": [{"transcript": "hey franchino ci sei"}]}) as mock_stt:
             sink._handle_transcribed_text = AsyncMock()
             await sink._process_utterance(999, MagicMock(display_name="User"), phrase_pcm)
             mock_stt.assert_called_once()
@@ -371,8 +391,8 @@ class TestDeepVoiceChainEdgeCases(unittest.IsolatedAsyncioTestCase):
         sink, mock_player = self._setup_sink()
         mock_user = MagicMock(id=777, display_name="TestUser")
 
-        # Chiamata al solo nome "Franchino"
-        await sink._handle_transcribed_text(mock_user, "Franchino", detected_cmd="")
+        # Chiamata al solo nome "Hey Franchino"
+        await sink._handle_transcribed_text(mock_user, "Hey Franchino", detected_cmd="")
         _, kwargs = mock_player.speak_tts.call_args
         self.assertTrue(kwargs.get("interrupt_music", False), "Chiamata a Franchino deve interrompere la musica")
 
@@ -384,7 +404,7 @@ class TestDeepVoiceChainEdgeCases(unittest.IsolatedAsyncioTestCase):
 
         phrase_pcm = b"\xd0\x00\xd0\x00" * int(48000 * 0.8)
 
-        with patch.object(sink.recognizer, "recognize_google", return_value={"alternative": [{"transcript": "franchino metti musica"}]}):
+        with patch.object(sink.recognizer, "recognize_google", return_value={"alternative": [{"transcript": "hey franchino metti musica"}]}):
             sink._handle_transcribed_text = AsyncMock()
             await sink._process_utterance(888, MagicMock(display_name="UserCmd"), phrase_pcm)
             mock_player.voice_client.stop_playing.assert_called_once()
@@ -534,7 +554,7 @@ class TestFranchinoDeepVoiceResponsiveness(unittest.IsolatedAsyncioTestCase):
         stt_result = {
             "alternative": [
                 {"transcript": "fra chi"},
-                {"transcript": "franchino spiegami come funziona l'aspect fire"}
+                {"transcript": "hey franchino spiegami come funziona l'aspect fire"}
             ]
         }
 
@@ -550,15 +570,15 @@ class TestFranchinoDeepVoiceResponsiveness(unittest.IsolatedAsyncioTestCase):
             self.assertIn("aspect fire", detected.lower())
 
     async def test_anti_feedback_interrupts_for_any_wake_word_phrase(self):
-        """Durante la voce TTS, pronunciare 'Franchino ...' interrompe il TTS anche per comandi generali o UO."""
+        """Durante la voce TTS, pronunciare 'Hey Franchino ...' interrompe il TTS anche per comandi generali o UO."""
         sink, mock_player = self._setup_sink()
         mock_player.is_speaking_tts = True
         mock_player.voice_client.stop_playing = MagicMock()
 
         phrase_pcm = b"\xd0\x00\xd0\x00" * int(48000 * 0.8)
 
-        # Utente dice 'Franchino riavviati' durante il TTS
-        with patch.object(sink.recognizer, "recognize_google", return_value={"alternative": [{"transcript": "franchino riavviati"}]}):
+        # Utente dice 'Hey Franchino riavviati' durante il TTS
+        with patch.object(sink.recognizer, "recognize_google", return_value={"alternative": [{"transcript": "hey franchino riavviati"}]}):
             sink._handle_transcribed_text = AsyncMock()
             await sink._process_utterance(901, MagicMock(id=901, display_name="Admin"), phrase_pcm)
             mock_player.voice_client.stop_playing.assert_called_once()
@@ -584,13 +604,13 @@ class TestFranchinoDeepVoiceResponsiveness(unittest.IsolatedAsyncioTestCase):
             sink._handle_transcribed_text.assert_awaited_once()
 
     async def test_metti_su_query_cleaned(self):
-        """Il comando 'Franchino metti su i Queen' deve cercare 'i Queen' e non 'su i Queen'."""
+        """Il comando 'Hey Franchino metti su i Queen' deve cercare 'i Queen' e non 'su i Queen'."""
         sink, mock_player = self._setup_sink()
         mock_player.source_manager.resolve_url_or_query = AsyncMock(return_value=[MagicMock()])
         mock_player.play_now = AsyncMock()
         user = MagicMock(id=903, display_name="QueenFan")
 
-        await sink._handle_transcribed_text(user, "Franchino metti su i Queen", detected_cmd="metti su i Queen")
+        await sink._handle_transcribed_text(user, "Hey Franchino metti su i Queen", detected_cmd="metti su i Queen")
         mock_player.source_manager.resolve_url_or_query.assert_awaited_once()
         query_searched = mock_player.source_manager.resolve_url_or_query.call_args[0][0]
         self.assertEqual(query_searched.lower(), "i queen")

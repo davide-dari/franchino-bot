@@ -274,10 +274,10 @@ class TestVoiceCommandsSportsDispatch(unittest.IsolatedAsyncioTestCase):
         mock_user.id = 777
         mock_user.display_name = "Matteo"
 
-        # Esecuzione comando vocale "franchino mi dici i match di stasera?"
+        # Esecuzione comando vocale "hey franchino mi dici i match di stasera?"
         await sink._handle_transcribed_text(
             mock_user,
-            "franchino mi dici i match di stasera?",
+            "hey franchino mi dici i match di stasera?",
             detected_cmd="mi dici i match di stasera?"
         )
 

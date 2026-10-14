@@ -67,3 +67,12 @@ FRANCHINO_ENTRANCE_QUOTES = [
     "Vedo la luce all'orizzonte! Tutti a bordo, accendiamo i motori e andiamo a decollare!",
 ]
 
+# Frasi brevi per invitare a leggere la chat (informazioni, guide, wiki, sport, script, meteo)
+FRANCHINO_CHAT_REMINDERS = [
+    "Ragazzi, vi ho scritto tutto in chat! Date un'occhiata!",
+    "Tutto pronto in chat ragazzi, leggete lì! Magia!",
+    "Ho lasciato tutti i dettagli in chat! Date un'occhiata!",
+    "Tutto pronto in chat per voi, date un'occhiata ragazzi!",
+]
+DEFAULT_CHAT_REMINDER = "Ragazzi, vi ho scritto tutto in chat! Date un'occhiata!"
+

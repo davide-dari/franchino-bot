@@ -309,11 +309,7 @@ OUTLANDS_BUILDS: Dict[str, dict] = {
             "2. Lancia Discordance sul mostro più forte per dimezzargli le difese.\n"
             "3. Finiscili con l'arco da distanza di sicurezza mentre le bende ti tengono a piena vita!"
         ),
-        "voice_summary": (
-            "Per il Bardo Arciere ti consiglio questo template da 700 punti: 100 Arceria, Musica, Provocazione, Discordia, "
-            "Tattica, Anatomia e Guarigione. Come aspetto usa Command o Fortune. La tattica è semplice: fai scannare i mostri tra loro "
-            "con Provocazione, abbassagli le difese con Discordia e abbattili da lontano con l'arco. Ti ho mandato la scheda completa in privato!"
-        ),
+        "voice_summary": "Ragazzi, vi ho scritto tutti i dettagli della build del Bardo Arciere in chat! Date un'occhiata!",
     },
     "tamer_mage": {
         "title": "Tamer Mage (Animal Tamer / Summoner)",
@@ -336,11 +332,7 @@ OUTLANDS_BUILDS: Dict[str, dict] = {
             "2. Manda i pet all'attacco con 'All Kill' e posizionati a distanza per curarli con bende (Veterinary) e Greater Heal.\n"
             "3. Lancia debuff e magie di supporto sui boss mentre i tuoi pet infliggono il 90% del danno."
         ),
-        "voice_summary": (
-            "La build Tamer Mage è la più forte per i boss di Outlands: 100 Taming, Animal Lore, Veterinaria, Magery, Meditazione, "
-            "Eval Int e Wrestling o Camping. Come aspetto devi assolutamente usare Command Aspect. Manda i pet con All Kill, tienili "
-            "vivi con bende e magie di supporto. Ti ho inviato tutti i dettagli in messaggio privato!"
-        ),
+        "voice_summary": "Ragazzi, vi ho scritto tutti i dettagli della build Tamer Mage in chat! Date un'occhiata!",
     },
     "dexxer_spada": {
         "title": "Dexxer Spadaccino / Melee (Swordsman Paladin)",
@@ -363,11 +355,7 @@ OUTLANDS_BUILDS: Dict[str, dict] = {
             "2. Usa spadoni a due mani (Halberd o Bardiche) per attivare i colpi ad area (Cleave) su gruppi di mostri.\n"
             "3. Applica bende in automatico ad ogni secondo mentre assorbi i colpi con Parrying."
         ),
-        "voice_summary": (
-            "Per il Dexxer Spadaccino usa: 100 Swordsmanship, Tattica, Anatomia, Guarigione, Parrying, Chivalry e Magic Resistance. "
-            "L'aspetto migliore è Fire Aspect per i danni ad area esplosivi con alabarda. Attiva i buff di Chivalry e affetta i mostri a "
-            "colpi ravvicinati. Ti ho mandato la build completa in privato!"
-        ),
+        "voice_summary": "Ragazzi, vi ho scritto tutti i dettagli della build Dexxer Spadaccino in chat! Date un'occhiata!",
     },
     "ladro_dungeon": {
         "title": "Dungeon Chest Thief & Treasure Hunter (Ladro Scassinatore)",
@@ -390,11 +378,7 @@ OUTLANDS_BUILDS: Dict[str, dict] = {
             "2. Avvicinati ai Dungeon Chests: disinnesca la trappola con Remove Trap.\n"
             "3. Fai doppio click sui Lockpicks, scassina il forziere, svuota il bottino e scappa con Recall!"
         ),
-        "voice_summary": (
-            "La build da Ladro dei Forzieri è la più ricca per fare soldi facili: 100 Lockpicking, Remove Trap, Hiding, Stealth, "
-            "Magery, Meditazione e Item ID o Cartography. Aspetto Fortune o Shadow. Cammini invisibile nei dungeon, disinneschi "
-            "le trappole, scassini i forzieri e scappi con il malloppo. Ti ho inviato la scheda in messaggio privato!"
-        ),
+        "voice_summary": "Ragazzi, vi ho scritto tutti i dettagli della build da Ladro dei Forzieri in chat! Date un'occhiata!",
     },
     "summoner_necro": {
         "title": "Necro Mage Summoner (Negromante Invocatore)",
@@ -417,11 +401,7 @@ OUTLANDS_BUILDS: Dict[str, dict] = {
             "2. Lancia Evil Omen e maledizioni di Necromancy sui bersagli.\n"
             "3. Ricarica mana assorbendo gli spiriti con Spirit Speaking e finisci ad area con Wither."
         ),
-        "voice_summary": (
-            "Per il Necromante Invocatore ti consiglio: 100 Necromancy, Spirit Speaking, Magery, Meditazione, Eval Int, Inscription "
-            "e Wrestling. Come aspetto usa Death Aspect per le esplosioni oscure. Evoca spiriti e demoni, lancia maledizioni e guarda i mostri "
-            "cadere senza mai finire il mana. Trovi tutti i dettagli nel messaggio privato!"
-        ),
+        "voice_summary": "Ragazzi, vi ho scritto tutti i dettagli della build Necromante in chat! Date un'occhiata!",
     },
     "starter_gold": {
         "title": "Miglior Build per Iniziare da Zero (Starter Gold Farm)",
@@ -444,11 +424,7 @@ OUTLANDS_BUILDS: Dict[str, dict] = {
             "2. Vai nei Sanctuary Dungeons dove non si può essere attaccati da altri giocatori (no PvP).\n"
             "3. Provoca i mostri tra loro e raccogli oro, pergamene e reagenti per comprare la tua prima casa!"
         ),
-        "voice_summary": (
-            "Se stai iniziando da zero su Outlands, la build migliore è il Bardo Melee o Bardo Arciere: ti bastano arco, bende e un liuto. "
-            "Alza Provocazione e Musica: nei Sanctuary Dungeons sei al sicuro dal PvP, fai combattere i mostri tra loro e tiri su centinaia "
-            "di migliaia di gold in pochissimo tempo. Ti ho mandato la guida per principianti in privato!"
-        ),
+        "voice_summary": "Ragazzi, vi ho scritto tutti i dettagli della build Starter in chat! Date un'occhiata!",
     },
     "meta_overview": {
         "title": "Le 6 Migliori Build Meta di UO Outlands (700 Punti Skill)",
@@ -472,11 +448,7 @@ OUTLANDS_BUILDS: Dict[str, dict] = {
             "• Vuoi farmare in totale relax nei dungeon? Scegli il Bardo Arciere o il Ladro!\n"
             "Dì *\"Franchino build Tamer\"* o *\"Franchino build Dexxer\"* per la guida dettagliata di ciascuna!"
         ),
-        "voice_summary": (
-            "Le migliori build su Outlands sono 6: Bardo Arciere per i dungeon in solitaria; Tamer Mage per dominare i boss con i pet; "
-            "Dexxer con Spada per il corpo a corpo ad area; Summoner Necro per evocare orde oscure; Ladro per svuotare i forzieri; "
-            "e lo Starter Gold per iniziare da zero e fare subito centinaia di migliaia di monete! Chiedimi una build specifica per tutti i dettagli!"
-        ),
+        "voice_summary": "Ragazzi, vi ho scritto la panoramica completa delle build in chat! Date un'occhiata!",
     },
 }
 
@@ -501,11 +473,7 @@ OUTLANDS_BEST_PETS: dict = {
         "• **Command Aspect**: L'Aspetto obbligatorio per i Tamer, aumenta del 100%+ i danni e la sopravvivenza dei pet.\n"
         "• **Macro All Kill**: Imposta su Razor una macro veloce per mandare tutti i pet sul bersaglio stando a distanza di sicurezza per curarli con bende (Veterinary) e Greater Heal."
     ),
-    "voice_summary": (
-        "Per farmare su Outlands i migliori pet sono: 5 Frenzied Ostard per velocità e danni altissimi all'inizio; "
-        "Drake o Eldritch Drake per tankare mostri pesanti nei dungeon; oppure Scorpioni e Corpse Worm per il veleno letale sui boss. "
-        "Potenziali sempre con il Taming Bestiary e il Command Aspect! Ti ho mandato tutti i dettagli in messaggio privato!"
-    ),
+    "voice_summary": "Ragazzi, vi ho scritto tutti i consigli sui migliori pet in chat! Date un'occhiata!",
 }
 
 
@@ -523,11 +491,7 @@ OUTLANDS_SPECIAL_ITEMS: Dict[str, dict] = {
             "• **Come livellare**: Guadagnando Weapon o Spell Exp nei dungeon sblocchi nuovi castoni (Link Slots).\n"
             "• **Inserire Links**: Puoi incastonare Passive Links (danno, gold, exp, difese) e Medallions rari comprati o droppati dai boss."
         ),
-        "voice_summary": (
-            "La Mastery Chain è la collana più importante di Outlands: si indossa nel collo e si livella facendo esperienza nei dungeon. "
-            "Facendo doppio click apri il menu per incastonare i Links e i Medaglioni, che ti danno bonus passivi enormi a danno, oro guadagnato "
-            "e resistenze. Ti ho inviato la guida completa della catena in messaggio privato!"
-        ),
+        "voice_summary": "Ragazzi, vi ho scritto tutti i dettagli sulla Mastery Chain in chat! Date un'occhiata!",
     },
     "aspect_core": {
         "name": "Aspect Core & Aspect Distillation (Aspetti di Maestria)",
@@ -539,11 +503,7 @@ OUTLANDS_SPECIAL_ITEMS: Dict[str, dict] = {
             "• **Come si usano le Distillations**: Servono per caricare i punti esperienza del tuo Aspetto attivo.\n"
             "• **Attivazione su Equip**: Una volta sbloccato l'aspetto, fai doppio click sull'Aspect Gear per infondere armi, armature o spellbook."
         ),
-        "voice_summary": (
-            "Gli Aspect Core e le Distillations servono per sbloccare e potenziare i 14 Aspetti di Outlands. Fai doppio click sul tuo Aspect Tome: "
-            "i Core sbloccano i Tier dell'aspetto, mentre le Distillations caricano l'esperienza. Poi infondi le tue armi e armature per scatenare "
-            "effetti devastanti. Ti ho mandato la guida degli aspetti in privato!"
-        ),
+        "voice_summary": "Ragazzi, vi ho scritto tutti i dettagli sugli Aspect Core in chat! Date un'occhiata!",
     },
     "rune_codex": {
         "name": "Rune Codex (Codice delle Rune)",
@@ -555,11 +515,7 @@ OUTLANDS_SPECIAL_ITEMS: Dict[str, dict] = {
             "• **Memorizzare Rune**: Trascina una runa marcata sopra il Codex per salvarla per sempre (non perdi mai le coordinate!).\n"
             "• **Viaggiare**: Clicca su una destinazione e premi Recall, Gate Travel o Sacred Journey."
         ),
-        "voice_summary": (
-            "Il Rune Codex è il libro magico di viaggio di Outlands. Fai doppio click sopra per aprirlo: trascina le rune marcate dentro "
-            "per salvarle per sempre senza rischio di perderle. Puoi viaggiare con Recall, Gate Travel o Sacred Journey con un solo click. "
-            "Ti ho inviato il link alla pagina della Wiki in messaggio privato!"
-        ),
+        "voice_summary": "Ragazzi, vi ho scritto tutti i dettagli sul Rune Codex in chat! Date un'occhiata!",
     },
     "resource_hoard": {
         "name": "Resource Hoard (Forziere di Raccolta Risorse)",
@@ -570,10 +526,7 @@ OUTLANDS_SPECIAL_ITEMS: Dict[str, dict] = {
             "• **Come si usa**: Fai doppio click o premi il pulsante 'Deposit All' mentre sei vicino al forziere.\n"
             "• **Funzione**: Svuota istantaneamente il tuo zaino da tutti i materiali da crafting (lingotti, legna, pelli, erbe, reagenti, gemme) organizzandoli da solo!"
         ),
-        "voice_summary": (
-            "Il Resource Hoard è un contenitore per la casa comodissimo: quando torni dal farm, fai doppio click sopra e premi Deposit All. "
-            "Ti svuota lo zaino in un secondo sistemando lingotti, legna, pelli, erbe e reagenti nei rispettivi scomparti. Ti ho mandato il link in privato!"
-        ),
+        "voice_summary": "Ragazzi, vi ho scritto tutti i dettagli sul Resource Hoard in chat! Date un'occhiata!",
     },
     "dungeon_mushrooms": {
         "name": "Dungeon Mushrooms (Funghi dei Dungeon)",
@@ -585,11 +538,7 @@ OUTLANDS_SPECIAL_ITEMS: Dict[str, dict] = {
             "• **Effetti**: Forniscono un buff di 10 minuti che aumenta il danno PvM, la rigenerazione di mana e stamina.\n"
             "• **Mushroom Pouch**: Puoi conservarli nella sacca speciale Mushroom Pouch per non farli marcire."
         ),
-        "voice_summary": (
-            "I Dungeon Mushrooms sono funghi magici che trovi per terra nei dungeon. Raccoglili e fai doppio click per mangiarli: ti danno "
-            "un buff di dieci minuti che aumenta il danno contro i mostri e ricarica mana e stamina. Puoi conservarli nella Mushroom Pouch. "
-            "Tutti i dettagli te li ho inviati in privato!"
-        ),
+        "voice_summary": "Ragazzi, vi ho scritto tutti i dettagli sui Dungeon Mushrooms in chat! Date un'occhiata!",
     },
     "taming_bestiary": {
         "name": "Taming Bestiary (Bestiario delle Creature)",
@@ -600,11 +549,7 @@ OUTLANDS_SPECIAL_ITEMS: Dict[str, dict] = {
             "• **Come si usa**: Fai doppio click sul Bestiary per vedere l'elenco di tutte le creature addomesticabili del server.\n"
             "• **Progressione**: Man mano che combatti con un tipo di creatura, accumuli exp nel Bestiario per sbloccare Follower Traits e potenziare i tuoi pet fino al Tier 10!"
         ),
-        "voice_summary": (
-            "Il Taming Bestiary è il libro fondamentale per chi usa il Tamer: fai doppio click sopra per vedere le statistiche di tutti i pet del gioco. "
-            "Combattendo con i tuoi pet accumuli punti nel libro per sbloccare abilità uniche e potenziare le loro statistiche fino al Tier 10. "
-            "Ti ho inviato il link diretto in messaggio privato!"
-        ),
+        "voice_summary": "Ragazzi, vi ho scritto tutti i dettagli sul Bestiario in chat! Date un'occhiata!",
     },
     "echoes": {
         "name": "Echoes (Echi dell'Anima per Cambio Classe)",
@@ -615,11 +560,7 @@ OUTLANDS_SPECIAL_ITEMS: Dict[str, dict] = {
             "• **Come si usa**: Fai doppio click sull'Echo per salvare il tuo template attuale o caricarne uno salvato.\n"
             "• **Vantaggio**: Ti permette di passare all'istante da Guerriero a Mago o Bardo in 5 secondi senza dover rialzare le skill da capo!"
         ),
-        "voice_summary": (
-            "Gli Echoes sono cristalli magici che memorizzano un intero template di abilità da 700 punti. Facendo doppio click puoi cambiare "
-            "completamente classe in cinque secondi, passando ad esempio da guerriero a mago senza dover rimacrare le abilità da zero. "
-            "Tutti i dettagli li trovi nel messaggio privato!"
-        ),
+        "voice_summary": "Ragazzi, vi ho scritto tutti i dettagli sugli Echoes in chat! Date un'occhiata!",
     },
     "mastery_scrolls": {
         "name": "Mastery Scrolls (Pergamene Skill 105-120)",
@@ -630,11 +571,7 @@ OUTLANDS_SPECIAL_ITEMS: Dict[str, dict] = {
             "• **Come si usa**: Fai doppio click sulla pergamena corrispondente alla tua abilità (es. Swordsmanship 110).\n"
             "• **Effetto**: Alza il limite massimo della skill sopra 100 (fino a 120), garantendo precisione, danno e difese superiori."
         ),
-        "voice_summary": (
-            "Le Mastery Scrolls sono pergamene rare dei boss che alzano il limite massimo delle tue abilità sopra il cap di 100, "
-            "fino a 120. Fai doppio click sulla pergamena della tua skill per sbloccare il cap superiore e massimizzare i tuoi danni. "
-            "Ti ho mandato il link in messaggio privato!"
-        ),
+        "voice_summary": "Ragazzi, vi ho scritto tutti i dettagli sulle Mastery Scrolls in chat! Date un'occhiata!",
     },
     "lockpicks": {
         "name": "Lockpicks & Trap Wire (Grimaldelli e Kit Scasso)",
@@ -645,10 +582,7 @@ OUTLANDS_SPECIAL_ITEMS: Dict[str, dict] = {
             "• **Scassinare**: Fai doppio click sui Lockpicks e seleziona il Dungeon Chest o il forziere del tesoro.\n"
             "• **Livelli**: Richiede da 50 a 100 Lockpicking in base al Tier della cassa (da Tier 1 a Tier 8 paragon chests)."
         ),
-        "voice_summary": (
-            "I Lockpicks si usano per aprire i forzieri dei dungeon e le mappe del tesoro. Prima usa Remove Trap con il Trap Wire nello zaino "
-            "per evitare che la cassa ti esploda in faccia, poi fai doppio click sui Lockpicks e mira al forziere. Ti ho mandato tutti i dettagli in privato!"
-        ),
+        "voice_summary": "Ragazzi, vi ho scritto tutti i dettagli sui Lockpicks in chat! Date un'occhiata!",
     },
 }
 
@@ -1290,11 +1224,7 @@ def _search_outlands_wiki_sync(question: str) -> Optional[dict]:
         else:
             spoken_en = spoken_en[:420] + "..."
 
-    spoken_it = translate_text(spoken_en, "en", "it")
-    voice_answer = (
-        f"Ecco cosa dice la Wiki di Outlands su {actual_title}, nella sezione {translated_sec_title}: "
-        f"{spoken_it} Ti ho mandato il link diretto alla sezione in messaggio privato!"
-    )
+    voice_answer = f"Ragazzi, vi ho scritto tutti i dettagli su {actual_title} in chat! Date un'occhiata!"
 
     # Elenco di tutte le sezioni della pagina con link cliccabili per approfondire in DM
     other_section_links: List[str] = []
@@ -1312,6 +1242,7 @@ def _search_outlands_wiki_sync(question: str) -> Optional[dict]:
         "section_title_it": translated_sec_title,
         "section_url": ref_section_url,
         "voice_answer": voice_answer,
+        "voice_summary": voice_answer,
         "translated_body": translated_full,
         "section_links_md": "\n".join(other_section_links),
         "thumbnail_url": thumbnail_url,
@@ -1355,6 +1286,7 @@ def _resolve_pets_query(question: str) -> Optional[dict]:
             "section_title": "Top Farming Pets & Bestiary Guide",
             "section_url": b["wiki_url"],
             "voice_answer": b["voice_summary"],
+            "voice_summary": b["voice_summary"],
             "embed": embed,
         }
 
@@ -1388,6 +1320,7 @@ def _resolve_pets_query(question: str) -> Optional[dict]:
             "section_title": "Top Farming Pets & Bestiary Guide",
             "section_url": b["wiki_url"],
             "voice_answer": b["voice_summary"],
+            "voice_summary": b["voice_summary"],
             "embed": embed,
         }
     return None
@@ -1444,6 +1377,7 @@ def _resolve_build_query(question: str) -> Optional[dict]:
         "section_title": "Skill Template & Aspect Guide",
         "section_url": b["wiki_url"],
         "voice_answer": b["voice_summary"],
+        "voice_summary": b["voice_summary"],
         "embed": embed,
     }
 
@@ -1495,6 +1429,7 @@ def _resolve_special_item_query(question: str) -> Optional[dict]:
         "section_title": "Come si usa & Meccaniche",
         "section_url": it["wiki_url"],
         "voice_answer": it["voice_summary"],
+        "voice_summary": it["voice_summary"],
         "embed": embed,
     }
 
@@ -1576,11 +1511,7 @@ def _resolve_creature_query(question: str, conn: sqlite3.Connection) -> Optional
             f"• **Danno Melee**: `{min_d} - {max_d}` | **Resistenza Magica**: `{resist}`\n"
             f"• **Gruppo Slayer**: `{slayer}` | **Valore Oro**: `~{gold:,} gp`"
         )
-        voice_answer = (
-            f"L'esemplare di {name} richiede {min_tam or 'N/D'} di Animal Taming e occupa {slots or 1} slot di controllo! "
-            f"Ha {hits:,} punti vita" + (f" e l'abilità {abils}" if abils else "") + f". Si trova nei meandri di {loc}! "
-            "Ti ho inviato la scheda tecnica completa nei dettagli! Magia!"
-        )
+        voice_answer = f"Ragazzi, vi ho scritto tutti i dettagli e le statistiche su {name} in chat! Date un'occhiata!"
     else:
         embed_title = f"👹 {name} — Mostro di UO Outlands"
         desc = (
@@ -1592,11 +1523,7 @@ def _resolve_creature_query(question: str, conn: sqlite3.Connection) -> Optional
             f"• **Bottino Medio in Oro**: `~{gold:,} gp`\n"
             f"• **Habitat / Dungeon**: `{loc}`"
         )
-        voice_answer = (
-            f"Il {name} si trova a {loc}! Ha ben {hits:,} punti vita, appartiene allo slayer {slayer} "
-            f"e rilascia circa {gold:,} monete d'oro! Fai molta attenzione nei dungeon ragazzi! "
-            "Ti ho mandato tutti i dati della creatura in messaggio privato! Magia!"
-        )
+        voice_answer = f"Ragazzi, vi ho scritto tutti i dettagli e le statistiche su {name} in chat! Date un'occhiata!"
 
     embed = discord.Embed(
         title=embed_title,
@@ -1616,6 +1543,7 @@ def _resolve_creature_query(question: str, conn: sqlite3.Connection) -> Optional
         "section_title": "Statistiche & Proprietà Ufficiali",
         "section_url": creature_url,
         "voice_answer": voice_answer,
+        "voice_summary": voice_answer,
         "embed": embed,
     }
 
@@ -1674,11 +1602,7 @@ def _resolve_dungeon_query(question: str, conn: sqlite3.Connection) -> Optional[
             desc += f"• **{t['name']}** (Min Taming: `{t['min_taming']}`, Slot: `{t['control_slots']}`)\n"
         desc += "\n"
 
-    voice_answer = (
-        f"Il dungeon {matched} è uno dei più caldi di Outlands! I boss principali sono {top_boss_names}, "
-        f"con mostri di tipo {slayer_str}! Prepara armi con questi slayer e fai scorta di bende ragazzi! "
-        "Ti ho mandato la guida completa e i boss in messaggio privato! Magia!"
-    )
+    voice_answer = f"Ragazzi, vi ho scritto tutta la guida del dungeon {matched} in chat! Date un'occhiata!"
 
     embed = discord.Embed(
         title=f"🏰 Dungeon Guide: {matched}",
@@ -1698,6 +1622,7 @@ def _resolve_dungeon_query(question: str, conn: sqlite3.Connection) -> Optional[
         "section_title": "Guida, Boss & Creature",
         "section_url": dungeon_url,
         "voice_answer": voice_answer,
+        "voice_summary": voice_answer,
         "embed": embed,
     }
 
@@ -1923,22 +1848,14 @@ def _resolve_local_knowledge_page(question: str, conn: sqlite3.Connection) -> Op
     if len(spoken_raw) > 380:
         cut = spoken_raw[:380].rfind(".")
         spoken_raw = spoken_raw[: cut + 1] if cut > 140 else spoken_raw[:380] + "..."
-    spoken_it = translate_text(spoken_raw, "en", "it")
-
-    training_note = ""
-    if training_sec:
-        training_note = " Ho incluso anche la scaletta completa di allenamento e le formule!"
-
-    voice_answer = (
-        f"Ragazzi, ecco la guida approfondita su {actual_title}: {spoken_it}{training_note} "
-        "Ti ho inviato tutti i dettagli, le formule e gli script pronti in chat! Magia!"
-    )
+    voice_answer = f"Ragazzi, vi ho scritto tutta la guida su {actual_title} in chat! Date un'occhiata!"
 
     return {
         "page_title": actual_title,
         "section_title": translated_sec_title,
         "section_url": ref_sec_url,
         "voice_answer": voice_answer,
+        "voice_summary": voice_answer,
         "embed": embed,
         "translated_body": translated_overview,
         "thumbnail_url": thumbnail_url,
@@ -2282,12 +2199,7 @@ def get_outlands_help_embed(page_count: int = 2212, creature_count: int = 1301) 
 
     embed.set_footer(text=f"Franchino UO Outlands Encyclopedia \u2022 {page_count} pagine \u2022 {creature_count} creature \u2022 wiki.uooutlands.com")
 
-    voice_answer = (
-        f"Magia ragazzi! Sono il vostro esperto di Ultima Online Outlands! "
-        f"Ho nel mio archivio {page_count} pagine ufficiali e {creature_count} creature dalla wiki. "
-        "Potete chiedermi tutto su skill, dungeon, creature, build, aspetti, pet e meccaniche del gioco! "
-        "Vi ho mandato la guida completa degli argomenti in chat! Chiudi gli occhi e chiedi qualsiasi cosa... Magia!"
-    )
+    voice_answer = "Ragazzi, vi ho scritto tutta la guida di Outlands in chat! Date un'occhiata!"
 
     return embed, voice_answer
 

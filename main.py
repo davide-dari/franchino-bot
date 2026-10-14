@@ -1588,7 +1588,7 @@ async def timer_cmd(ctx: commands.Context, durata: str, *, motivo: Optional[str]
             msg = f"Nessun timer attivo al momento, {ctx.author.display_name}!"
             await ctx.send(f"⏰ {msg}")
             if player.voice_client and player.voice_client.is_connected():
-                asyncio.create_task(player.speak_tts(msg, wait=False, interrupt_music=True))
+                asyncio.create_task(player.speak_tts("Ragazzi, vi ho scritto in chat: nessun timer attivo! Date un'occhiata!", wait=False, interrupt_music=True))
         else:
             t = timers[0]
             rem_str = format_duration_italian(int(t.remaining_seconds))
@@ -1603,7 +1603,7 @@ async def timer_cmd(ctx: commands.Context, durata: str, *, motivo: Optional[str]
             embed.add_field(name="Impostato da", value=t.user_name, inline=True)
             await ctx.send(embed=embed)
             if player.voice_client and player.voice_client.is_connected():
-                asyncio.create_task(player.speak_tts(msg, wait=False, interrupt_music=True))
+                asyncio.create_task(player.speak_tts("Ragazzi, vi ho scritto lo stato dei timer in chat! Date un'occhiata!", wait=False, interrupt_music=True))
         return
 
     if clean_d in ("cancella", "stop", "elimina", "annulla", "clear", "cancel"):
@@ -1614,13 +1614,9 @@ async def timer_cmd(ctx: commands.Context, durata: str, *, motivo: Optional[str]
             names = ", ".join([c.label for c in cancelled])
             msg = f"Timer per '{names}' cancellato con successo ragazzi!"
             await ctx.send(f"⏰ {msg}")
-            if player.voice_client and player.voice_client.is_connected():
-                asyncio.create_task(player.speak_tts(msg, wait=False, interrupt_music=True))
         else:
             msg = "Nessun timer attivo da cancellare ragazzi!"
             await ctx.send(f"⏰ {msg}")
-            if player.voice_client and player.voice_client.is_connected():
-                asyncio.create_task(player.speak_tts(msg, wait=False, interrupt_music=True))
         return
 
     full_text = f"{durata} {motivo or ''}".strip()
@@ -1651,8 +1647,6 @@ async def timer_cmd(ctx: commands.Context, durata: str, *, motivo: Optional[str]
     embed.add_field(name="Autore", value=ctx.author.display_name, inline=True)
     embed.set_footer(text="Franchino Bot • Timer & Promemoria")
     await ctx.send(embed=embed)
-    if player.voice_client and player.voice_client.is_connected():
-        asyncio.create_task(player.speak_tts(v_msg, wait=False, interrupt_music=True, keep_paused_after=False))
 
 
 @bot.hybrid_command(

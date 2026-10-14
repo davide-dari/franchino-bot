@@ -261,14 +261,12 @@ async def handle_voice_admin_command(
         await notify_cb(
             f"⛔ **{user.display_name}**, non hai il permesso **{perm_label}** per eseguire questo comando da Admin!"
         )
-        await player.speak_tts(f"Eh no {user.display_name}, non hai i permessi da amministratore per farlo!")
 
     async def _bot_missing_perm(action_desc: str):
         await notify_cb(
             f"⚠️ Non posso **{action_desc}** perché il ruolo di **Franchino** non ha il permesso `Amministratore` "
             f"o si trova sotto il ruolo dell'utente nelle impostazioni del server!"
         )
-        await player.speak_tts("Non ho i permessi necessari sul server, sposta il ruolo di Franchino più in alto!")
 
     # ==========================================================================
     # 1. SPOSTA TUTTI IN UN'ALTRA STANZA VOCALE ("sposta tutti in...", "porta tutti in...")
@@ -289,7 +287,6 @@ async def handle_voice_admin_command(
         if not dest_ch:
             ch_names = ", ".join(c.name for c in guild.voice_channels)
             await notify_cb(f"⚠️ Non trovo il canale vocale **\"{dest_query}\"**! *(Canali vocali: {ch_names})*")
-            await player.speak_tts(f"Non trovo il canale vocale {dest_query}!")
             return True
 
         if not current_vch:
@@ -316,7 +313,6 @@ async def handle_voice_admin_command(
         await notify_cb(
             f"🌪️ **{user.display_name}** ha spostato tutta la stanza (**{moved_count} persone** + Franchino) in **{dest_ch.name}**!"
         )
-        await player.speak_tts(f"Ho spostato tutti in {dest_ch.name}!")
         return True
 
     # ==========================================================================
@@ -341,18 +337,15 @@ async def handle_voice_admin_command(
         target = await find_member_in_guild(guild, player, target_name, exclude_uid=uid)
         if not target:
             await notify_cb(f"⚠️ Non trovo nessun utente chiamato **\"{target_name}\"**!")
-            await player.speak_tts(f"Non trovo {target_name} sul server!")
             return True
 
         try:
             await target.move_to(current_vch, reason=f"Portato qui da {user.display_name}")
             await notify_cb(f"🧲 **{user.display_name}** ha portato **{target.display_name}** nella stanza **{current_vch.name}**!")
-            await player.speak_tts(f"Ho portato {target.display_name} qui da noi!")
         except discord.Forbidden:
             await _bot_missing_perm(f"spostare {target.display_name}")
         except Exception as e:
             await notify_cb(f"⚠️ **{target.display_name}** non è connesso a nessun canale vocale al momento! ({e})")
-            await player.speak_tts(f"{target.display_name} non è collegato in vocale!")
         return True
 
     # ==========================================================================
@@ -376,14 +369,12 @@ async def handle_voice_admin_command(
             target = await find_member_in_guild(guild, player, target_name, exclude_uid=uid)
             if not target:
                 await notify_cb(f"⚠️ Non ho trovato nessun membro chiamato **\"{target_name}\"**!")
-                await player.speak_tts(f"Non trovo {target_name}!")
                 return True
 
             dest_ch = find_voice_channel_in_guild(guild, dest_query, current_vch)
             if not dest_ch:
                 ch_names = ", ".join(c.name for c in guild.voice_channels)
                 await notify_cb(f"⚠️ Non ho trovato il canale vocale **\"{dest_query}\"**! *(Canali: {ch_names})*")
-                await player.speak_tts(f"Non trovo la stanza {dest_query}!")
                 return True
 
             try:
@@ -391,12 +382,10 @@ async def handle_voice_admin_command(
                 await notify_cb(
                     f"🚪 **{user.display_name}** ha spostato **{target.display_name}** nel canale vocale **{dest_ch.name}**!"
                 )
-                await player.speak_tts(f"Ho spostato {target.display_name} in {dest_ch.name}!")
             except discord.Forbidden:
                 await _bot_missing_perm(f"spostare {target.display_name}")
             except Exception:
                 await notify_cb(f"⚠️ Non posso spostare **{target.display_name}** (forse non è in vocale).")
-                await player.speak_tts(f"{target.display_name} non è collegato in vocale!")
             return True
 
     # ==========================================================================
@@ -418,13 +407,11 @@ async def handle_voice_admin_command(
             target = await find_member_in_guild(guild, player, target_name, exclude_uid=uid)
             if not target:
                 await notify_cb(f"⚠️ Non trovo nessuno chiamato **\"{target_name}\"**!")
-                await player.speak_tts(f"Non trovo {target_name}!")
                 return True
 
             try:
                 await target.move_to(None, reason=f"Disconnesso dalla vocale da {user.display_name}")
                 await notify_cb(f"👢 **{user.display_name}** ha disconnesso **{target.display_name}** dal canale vocale!")
-                await player.speak_tts(f"Ho buttato fuori {target.display_name} dalla stanza!")
             except discord.Forbidden:
                 await _bot_missing_perm(f"disconnettere {target.display_name}")
             except Exception as e:
@@ -452,7 +439,6 @@ async def handle_voice_admin_command(
                 except Exception:
                     pass
         await notify_cb(f"🔇 **{user.display_name}** ha mutato **{count} persone** nella stanza!")
-        await player.speak_tts("Tutti mutati! Silenzio in sala!")
         return True
 
     if cmd_lower in ("smuta tutti", "togli il muto a tutti", "ridai la voce a tutti", "riattiva tutti") and current_vch:
@@ -473,7 +459,6 @@ async def handle_voice_admin_command(
                 except Exception:
                     pass
         await notify_cb(f"🎙️ **{user.display_name}** ha tolto il muto a tutta la stanza (**{count} persone**)!")
-        await player.speak_tts("Ho ridato la voce a tutti!")
         return True
 
     unmute_match = re.match(
@@ -491,13 +476,11 @@ async def handle_voice_admin_command(
         target = await find_member_in_guild(guild, player, target_name, exclude_uid=0)
         if not target:
             await notify_cb(f"⚠️ Non trovo nessuno chiamato **\"{target_name}\"**!")
-            await player.speak_tts(f"Non trovo {target_name}!")
             return True
 
         try:
             await target.edit(mute=False, reason=f"Smutato da {user.display_name}")
             await notify_cb(f"🎙️ **{user.display_name}** ha tolto il muto a **{target.display_name}**!")
-            await player.speak_tts(f"Ho tolto il muto a {target.display_name}!")
         except discord.Forbidden:
             await _bot_missing_perm(f"smutare {target.display_name}")
         except Exception as e:
@@ -520,13 +503,11 @@ async def handle_voice_admin_command(
             target = await find_member_in_guild(guild, player, target_name, exclude_uid=uid)
             if not target:
                 await notify_cb(f"⚠️ Non trovo nessuno chiamato **\"{target_name}\"**!")
-                await player.speak_tts(f"Non trovo {target_name}!")
                 return True
 
             try:
                 await target.edit(mute=True, reason=f"Mutato da {user.display_name}")
                 await notify_cb(f"🔇 **{user.display_name}** ha mutato il microfono di **{target.display_name}**!")
-                await player.speak_tts(f"Ho mutato {target.display_name}!")
             except discord.Forbidden:
                 await _bot_missing_perm(f"mutare {target.display_name}")
             except Exception as e:
@@ -554,7 +535,6 @@ async def handle_voice_admin_command(
         try:
             await target.edit(deafen=False, reason=f"Undeafen da {user.display_name}")
             await notify_cb(f"🎧 **{user.display_name}** ha riattivato l'audio in cuffia a **{target.display_name}**!")
-            await player.speak_tts(f"Ho riattivato le cuffie a {target.display_name}!")
         except discord.Forbidden:
             await _bot_missing_perm(f"riattivare l'audio a {target.display_name}")
         return True
@@ -577,7 +557,6 @@ async def handle_voice_admin_command(
         try:
             await target.edit(deafen=True, reason=f"Deafen da {user.display_name}")
             await notify_cb(f"🙉 **{user.display_name}** ha disattivato l'audio in cuffia a **{target.display_name}**!")
-            await player.speak_tts(f"Ho disattivato l'audio a {target.display_name}!")
         except discord.Forbidden:
             await _bot_missing_perm(f"disattivare l'audio a {target.display_name}")
         return True
@@ -603,7 +582,6 @@ async def handle_voice_admin_command(
                 reason=f"Creato da {user.display_name} via Franchino",
             )
             await notify_cb(f"🎭 **{user.display_name}** ha creato il nuovo ruolo {new_role.mention}!")
-            await player.speak_tts(f"Ho creato il ruolo {role_name}!")
         except discord.Forbidden:
             await _bot_missing_perm(f"creare il ruolo {role_name}")
         return True
@@ -637,12 +615,10 @@ async def handle_voice_admin_command(
         role = find_role_in_guild(guild, role_q)
         if not target:
             await notify_cb(f"⚠️ Non ho trovato l'utente **\"{target_q}\"**!")
-            await player.speak_tts(f"Non trovo l'utente {target_q}!")
             return True
         if not role:
             roles_list = ", ".join(r.name for r in guild.roles if not r.is_default() and not r.managed)[:200]
             await notify_cb(f"⚠️ Non ho trovato il ruolo **\"{role_q}\"**! *(Ruoli presenti: {roles_list})*")
-            await player.speak_tts(f"Non trovo il ruolo {role_q}!")
             return True
 
         try:
@@ -650,7 +626,6 @@ async def handle_voice_admin_command(
             await notify_cb(
                 f"🎭 **{user.display_name}** ha rimosso il ruolo {role.mention} a **{target.display_name}**!"
             )
-            await player.speak_tts(f"Ho tolto il ruolo {role.name} a {target.display_name}!")
         except discord.Forbidden:
             await _bot_missing_perm(f"togliere il ruolo {role.name}")
         return True
@@ -689,12 +664,10 @@ async def handle_voice_admin_command(
         role = find_role_in_guild(guild, role_q)
         if not target:
             await notify_cb(f"⚠️ Non ho trovato l'utente **\"{target_q}\"**!")
-            await player.speak_tts(f"Non trovo l'utente {target_q}!")
             return True
         if not role:
             roles_list = ", ".join(r.name for r in guild.roles if not r.is_default() and not r.managed)[:200]
             await notify_cb(f"⚠️ Non ho trovato il ruolo **\"{role_q}\"**! *(Ruoli presenti: {roles_list})*")
-            await player.speak_tts(f"Non trovo il ruolo {role_q}!")
             return True
 
         try:
@@ -702,7 +675,6 @@ async def handle_voice_admin_command(
             await notify_cb(
                 f"🎭 **{user.display_name}** ha assegnato il ruolo {role.mention} a **{target.display_name}**!"
             )
-            await player.speak_tts(f"Ho assegnato il ruolo {role.name} a {target.display_name}!")
         except discord.Forbidden:
             await _bot_missing_perm(f"assegnare il ruolo {role.name} a {target.display_name}")
         return True
@@ -728,7 +700,6 @@ async def handle_voice_admin_command(
         try:
             await target.edit(nick=None, reason=f"Reset nick da {user.display_name}")
             await notify_cb(f"🏷️ **{user.display_name}** ha ripristinato il nome originale di **{target.name}**!")
-            await player.speak_tts(f"Ho ripristinato il nome di {target.name}!")
         except discord.Forbidden:
             await _bot_missing_perm(f"cambiare il soprannome di {target.display_name}")
         return True
@@ -755,13 +726,11 @@ async def handle_voice_admin_command(
         target = await find_member_in_guild(guild, player, target_q, exclude_uid=0)
         if not target:
             await notify_cb(f"⚠️ Non trovo l'utente **\"{target_q}\"**!")
-            await player.speak_tts(f"Non trovo {target_q}!")
             return True
         try:
             old_name = target.display_name
             await target.edit(nick=new_nick, reason=f"Rinominato da {user.display_name} via Franchino")
             await notify_cb(f"🏷️ **{user.display_name}** ha cambiato il soprannome di **{old_name}** in **{new_nick}**!")
-            await player.speak_tts(f"Da adesso {old_name} si chiama {new_nick}!")
         except discord.Forbidden:
             await _bot_missing_perm(f"cambiare il soprannome di {target.display_name}")
         return True
@@ -787,7 +756,6 @@ async def handle_voice_admin_command(
         try:
             await target.timeout(None, reason=f"Timeout rimosso da {user.display_name}")
             await notify_cb(f"✅ **{user.display_name}** ha rimosso il timeout a **{target.display_name}**!")
-            await player.speak_tts(f"Ho liberato {target.display_name} dal timeout!")
         except discord.Forbidden:
             await _bot_missing_perm(f"rimuovere il timeout a {target.display_name}")
         return True
@@ -812,7 +780,6 @@ async def handle_voice_admin_command(
         try:
             await target.timeout(datetime.timedelta(minutes=mins), reason=f"Timeout vocale di {user.display_name}")
             await notify_cb(f"⏳ **{user.display_name}** ha messo in timeout **{target.display_name}** per **{mins} minuti**!")
-            await player.speak_tts(f"Ho messo {target.display_name} in timeout per {mins} minuti!")
         except discord.Forbidden:
             await _bot_missing_perm(f"mettere in timeout {target.display_name}")
         return True
@@ -837,7 +804,6 @@ async def handle_voice_admin_command(
             try:
                 deleted = await ch.purge(limit=limit)
                 await notify_cb(f"🧹 **{user.display_name}** ha ripulito **{len(deleted)} messaggi** nella chat!")
-                await player.speak_tts(f"Ho cancellato {len(deleted)} messaggi dalla chat!")
             except discord.Forbidden:
                 await _bot_missing_perm("cancellare i messaggi")
         return True
@@ -860,7 +826,6 @@ async def handle_voice_admin_command(
         try:
             new_ch = await guild.create_voice_channel(name=ch_name, category=category, reason=f"Creato da {user.display_name}")
             await notify_cb(f"🔊 **{user.display_name}** ha creato il nuovo canale vocale **{new_ch.name}**!")
-            await player.speak_tts(f"Ho creato la stanza vocale {ch_name}!")
         except discord.Forbidden:
             await _bot_missing_perm("creare canali vocali")
         return True
@@ -880,7 +845,6 @@ async def handle_voice_admin_command(
         try:
             new_ch = await guild.create_text_channel(name=ch_name, category=category, reason=f"Creato da {user.display_name}")
             await notify_cb(f"💬 **{user.display_name}** ha creato il nuovo canale testuale {new_ch.mention}!")
-            await player.speak_tts(f"Ho creato il canale testuale {ch_name}!")
         except discord.Forbidden:
             await _bot_missing_perm("creare canali testuali")
         return True
@@ -904,10 +868,8 @@ async def handle_voice_admin_command(
             await current_vch.edit(user_limit=new_limit)
             if new_limit > 0:
                 await notify_cb(f"🔒 **{user.display_name}** ha impostato il limite di **{current_vch.name}** a **{new_limit} utenti**!")
-                await player.speak_tts(f"Stanza limitata a {new_limit} persone!")
             else:
                 await notify_cb(f"🔓 **{user.display_name}** ha riaperto la stanza **{current_vch.name}** senza limiti!")
-                await player.speak_tts("Ho riaperto la stanza a tutti!")
         except discord.Forbidden:
             await _bot_missing_perm("modificare la stanza")
         return True
@@ -933,7 +895,6 @@ async def handle_voice_admin_command(
         try:
             await target.kick(reason=f"Espulso da {user.display_name} via Franchino")
             await notify_cb(f"👢 **{user.display_name}** ha espulso **{target.display_name}** dal server!")
-            await player.speak_tts(f"{target.display_name} è stato espulso dal server!")
         except discord.Forbidden:
             await _bot_missing_perm(f"espellere {target.display_name}")
         return True
@@ -956,7 +917,6 @@ async def handle_voice_admin_command(
         try:
             await target.ban(reason=f"Bannato da {user.display_name} via Franchino")
             await notify_cb(f"🔨 **{user.display_name}** ha bannato **{target.display_name}** dal server!")
-            await player.speak_tts(f"{target.display_name} è stato bannato dal server!")
         except discord.Forbidden:
             await _bot_missing_perm(f"bannare {target.display_name}")
         return True
@@ -982,7 +942,6 @@ async def handle_voice_admin_command(
                     break
             if unbanned_user:
                 await notify_cb(f"🕊️ **{user.display_name}** ha rimosso il ban a **{unbanned_user.name}**!")
-                await player.speak_tts(f"Ho tolto il ban a {unbanned_user.name}!")
             else:
                 await notify_cb(f"⚠️ Nessun utente bannato trovato con il nome **\"{target_q}\"**.")
         except discord.Forbidden:

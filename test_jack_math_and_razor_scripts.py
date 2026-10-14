@@ -246,11 +246,14 @@ class TestJackIntelligenceFormula(unittest.TestCase):
 
     def test_wake_detection_and_anti_wake_filter(self):
         """Verifica phi_wake e l'abbattimento della confidenza per false attivazioni colloquiali."""
-        phi_direct = jack_engine.calculate_wake("Franchino dammi lo script per pesca")
-        self.assertEqual(phi_direct, 1.0)
+        phi_hey = jack_engine.calculate_wake("Hey Franchino dammi lo script per pesca")
+        self.assertEqual(phi_hey, 1.0)
 
         phi_semi = jack_engine.calculate_wake("Ehi Franchino dimmi la favola")
-        self.assertGreaterEqual(phi_semi, 0.80)
+        self.assertEqual(phi_semi, 1.0)
+
+        phi_direct = jack_engine.calculate_wake("Franchino dammi lo script per pesca")
+        self.assertEqual(phi_direct, 1.0)
 
         phi_chatter = jack_engine.calculate_wake("Fra chi ha il boost al server?")
         self.assertLessEqual(phi_chatter, 0.10)
@@ -261,21 +264,21 @@ class TestJackIntelligenceFormula(unittest.TestCase):
     def test_all_ten_intents_mathematical_classification(self):
         """Tutti i 10 domini di intenzione devono essere classificati con largo margine di confidenza."""
         test_cases = [
-            ("Franchino script per magery", "razor_script"),
-            ("Franchino mi passi lo script di taming", "razor_script"),
-            ("Franchino dammi lo script per pesca", "razor_script"),
-            ("Franchino che script hai?", "razor_script"),
-            ("Franchino come funziona aspect armor su outlands?", "wiki_guide"),
-            ("Franchino chi gioca stasera?", "sports_match"),
-            ("Franchino cerca la partita del Milan", "sports_match"),
-            ("Franchino metti Gigi D Agostino", "play_music"),
-            ("Franchino alza il volume al massimo", "dj_control"),
-            ("Franchino stop", "dj_control"),
-            ("Franchino raccontami una favola", "live_fable"),
-            ("Franchino ci senti?", "liveness_check"),
-            ("Franchino come stai fratello?", "chat"),
-            ("Franchino sposta Marco in Stanza Relax", "admin_control"),
-            ("Franchino fai un brindisi per Giulia", "social_interaction"),
+            ("Hey Franchino script per magery", "razor_script"),
+            ("Hey Franchino mi passi lo script di taming", "razor_script"),
+            ("Hey Franchino dammi lo script per pesca", "razor_script"),
+            ("Hey Franchino che script hai?", "razor_script"),
+            ("Hey Franchino come funziona aspect armor su outlands?", "wiki_guide"),
+            ("Hey Franchino chi gioca stasera?", "sports_match"),
+            ("Hey Franchino cerca la partita del Milan", "sports_match"),
+            ("Hey Franchino metti Gigi D Agostino", "play_music"),
+            ("Hey Franchino alza il volume al massimo", "dj_control"),
+            ("Hey Franchino stop", "dj_control"),
+            ("Hey Franchino raccontami una favola", "live_fable"),
+            ("Hey Franchino ci senti?", "liveness_check"),
+            ("Hey Franchino come stai fratello?", "chat"),
+            ("Hey Franchino sposta Marco in Stanza Relax", "admin_control"),
+            ("Hey Franchino fai un brindisi per Giulia", "social_interaction"),
         ]
         for query, expected_intent in test_cases:
             res = jack_engine.classify(query)
@@ -289,7 +292,7 @@ class TestJackIntelligenceFormula(unittest.TestCase):
 
     def test_probabilities_sum_to_one(self):
         """La distribuzione di probabilità Softmax deve sommare esattamente a 1.0."""
-        res = jack_engine.classify("Franchino script per magery")
+        res = jack_engine.classify("Hey Franchino script per magery")
         prob_sum = sum(res.probabilities_by_intent.values())
         self.assertAlmostEqual(prob_sum, 1.0, places=4)
 
@@ -319,7 +322,7 @@ class TestARMHardwareOptimization(unittest.TestCase):
         import time
         t0 = time.perf_counter()
         for _ in range(50):
-            jack_engine.classify("Franchino dammi lo script per pesca")
+            jack_engine.classify("Hey Franchino dammi lo script per pesca")
         t_elapsed = (time.perf_counter() - t0) / 50.0
         self.assertLess(t_elapsed, 0.003, f"Latenza di classificazione troppo alta: {t_elapsed*1000:.2f} ms")
 
@@ -421,13 +424,13 @@ class TestJackMathEngineIntegration(unittest.TestCase):
 
     def test_jack_math_boost_intent_queries(self):
         queries = [
-            "Franchino chiedi al super matematico Jack la formula",
-            "Franchino super matematico Jack",
-            "Franchino boost matematico",
-            "Franchino formula matematica di Jack",
-            "Franchino spiegami la formula matematica",
-            "Franchino boost jack",
-            "Franchino cosa dice jack",
+            "Hey Franchino chiedi al super matematico Jack la formula",
+            "Hey Franchino super matematico Jack",
+            "Hey Franchino boost matematico",
+            "Hey Franchino formula matematica di Jack",
+            "Hey Franchino spiegami la formula matematica",
+            "Hey Franchino boost jack",
+            "Hey Franchino cosa dice jack",
         ]
         for q in queries:
             res = jack_engine.classify(q)
@@ -443,11 +446,11 @@ class TestJackMathEngineIntegration(unittest.TestCase):
     def test_brain_fallback_integrates_jack_engine(self):
         """Il fallback di brain.py deve riconoscere sia Jack sia gli script Razor tramite formula."""
         from brain import brain
-        res_jack = brain._fallback_heuristic_intent("Franchino chiedi al super matematico Jack la formula")
+        res_jack = brain._fallback_heuristic_intent("Hey Franchino chiedi al super matematico Jack la formula")
         self.assertEqual(res_jack["intent"], "jack_math_boost")
         self.assertIn("Formula", res_jack["chat_reply"])
 
-        res_script = brain._fallback_heuristic_intent("Franchino dammi lo script per pesca")
+        res_script = brain._fallback_heuristic_intent("Hey Franchino dammi lo script per pesca")
         self.assertEqual(res_script["intent"], "razor_script")
         self.assertEqual(res_script["skill_slug"], "fishing")
 
@@ -619,11 +622,11 @@ class TestTransparentDomainDisambiguation(unittest.TestCase):
         from brain import brain
 
         smart_queries = [
-            "Franchino che ore sono?",
-            "Franchino che tempo fa a Milano?",
-            "Franchino lancia un dado",
-            "Franchino testa o croce",
-            "Franchino quanto fa 50 diviso 2?",
+            "Hey Franchino che ore sono?",
+            "Hey Franchino che tempo fa a Milano?",
+            "Hey Franchino lancia un dado",
+            "Hey Franchino testa o croce",
+            "Hey Franchino quanto fa 50 diviso 2?",
         ]
 
         for query in smart_queries:

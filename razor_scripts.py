@@ -735,10 +735,7 @@ def build_razor_skills_list_response() -> Tuple[discord.Embed, discord.ui.View, 
 
     embed.set_footer(text="Franchino UO Outlands • Database ufficiale sincronizzato 100%")
     view = RazorSkillPickerView()
-    voice = (
-        "Magia ragazzi! Ho a disposizione oltre 600 script Razor per tutte le 51 skill di Outlands! "
-        "Dalla magia al taming, lockpicking e pesca. Dimmi la skill o selezionala dal menu in chat!"
-    )
+    voice = "Ragazzi, vi ho lasciato il catalogo con oltre 600 script Razor in chat! Date un'occhiata! Magia!"
     return embed, view, None, voice, None
 
 
@@ -789,7 +786,7 @@ def build_razor_scripts_response(
                     pass
 
     if not scripts:
-        voice = f"Non ho trovato script Razor per {skill_name} su outlands.uorazorscripts.com ragazzi! Ecco il catalogo generale con tutte le 51 skill!"
+        voice = f"Non ho trovato script Razor per {skill_name} su outlands.uorazorscripts.com ragazzi! Vi ho lasciato tutto il catalogo in chat! Date un'occhiata! Magia!"
         embed = discord.Embed(
             title=f"⚠️ Nessuno Script per: {skill_name}",
             url="https://outlands.uorazorscripts.com",
@@ -862,9 +859,6 @@ def build_razor_scripts_response(
     # View con Select Menu interattivo
     view = RazorScriptView(scripts, skill_name)
 
-    voice_answer = (
-        f"Magia ragazzi! Per {skill_name} ho trovato {total_count} script su Razor Scripts! "
-        f"Ti ho mostrato l'elenco completo in chat con lo script di {top_author} pronto da copiare o scaricare per Razor!"
-    )
+    voice_answer = f"Ragazzi, vi ho lasciato gli script Razor per {skill_name} in chat! Date un'occhiata! Magia!"
 
     return embed, view, script_file, voice_answer, code
