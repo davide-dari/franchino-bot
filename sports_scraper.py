@@ -51,7 +51,10 @@ SPORT_NAMES = {
     14: "🚴 Ciclismo",
 }
 
-# Configurazioni Leghe e Sport (ESPN open endpoints)
+DEFAULT_PALINSESTO_URL = "https://www.diretta.it"
+SKY_GUIDA_TV_URL = "https://sport.sky.it/guida-tv"
+
+# Configurazioni Leghe e Sport (ESPN open endpoints e palinsesti ufficiali)
 ESPN_LEAGUES: Dict[str, Dict[str, Any]] = {
     "serie_a": {
         "sport": "Calcio",
@@ -59,6 +62,8 @@ ESPN_LEAGUES: Dict[str, Dict[str, Any]] = {
         "emoji": "🇮🇹",
         "path": "sports/soccer/ita.1/scoreboard",
         "aliases": ["serie a", "campionato", "seriea", "italia", "scudetto", "calcio italia", "campionato italiano"],
+        "palinsesto_url": "https://www.legaseriea.it/it/serie-a/calendario-e-risultati",
+        "tv_channels": "DAZN (tutti i 10 match) • Sky Sport / NOW (3 match in co-esclusiva)",
     },
     "serie_b": {
         "sport": "Calcio",
@@ -66,6 +71,8 @@ ESPN_LEAGUES: Dict[str, Dict[str, Any]] = {
         "emoji": "🇮🇹",
         "path": "sports/soccer/ita.2/scoreboard",
         "aliases": ["serie b", "serieb", "bkt"],
+        "palinsesto_url": "https://www.legab.it/",
+        "tv_channels": "DAZN (tutte le partite)",
     },
     "coppa_italia": {
         "sport": "Calcio",
@@ -73,6 +80,8 @@ ESPN_LEAGUES: Dict[str, Dict[str, Any]] = {
         "emoji": "🏆",
         "path": "sports/soccer/ita.coppa_italia/scoreboard",
         "aliases": ["coppa italia", "coppa"],
+        "palinsesto_url": "https://www.legaseriea.it/it/coppa-italia/calendario-e-risultati",
+        "tv_channels": "Mediaset (Canale 5, Italia 1, Mediaset Infinity in chiaro)",
     },
     "champions_league": {
         "sport": "Calcio",
@@ -80,6 +89,8 @@ ESPN_LEAGUES: Dict[str, Dict[str, Any]] = {
         "emoji": "⭐",
         "path": "sports/soccer/uefa.champions/scoreboard",
         "aliases": ["champions", "champions league", "ucl", "coppa campioni", "coppa dei campioni"],
+        "palinsesto_url": "https://it.uefa.com/uefachampionsleague/fixtures-results/",
+        "tv_channels": "Sky Sport / NOW (185 partite) • Prime Video (miglior match del mercoledì)",
     },
     "europa_league": {
         "sport": "Calcio",
@@ -87,6 +98,8 @@ ESPN_LEAGUES: Dict[str, Dict[str, Any]] = {
         "emoji": "🟠",
         "path": "sports/soccer/uefa.europa/scoreboard",
         "aliases": ["europa league", "uel"],
+        "palinsesto_url": "https://it.uefa.com/uefaeuropaleague/fixtures-results/",
+        "tv_channels": "Sky Sport / NOW",
     },
     "conference_league": {
         "sport": "Calcio",
@@ -94,6 +107,8 @@ ESPN_LEAGUES: Dict[str, Dict[str, Any]] = {
         "emoji": "🟢",
         "path": "sports/soccer/uefa.europa.conf/scoreboard",
         "aliases": ["conference", "conference league", "uecl"],
+        "palinsesto_url": "https://it.uefa.com/uefaeuropaconferenceleague/fixtures-results/",
+        "tv_channels": "Sky Sport / NOW",
     },
     "premier_league": {
         "sport": "Calcio",
@@ -101,6 +116,8 @@ ESPN_LEAGUES: Dict[str, Dict[str, Any]] = {
         "emoji": "🏴󠁧󠁢󠁥󠁮󠁧󠁿",
         "path": "sports/soccer/eng.1/scoreboard",
         "aliases": ["premier", "premier league", "inghilterra", "epl"],
+        "palinsesto_url": "https://www.premierleague.com/fixtures",
+        "tv_channels": "Sky Sport / NOW",
     },
     "la_liga": {
         "sport": "Calcio",
@@ -108,6 +125,8 @@ ESPN_LEAGUES: Dict[str, Dict[str, Any]] = {
         "emoji": "🇪🇸",
         "path": "sports/soccer/esp.1/scoreboard",
         "aliases": ["la liga", "liga", "spagna"],
+        "palinsesto_url": "https://www.laliga.com/en-GB/laliga-easports/results",
+        "tv_channels": "DAZN",
     },
     "bundesliga": {
         "sport": "Calcio",
@@ -115,6 +134,8 @@ ESPN_LEAGUES: Dict[str, Dict[str, Any]] = {
         "emoji": "🇩🇪",
         "path": "sports/soccer/ger.1/scoreboard",
         "aliases": ["bundesliga", "germania"],
+        "palinsesto_url": "https://www.bundesliga.com/en/bundesliga/matchday",
+        "tv_channels": "Sky Sport / NOW",
     },
     "ligue_1": {
         "sport": "Calcio",
@@ -122,6 +143,8 @@ ESPN_LEAGUES: Dict[str, Dict[str, Any]] = {
         "emoji": "🇫🇷",
         "path": "sports/soccer/fra.1/scoreboard",
         "aliases": ["ligue 1", "ligue1", "francia"],
+        "palinsesto_url": "https://ligue1.com/fixtures-results",
+        "tv_channels": "Sky Sport / NOW",
     },
     "nba": {
         "sport": "Basket",
@@ -129,6 +152,8 @@ ESPN_LEAGUES: Dict[str, Dict[str, Any]] = {
         "emoji": "🏀",
         "path": "sports/basketball/nba/scoreboard",
         "aliases": ["nba", "basket usa", "pallacanestro nba"],
+        "palinsesto_url": "https://www.nba.com/games",
+        "tv_channels": "Sky Sport NBA / NOW • NBA League Pass",
     },
     "euroleague": {
         "sport": "Basket",
@@ -136,6 +161,8 @@ ESPN_LEAGUES: Dict[str, Dict[str, Any]] = {
         "emoji": "🏀",
         "path": "sports/basketball/euroleague/scoreboard",
         "aliases": ["eurolega", "euroleague", "euro league", "coppa campioni basket"],
+        "palinsesto_url": "https://www.euroleaguebasketball.net/euroleague/game-center/",
+        "tv_channels": "Sky Sport / NOW • DAZN",
     },
     "serie_a_basket": {
         "sport": "Basket",
@@ -143,6 +170,8 @@ ESPN_LEAGUES: Dict[str, Dict[str, Any]] = {
         "emoji": "🏀🇮🇹",
         "path": "sports/basketball/ita.1/scoreboard",
         "aliases": ["serie a basket", "basket serie a", "lba", "lega basket", "campionato basket", "basket italia"],
+        "palinsesto_url": "https://www.legabasket.it/calendario",
+        "tv_channels": "DAZN • Eurosport • DMAX (in chiaro)",
     },
     "tennis_atp": {
         "sport": "Tennis",
@@ -150,6 +179,8 @@ ESPN_LEAGUES: Dict[str, Dict[str, Any]] = {
         "emoji": "🎾",
         "path": "sports/tennis/atp/scoreboard",
         "aliases": ["tennis atp", "atp", "tennis", "sinner", "alcaraz", "djokovic", "berrettini", "musetti", "cobolli"],
+        "palinsesto_url": "https://www.atptour.com/en/scores/current",
+        "tv_channels": "Sky Sport Tennis / NOW • SuperTennis (in chiaro)",
     },
     "tennis_wta": {
         "sport": "Tennis",
@@ -157,6 +188,8 @@ ESPN_LEAGUES: Dict[str, Dict[str, Any]] = {
         "emoji": "🎾",
         "path": "sports/tennis/wta/scoreboard",
         "aliases": ["tennis wta", "wta", "tennis femminile", "paolini", "sabalenka", "swiatek", "gauff"],
+        "palinsesto_url": "https://www.wtatennis.com/tournament-calendar",
+        "tv_channels": "Sky Sport Tennis / NOW • SuperTennis",
     },
     "f1": {
         "sport": "Motori",
@@ -164,6 +197,8 @@ ESPN_LEAGUES: Dict[str, Dict[str, Any]] = {
         "emoji": "🏎️",
         "path": "sports/racing/f1/scoreboard",
         "aliases": ["f1", "formula 1", "formula1", "gp f1", "ferrari", "gran premio", "leclerc", "verstappen", "hamilton", "motori"],
+        "palinsesto_url": "https://www.formula1.com/en/racing/2026.html",
+        "tv_channels": "Sky Sport F1 / NOW • TV8 (differita/diretta in chiaro)",
     },
 }
 
@@ -638,7 +673,9 @@ class SportsScraper:
                     "is_live": is_live,
                     "is_completed": is_completed,
                     "datetime": match_dt,
-                    "url": "https://www.espn.com/tennis",
+                    "url": "https://www.diretta.it/tennis/",
+                    "palinsesto_url": cfg.get("palinsesto_url", "https://www.atptour.com/en/scores/current"),
+                    "tv_channels": cfg.get("tv_channels", "Sky Sport Tennis / NOW • SuperTennis (in chiaro)"),
                     "stream_url": None,
                 })
 
@@ -711,7 +748,9 @@ class SportsScraper:
                 "is_completed": is_completed,
                 "datetime": match_dt,
                 "url": event_url,
-                "stream_url": None,  # Sarà arricchito da MadPlay77 se disponibile
+                "palinsesto_url": cfg.get("palinsesto_url", DEFAULT_PALINSESTO_URL),
+                "tv_channels": cfg.get("tv_channels", "Sky Sport / DAZN / NOW"),
+                "stream_url": None,
             }
         except Exception as e:
             logger.debug(f"Errore parsing evento ESPN: {e}")
@@ -766,6 +805,8 @@ class SportsScraper:
                             "circuit": circuit,
                             "sessions": sessions_list[:5],
                             "portal_url": "https://www.formula1.com",
+                            "palinsesto_url": "https://www.formula1.com/en/racing/2026.html",
+                            "tv_channels": "Sky Sport F1 / NOW • TV8 (differita/diretta in chiaro)",
                         }
                         self._cache_f1 = (now, res)
                         return res
@@ -777,6 +818,8 @@ class SportsScraper:
             "circuit": "Circuito Mondiale",
             "sessions": [],
             "portal_url": "https://www.formula1.com",
+            "palinsesto_url": "https://www.formula1.com/en/racing/2026.html",
+            "tv_channels": "Sky Sport F1 / NOW • TV8 (differita/diretta in chiaro)",
         }
 
     async def get_motogp_info(self) -> Dict[str, Any]:
@@ -804,6 +847,8 @@ class SportsScraper:
                             "date_end": next_gp.get("date_end"),
                             "status": next_gp.get("status", "PROGRAMMATO"),
                             "portal_url": "https://www.motogp.com",
+                            "palinsesto_url": "https://www.motogp.com/it/calendar",
+                            "tv_channels": "Sky Sport MotoGP / NOW • TV8 (differita/diretta in chiaro)",
                         }
                         self._cache_motogp = (now, res)
                         return res
@@ -814,6 +859,8 @@ class SportsScraper:
             "name": "Campionato del Mondo MotoGP 2026",
             "circuit": "Circuito Internazionale",
             "portal_url": "https://www.motogp.com",
+            "palinsesto_url": "https://www.motogp.com/it/calendar",
+            "tv_channels": "Sky Sport MotoGP / NOW • TV8 (differita/diretta in chiaro)",
         }
 
     # =========================================================================
@@ -935,14 +982,11 @@ class SportsScraper:
                         "is_live": "LIVE" in mp["time"],
                         "is_completed": False,
                         "datetime": dt,
-                        "url": mp["url"],
-                        "stream_url": mp["url"],
+                        "url": DEFAULT_PALINSESTO_URL,
+                        "palinsesto_url": DEFAULT_PALINSESTO_URL,
+                        "tv_channels": "Diretta.it / Canali Sportivi",
+                        "stream_url": None,
                     })
-                else:
-                    # Arricchisci il match ESPN col link diretto dello streaming
-                    for m in all_matches:
-                        if m.get("home") and m.get("away") and m["home"].lower() in mp_title and m["away"].lower() in mp_title:
-                            m["stream_url"] = mp["url"]
 
         # 5. Se la lega specifica richiesta non gioca oggi (es. Serie A di martedì), trova il prossimo turno!
         alternative_note = ""
@@ -1007,6 +1051,7 @@ class SportsScraper:
             is_upcoming=is_upcoming_round
         )
 
+        pal_url = matched_league_cfg.get("palinsesto_url") if matched_league_cfg else DEFAULT_PALINSESTO_URL
         return {
             "found": len(all_matches) > 0,
             "matches": all_matches,
@@ -1016,7 +1061,8 @@ class SportsScraper:
             "is_upcoming_round": is_upcoming_round,
             "league_name": matched_league_cfg.get("name") if matched_league_cfg else league_filter,
             "sport_name": sport_filter.title() if sport_filter else None,
-            "portal_url": "https://web01.madplay77.ru/it",
+            "palinsesto_url": pal_url,
+            "portal_url": pal_url,
         }
 
     def _build_vocalist_voice_line(
@@ -1156,7 +1202,8 @@ class SportsScraper:
                     "is_upcoming_round": res_tonight.get("is_upcoming_round", False),
                     "league_name": res_tonight.get("league_name"),
                     "sport_name": res_tonight.get("sport_name"),
-                    "portal_url": "https://web01.madplay77.ru/it",
+                    "palinsesto_url": res_tonight.get("palinsesto_url", DEFAULT_PALINSESTO_URL),
+                    "portal_url": res_tonight.get("palinsesto_url", DEFAULT_PALINSESTO_URL),
                 }
 
         # C. Ricerca puntuale per Squadra o Atleta (es. "Milan", "Juventus", "Sinner", "Lakers")
@@ -1167,9 +1214,33 @@ class SportsScraper:
         ).strip()
         tokens = [t for t in clean_q.split() if len(t) >= 2]
 
-        madplay_events = await self.get_live_matches()
+        # 1. Cerca con priorità negli scoreboard ufficiali ESPN (match center e palinsesto ufficiale)
+        for l_key in ("serie_a", "champions_league", "premier_league", "la_liga", "bundesliga", "serie_b", "coppa_italia", "nba", "euroleague", "serie_a_basket", "tennis_atp", "tennis_wta"):
+            evs = await self.fetch_league_events(l_key, fetch_upcoming=True)
+            for ev in evs:
+                t_low = ev["title"].lower()
+                score = 0
+                for tok in tokens:
+                    if re.search(rf"\b{re.escape(tok)}\b", t_low):
+                        score += 5
+                    elif re.search(rf"\b{re.escape(tok)}", t_low):
+                        score += 3
+                if score > 0:
+                    v_top = ev["title"].replace(" vs ", " contro ")
+                    voice = f"Magia ragazzi! Vi ho messo il palinsesto e tutti i dettagli per {v_top} in chat! Date un'occhiata!"
+                    return {
+                        "found": True,
+                        "type": "single_match",
+                        "query": query,
+                        "best_match": ev,
+                        "all_matches": [ev],
+                        "voice_summary": voice,
+                        "palinsesto_url": ev.get("palinsesto_url", DEFAULT_PALINSESTO_URL),
+                        "portal_url": ev.get("palinsesto_url", DEFAULT_PALINSESTO_URL),
+                    }
 
-        # 1. Corrispondenza nei live streaming MadPlay77 con scoring su confini di parola
+        # 2. Corrispondenza negli altri eventi live tracciati (fallback live)
+        madplay_events = await self.get_live_matches()
         scored = []
         for m in madplay_events:
             t_low = m["title"].lower()
@@ -1189,9 +1260,13 @@ class SportsScraper:
 
         if scored:
             scored.sort(key=lambda x: x[0], reverse=True)
-            best = scored[0][1]
+            best = dict(scored[0][1])
+            best["url"] = DEFAULT_PALINSESTO_URL
+            best["palinsesto_url"] = DEFAULT_PALINSESTO_URL
+            best["tv_channels"] = "Diretta.it / Canali Sportivi"
+            best["stream_url"] = None
             top_t = best['title'].replace(" vs ", " contro ")
-            voice = f"Magia ragazzi! Vi ho lasciato il link in chat per {top_t}! Date un'occhiata!"
+            voice = f"Magia ragazzi! Vi ho lasciato il palinsesto in chat per {top_t}! Date un'occhiata!"
             return {
                 "found": True,
                 "type": "single_match",
@@ -1199,30 +1274,9 @@ class SportsScraper:
                 "best_match": best,
                 "all_matches": [m for _, m in scored],
                 "voice_summary": voice,
+                "palinsesto_url": DEFAULT_PALINSESTO_URL,
+                "portal_url": DEFAULT_PALINSESTO_URL,
             }
-
-        # 2. Corrispondenza negli scoreboard ufficiali ESPN (anche prossimo turno se oggi riposano)
-        for l_key in ("serie_a", "champions_league", "premier_league", "la_liga", "bundesliga", "nba", "euroleague", "tennis_atp", "tennis_wta"):
-            evs = await self.fetch_league_events(l_key, fetch_upcoming=True)
-            for ev in evs:
-                t_low = ev["title"].lower()
-                score = 0
-                for tok in tokens:
-                    if re.search(rf"\b{re.escape(tok)}\b", t_low):
-                        score += 5
-                    elif re.search(rf"\b{re.escape(tok)}", t_low):
-                        score += 3
-                if score > 0:
-                    v_top = ev["title"].replace(" vs ", " contro ")
-                    voice = f"Magia ragazzi! Vi ho messo tutti i dettagli per {v_top} in chat! Date un'occhiata!"
-                    return {
-                        "found": True,
-                        "type": "single_match",
-                        "query": query,
-                        "best_match": ev,
-                        "all_matches": [ev],
-                        "voice_summary": voice,
-                    }
 
         # 3. Nessuna corrispondenza: fallback elegante con i match in evidenza stasera
         tonight_fallback = await self.get_tonight_matches()
@@ -1232,12 +1286,13 @@ class SportsScraper:
             "query": query,
             "message": f"Non ho trovato nessuna partita per *\"{clean_q or query}\"* in questo momento.",
             "featured": tonight_fallback.get("matches", [])[:5],
-            "voice_summary": f"Non ho trovato partite per {clean_q or query} al momento ragazzi, vi ho mostrato gli eventi attivi stasera in chat! Date un'occhiata!",
-            "portal_url": "https://web01.madplay77.ru/it",
+            "voice_summary": f"Non ho trovato partite per {clean_q or query} al momento ragazzi, vi ho mostrato il palinsesto degli eventi attivi stasera in chat! Date un'occhiata!",
+            "palinsesto_url": DEFAULT_PALINSESTO_URL,
+            "portal_url": DEFAULT_PALINSESTO_URL,
         }
 
     # =========================================================================
-    # 6. COSTRUZIONE DISCORD EMBED & VIEW INTERATTIVA
+    # 6. COSTRUZIONE DISCORD EMBED & VIEW INTERATTIVA CON LINK PALINSESTO
     # =========================================================================
     def build_sports_embed(self, result: Dict[str, Any]) -> Tuple[discord.Embed, discord.ui.View, str]:
         """Costruisce un Discord Embed completo, una View con pulsanti e la frase vocale da recitare."""
@@ -1251,16 +1306,23 @@ class SportsScraper:
             title_prefix = "🏎️ Formula 1" if sub == "f1" else "🏍️ MotoGP"
             embed = discord.Embed(
                 title=f"{title_prefix} — {data.get('name')}",
-                description=f"📍 **Circuito**: `{data.get('circuit')}`\n🏁 **Stato**: `In Programma`",
+                description=f"📍 **Circuito**: `{data.get('circuit')}`\n📅 **Palinsesto & Programmazione Ufficiale**",
                 color=discord.Color.red(),
             )
             if data.get("sessions"):
                 embed.add_field(name="⏰ Orari e Sessioni Ufficiali (CET)", value="\n".join(data["sessions"]), inline=False)
+
+            tv_info = data.get("tv_channels", "Sky Sport F1 / NOW • TV8 (differita/diretta in chiaro)" if sub == "f1" else "Sky Sport MotoGP / NOW • TV8 (in chiaro)")
+            embed.add_field(name="📺 Dove Vederlo in TV & Streaming", value=f"• **{tv_info}**\n• [Guida TV Sky Sport]({SKY_GUIDA_TV_URL})", inline=False)
             embed.set_footer(text="Franchino Sports • Motorsport World Series")
 
             view = discord.ui.View()
-            view.add_item(discord.ui.Button(label="Sito Ufficiale", url=data.get("portal_url", "https://www.formula1.com"), style=discord.ButtonStyle.link, emoji="🌐"))
-            view.add_item(discord.ui.Button(label="Tutti gli Eventi Live", url="https://web01.madplay77.ru/it", style=discord.ButtonStyle.link, emoji="📺"))
+            portal_link = data.get("portal_url", "https://www.formula1.com" if sub == "f1" else "https://www.motogp.com")
+            pal_link = data.get("palinsesto_url", portal_link)
+            view.add_item(discord.ui.Button(label="Palinsesto Ufficiale", url=pal_link, style=discord.ButtonStyle.link, emoji="📅"))
+            view.add_item(discord.ui.Button(label="Guida TV Sky & Orari", url=SKY_GUIDA_TV_URL, style=discord.ButtonStyle.link, emoji="📺"))
+            motori_diretta = "https://www.diretta.it/motori/formula-1/" if sub == "f1" else "https://www.diretta.it/motori/motogp/"
+            view.add_item(discord.ui.Button(label="Risultati Live Diretta.it", url=motori_diretta, style=discord.ButtonStyle.link, emoji="⚡"))
             return embed, view, voice_text
 
         # B. Match singolo trovato
@@ -1268,21 +1330,36 @@ class SportsScraper:
             m = result["best_match"]
             embed = discord.Embed(
                 title=f"🏆 {m['title']}",
-                description="Diretta e programma ufficiale su **MadPlay77** e network sportivi!",
+                description="Palinsesto ufficiale, orari e programmazione TV / streaming.",
                 color=discord.Color.green() if m.get("is_live") else discord.Color.blue(),
             )
-            embed.add_field(name="⚽ Disciplina", value=m.get("sport_name") or m.get("sport", "Sport"), inline=True)
+            embed.add_field(name="⚽ Disciplina / Torneo", value=m.get("league") or m.get("sport_name") or m.get("sport", "Sport"), inline=True)
             embed.add_field(name="⏰ Orario / Stato", value=f"`{m['time']}`", inline=True)
             if m.get("score"):
                 embed.add_field(name="📊 Risultato Live", value=f"**{m['score']}**", inline=True)
 
-            target_url = m.get("stream_url") or m.get("url") or "https://web01.madplay77.ru/it"
-            embed.add_field(name="🔗 Link Streaming", value=f"[Guarda la Partita in Diretta]({target_url})", inline=False)
-            embed.set_footer(text="Franchino Sports • Live Arena")
+            tv_info = m.get("tv_channels") or "Sky Sport / DAZN / NOW"
+            embed.add_field(name="📺 Trasmissione TV Ufficiale", value=f"**{tv_info}**", inline=False)
+
+            raw_match_url = m.get("url") or DEFAULT_PALINSESTO_URL
+            match_url = DEFAULT_PALINSESTO_URL if "madplay" in raw_match_url else raw_match_url
+            raw_palinsesto = m.get("palinsesto_url") or DEFAULT_PALINSESTO_URL
+            palinsesto_url = DEFAULT_PALINSESTO_URL if "madplay" in raw_palinsesto else raw_palinsesto
+
+            links_desc = (
+                f"• [📊 Match Center & Dettagli Ufficiali]({match_url})\n"
+                f"• [📅 Palinsesto Ufficiale {m.get('league', '')}]({palinsesto_url})\n"
+                f"• [📺 Guida TV Sky Sport & Canali]({SKY_GUIDA_TV_URL})\n"
+                f"• [⚡ Diretta.it - Risultati in Tempo Reale]({DEFAULT_PALINSESTO_URL})"
+            )
+            embed.add_field(name="🔗 Link Palinsesto & Diretta", value=links_desc, inline=False)
+            embed.set_footer(text="Franchino Sports • Palinsesto Ufficiale")
 
             view = discord.ui.View()
-            view.add_item(discord.ui.Button(label="Guarda lo Streaming", url=target_url, style=discord.ButtonStyle.link, emoji="📺"))
-            view.add_item(discord.ui.Button(label="Palinsesto Live", url="https://web01.madplay77.ru/it", style=discord.ButtonStyle.link, emoji="🌐"))
+            view.add_item(discord.ui.Button(label="Match Center & Dettagli", url=match_url, style=discord.ButtonStyle.link, emoji="📊"))
+            view.add_item(discord.ui.Button(label="Palinsesto Competizione", url=palinsesto_url, style=discord.ButtonStyle.link, emoji="📅"))
+            view.add_item(discord.ui.Button(label="Guida TV Sky Sport", url=SKY_GUIDA_TV_URL, style=discord.ButtonStyle.link, emoji="📺"))
+            view.add_item(discord.ui.Button(label="Diretta.it Live", url=DEFAULT_PALINSESTO_URL, style=discord.ButtonStyle.link, emoji="⚡"))
             return embed, view, voice_text
 
         # C. Palinsesto Incontri di Oggi / Stasera
@@ -1299,7 +1376,7 @@ class SportsScraper:
             else:
                 embed_title = "🏆 Palinsesto Sportivo di Stasera & Grandi Match"
 
-            embed_desc = "Ecco il quadro completo delle sfide e gli orari del prossimo turno!" if is_upcoming else "Ecco le partite calde, gli incontri live e il grande spettacolo dello sport di oggi!"
+            embed_desc = "Ecco il quadro completo delle sfide, gli orari e i link del palinsesto ufficiale per seguire lo sport!"
 
             embed = discord.Embed(
                 title=embed_title,
@@ -1309,7 +1386,7 @@ class SportsScraper:
 
             alt_note = result.get("alternative_note")
             if alt_note:
-                embed.add_field(name="ℹ️ Info Lega", value=alt_note, inline=False)
+                embed.add_field(name="ℹ️ Info Palinsesto", value=alt_note, inline=False)
 
             # Raggruppa i match per disciplina / competizione
             grouped: Dict[str, List[str]] = {}
@@ -1319,10 +1396,9 @@ class SportsScraper:
                 if m.get("score"):
                     time_disp += f" (**{m['score']}**)"
 
-                target_link = m.get("stream_url") or m.get("url") or "https://web01.madplay77.ru/it"
+                raw_target = m.get("url") or m.get("palinsesto_url") or DEFAULT_PALINSESTO_URL
+                target_link = DEFAULT_PALINSESTO_URL if "madplay" in raw_target else raw_target
                 link_md = f"[{m['title']}]({target_link})"
-                if m.get("stream_url"):
-                    link_md += " 🔴 *[Streaming]*"
 
                 line = f"• {time_disp} — {link_md}"
                 grouped.setdefault(grp_name, []).append(line)
@@ -1330,23 +1406,21 @@ class SportsScraper:
             for grp, lines in list(grouped.items())[:6]:
                 embed.add_field(name=grp, value="\n".join(lines[:4]), inline=False)
 
-            footer_txt = f"Franchino Sports • {len(matches)} incontri tracciati"
+            footer_txt = f"Franchino Sports • {len(matches)} incontri tracciati nel palinsesto"
             if is_upcoming:
                 footer_txt += " (prossimo turno)"
             embed.set_footer(text=footer_txt)
 
             view = discord.ui.View()
-            # Aggiungi fino a 2 pulsanti diretti per le partite che hanno streaming attivo
-            stream_count = 0
-            for m in matches:
-                if m.get("stream_url") and stream_count < 2:
-                    short_title = m["title"]
-                    if len(short_title) > 28:
-                        short_title = short_title[:25] + "..."
-                    view.add_item(discord.ui.Button(label=f"Stream: {short_title}", url=m["stream_url"], style=discord.ButtonStyle.link, emoji="📺"))
-                    stream_count += 1
+            pal_raw = result.get("palinsesto_url") or DEFAULT_PALINSESTO_URL
+            palinsesto_target = DEFAULT_PALINSESTO_URL if "madplay" in pal_raw else pal_raw
+            league_lbl = req_league or req_sport or "Ufficiale"
+            if len(league_lbl) > 18:
+                league_lbl = league_lbl[:15] + "..."
 
-            view.add_item(discord.ui.Button(label="Apri Palinsesto Completo", url="https://web01.madplay77.ru/it", style=discord.ButtonStyle.link, emoji="🌐"))
+            view.add_item(discord.ui.Button(label=f"Palinsesto {league_lbl}", url=palinsesto_target, style=discord.ButtonStyle.link, emoji="📅"))
+            view.add_item(discord.ui.Button(label="Guida TV Sky Sport", url=SKY_GUIDA_TV_URL, style=discord.ButtonStyle.link, emoji="📺"))
+            view.add_item(discord.ui.Button(label="Palinsesto Live Diretta.it", url=DEFAULT_PALINSESTO_URL, style=discord.ButtonStyle.link, emoji="⚡"))
             return embed, view, voice_text
 
         # D. Not Found / Fallback
@@ -1357,11 +1431,12 @@ class SportsScraper:
         )
         featured = result.get("featured", [])
         if featured:
-            lines = [f"• **{f['title']}** ({f.get('sport_name') or f.get('league', 'Sport')}) - `{f['time']}` → [Guarda]({f.get('url', 'https://web01.madplay77.ru/it')})" for f in featured[:5]]
-            embed.add_field(name="🔥 Eventi Principali Attivi Adesso:", value="\n".join(lines), inline=False)
+            lines = [f"• **{f['title']}** ({f.get('sport_name') or f.get('league', 'Sport')}) - `{f['time']}` → [Palinsesto]({DEFAULT_PALINSESTO_URL})" for f in featured[:5]]
+            embed.add_field(name="🔥 Eventi Principali nel Palinsesto di Oggi:", value="\n".join(lines), inline=False)
 
         view = discord.ui.View()
-        view.add_item(discord.ui.Button(label="Apri Palinsesto MadPlay77", url="https://web01.madplay77.ru/it", style=discord.ButtonStyle.link, emoji="🌐"))
+        view.add_item(discord.ui.Button(label="Palinsesto Completo Diretta.it", url=DEFAULT_PALINSESTO_URL, style=discord.ButtonStyle.link, emoji="📅"))
+        view.add_item(discord.ui.Button(label="Guida TV Sky Sport", url=SKY_GUIDA_TV_URL, style=discord.ButtonStyle.link, emoji="📺"))
         return embed, view, voice_text
 
 

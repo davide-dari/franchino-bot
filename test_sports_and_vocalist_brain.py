@@ -148,7 +148,7 @@ class TestSportsScraperEngine(unittest.IsolatedAsyncioTestCase):
         self.assertIn("circuit", mgp)
 
     def test_build_sports_embed_and_view(self):
-        """Verifica che il builder dell'embed Discord crei view con pulsanti e colori adeguati."""
+        """Verifica che il builder dell'embed Discord crei view con pulsanti palinsesto, Sky TV e Diretta.it."""
         fake_res = {
             "found": True,
             "type": "schedule",
@@ -159,18 +159,49 @@ class TestSportsScraperEngine(unittest.IsolatedAsyncioTestCase):
                     "sport_emoji": "⚽",
                     "time": "20:45",
                     "score": "",
-                    "url": "https://web01.madplay77.ru/it",
-                    "stream_url": "https://web01.madplay77.ru/it/seth/livestream?mdata=123",
+                    "url": "https://www.legaseriea.it/it/serie-a/calendario-e-risultati",
+                    "palinsesto_url": "https://www.legaseriea.it/it/serie-a/calendario-e-risultati",
                 }
             ],
             "voice_summary": "Stasera in campo c'è il fuoco ragazzi!",
-            "portal_url": "https://web01.madplay77.ru/it",
+            "palinsesto_url": "https://www.legaseriea.it/it/serie-a/calendario-e-risultati",
         }
         embed, view, voice = sports_scraper.build_sports_embed(fake_res)
         self.assertIsNotNone(embed.title)
         self.assertTrue("Palinsesto" in embed.title or "Match" in embed.title)
         self.assertGreaterEqual(len(view.children), 1)
         self.assertIn("ragazzi", voice.lower())
+        # Verifica che tutti i pulsanti puntino a palinsesti ufficiali, Sky Guida TV e Diretta.it
+        button_urls = [btn.url for btn in view.children]
+        self.assertTrue(any("legaseriea.it" in u or "diretta.it" in u for u in button_urls))
+        self.assertTrue(any("sky.it" in u for u in button_urls))
+        self.assertFalse(any("madplay" in u for u in button_urls))
+
+    def test_build_sports_embed_single_match_view(self):
+        """Verifica che la vista del singolo match contenga canali TV ufficiali e pulsanti palinsesto/guida TV."""
+        single_res = {
+            "found": True,
+            "type": "single",
+            "best_match": {
+                "title": "Milan vs Inter",
+                "league": "Serie A",
+                "sport_emoji": "⚽",
+                "time": "20:45",
+                "score": "1 - 1",
+                "tv_channels": "DAZN (esclusiva)",
+                "url": "https://www.espn.com/soccer/match/_/gameId/123",
+                "palinsesto_url": "https://www.legaseriea.it/it/serie-a/calendario-e-risultati",
+            },
+            "voice_summary": "Ragazzi, ho trovato il derby!",
+        }
+        embed, view, voice = sports_scraper.build_sports_embed(single_res)
+        self.assertIn("Milan vs Inter", embed.title)
+        button_urls = [btn.url for btn in view.children]
+        self.assertTrue(any("espn.com" in u for u in button_urls))
+        self.assertTrue(any("legaseriea.it" in u for u in button_urls))
+        self.assertTrue(any("sky.it" in u for u in button_urls))
+        self.assertTrue(any("diretta.it" in u for u in button_urls))
+        self.assertFalse(any("madplay" in u for u in button_urls))
 
 
 # ==============================================================================
