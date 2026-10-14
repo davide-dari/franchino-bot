@@ -58,7 +58,7 @@ class TestSportsProtobufAndCleaning(unittest.TestCase):
 class TestSportsScraperEngine(unittest.IsolatedAsyncioTestCase):
 
     async def test_get_live_matches_returns_structured_events(self):
-        """Verifica che lo scraper restituisca eventi strutturati con streaming URL."""
+        """Verifica che lo scraper restituisca eventi strutturati con URL della pagina partita (.html)."""
         matches = await sports_scraper.get_live_matches()
         self.assertIsInstance(matches, list)
         if matches:
@@ -67,7 +67,18 @@ class TestSportsScraperEngine(unittest.IsolatedAsyncioTestCase):
             self.assertIn("sport_name", first)
             self.assertIn("time", first)
             self.assertIn("url", first)
-            self.assertTrue(first["url"].startswith("https://web01.madplay77.ru/it/seth/livestream?mdata="))
+            self.assertTrue(first["url"].startswith("https://web01.madplay77.ru/it/"))
+            self.assertTrue(first["url"].endswith(".html"))
+            self.assertNotIn("seth/livestream", first["url"])
+
+    def test_build_madplay_match_url(self):
+        """Verifica la generazione dei link delle singole partite nel formato di https://web01.madplay77.ru/it/football.html."""
+        from sports_scraper import _build_madplay_match_url
+        url_fb = _build_madplay_match_url(4502489, 1, "UEFA Champions League", "AS Roma vs Real Madrid")
+        self.assertEqual(url_fb, "https://web01.madplay77.ru/it/football/uefa-champions-league-4502489/as-roma-vs-real-madrid.html")
+
+        url_bsk = _build_madplay_match_url(2244087, 2, "NBA", "Miami Heat vs Brooklyn Nets")
+        self.assertEqual(url_bsk, "https://web01.madplay77.ru/it/basketball/nba-2244087/miami-heat-vs-brooklyn-nets.html")
 
     async def test_get_tonight_matches_general(self):
         """'mi dici i match di stasera?' deve raccogliere gli eventi di oggi con voce da Vocalist."""
@@ -148,7 +159,7 @@ class TestSportsScraperEngine(unittest.IsolatedAsyncioTestCase):
         self.assertIn("circuit", mgp)
 
     def test_build_sports_embed_and_view(self):
-        """Verifica che il builder dell'embed Discord crei view con pulsanti palinsesto, Sky TV e Diretta.it."""
+        """Verifica che il builder dell'embed Discord crei view con pulsanti per le partite di MadPlay77, palinsesto e Sky TV."""
         fake_res = {
             "found": True,
             "type": "schedule",
@@ -159,26 +170,27 @@ class TestSportsScraperEngine(unittest.IsolatedAsyncioTestCase):
                     "sport_emoji": "⚽",
                     "time": "20:45",
                     "score": "",
-                    "url": "https://www.legaseriea.it/it/serie-a/calendario-e-risultati",
-                    "palinsesto_url": "https://www.legaseriea.it/it/serie-a/calendario-e-risultati",
+                    "url": "https://web01.madplay77.ru/it/football/serie-a-12345/inter-vs-juventus.html",
+                    "palinsesto_url": "https://web01.madplay77.ru/it/football.html",
                 }
             ],
             "voice_summary": "Stasera in campo c'è il fuoco ragazzi!",
-            "palinsesto_url": "https://www.legaseriea.it/it/serie-a/calendario-e-risultati",
+            "palinsesto_url": "https://web01.madplay77.ru/it/football.html",
         }
         embed, view, voice = sports_scraper.build_sports_embed(fake_res)
         self.assertIsNotNone(embed.title)
         self.assertTrue("Palinsesto" in embed.title or "Match" in embed.title)
         self.assertGreaterEqual(len(view.children), 1)
         self.assertIn("ragazzi", voice.lower())
-        # Verifica che tutti i pulsanti puntino a palinsesti ufficiali, Sky Guida TV e Diretta.it
+        # Verifica che i pulsanti puntino alle partite di MadPlay77, al palinsesto e a Sky Sport
         button_urls = [btn.url for btn in view.children]
-        self.assertTrue(any("legaseriea.it" in u or "diretta.it" in u for u in button_urls))
+        self.assertTrue(any("web01.madplay77.ru" in u for u in button_urls))
+        self.assertTrue(any("football.html" in u for u in button_urls))
         self.assertTrue(any("sky.it" in u for u in button_urls))
-        self.assertFalse(any("madplay" in u for u in button_urls))
 
     def test_build_sports_embed_single_match_view(self):
-        """Verifica che la vista del singolo match contenga canali TV ufficiali e pulsanti palinsesto/guida TV."""
+        """Verifica che la vista del singolo match contenga il link diretto alla partita su MadPlay77, palinsesto e Sky TV."""
+        match_url = "https://web01.madplay77.ru/it/football/serie-a-4502489/milan-vs-inter.html"
         single_res = {
             "found": True,
             "type": "single",
@@ -188,20 +200,18 @@ class TestSportsScraperEngine(unittest.IsolatedAsyncioTestCase):
                 "sport_emoji": "⚽",
                 "time": "20:45",
                 "score": "1 - 1",
-                "tv_channels": "DAZN (esclusiva)",
-                "url": "https://www.espn.com/soccer/match/_/gameId/123",
-                "palinsesto_url": "https://www.legaseriea.it/it/serie-a/calendario-e-risultati",
+                "tv_channels": "MadPlay77 Streaming / Canali Ufficiali",
+                "url": match_url,
+                "palinsesto_url": "https://web01.madplay77.ru/it/football.html",
             },
             "voice_summary": "Ragazzi, ho trovato il derby!",
         }
         embed, view, voice = sports_scraper.build_sports_embed(single_res)
         self.assertIn("Milan vs Inter", embed.title)
         button_urls = [btn.url for btn in view.children]
-        self.assertTrue(any("espn.com" in u for u in button_urls))
-        self.assertTrue(any("legaseriea.it" in u for u in button_urls))
+        self.assertIn(match_url, button_urls)
+        self.assertTrue(any("football.html" in u for u in button_urls))
         self.assertTrue(any("sky.it" in u for u in button_urls))
-        self.assertTrue(any("diretta.it" in u for u in button_urls))
-        self.assertFalse(any("madplay" in u for u in button_urls))
 
 
 # ==============================================================================

@@ -51,7 +51,26 @@ SPORT_NAMES = {
     14: "🚴 Ciclismo",
 }
 
-DEFAULT_PALINSESTO_URL = "https://www.diretta.it"
+SPORT_TYPE_SLUGS: Dict[int, str] = {
+    1: "football",
+    2: "basketball",
+    3: "tennis",
+    4: "baseball",
+    5: "volleyball",
+    6: "cricket",
+    7: "motorsport",
+    8: "rugby",
+    9: "badminton",
+    10: "badminton",
+    11: "hockey",
+    12: "cricket",
+    13: "volleyball",
+    14: "cycling",
+}
+
+MADPLAY_BASE_URL = "https://web01.madplay77.ru"
+MADPLAY_FOOTBALL_PAGE = "https://web01.madplay77.ru/it/football.html"
+DEFAULT_PALINSESTO_URL = MADPLAY_FOOTBALL_PAGE
 SKY_GUIDA_TV_URL = "https://sport.sky.it/guida-tv"
 
 # Configurazioni Leghe e Sport (ESPN open endpoints e palinsesti ufficiali)
@@ -374,6 +393,33 @@ def _clean_title(raw: str) -> str:
     return clean
 
 
+def _slugify(text: str) -> str:
+    """Converte un testo in uno slug URL-friendly compatibile con MadPlay77."""
+    if not text:
+        return "match"
+    text = text.lower().strip()
+    text = re.sub(r"[^\w\s-]", "", text)
+    text = re.sub(r"[\s_]+", "-", text)
+    text = re.sub(r"-+", "-", text).strip("-")
+    return text or "match"
+
+
+def _build_madplay_match_url(match_id: Any, sport_type: int = 1, league: str = "", title: str = "") -> str:
+    """
+    Costruisce l'URL della singola partita su MadPlay77 esattamente come appare
+    nella pagina del palinsesto (https://web01.madplay77.ru/it/football.html):
+    https://web01.madplay77.ru/it/{sportTypeStr}/{leagueLink}-{matchId}/{teamLink}.html
+    """
+    try:
+        st_int = int(sport_type)
+    except (ValueError, TypeError):
+        st_int = 1
+    sport_slug = SPORT_TYPE_SLUGS.get(st_int, "football")
+    league_slug = _slugify(league) if league else "campionato"
+    team_slug = _slugify(title) if title else "partita"
+    return f"https://web01.madplay77.ru/it/{sport_slug}/{league_slug}-{match_id}/{team_slug}.html"
+
+
 class SportsScraper:
     """
     Gestore dello scraping, aggregazione e consultazione eventi sportivi
@@ -487,12 +533,11 @@ class SportsScraper:
                     except Exception:
                         pass
 
-                # Generazione parametro mdata in Base64 (player web01)
-                mdata_str = f"{match_id}_{sport_type}"
-                mdata_b64 = base64.b64encode(mdata_str.encode("utf-8")).decode("utf-8")
-                stream_url = f"https://web01.madplay77.ru/it/seth/livestream?mdata={mdata_b64}"
-
+                # Generazione URL ufficiale della singola partita su MadPlay77 (es. /it/football.html)
+                match_url = _build_madplay_match_url(match_id, sport_type, league or "", title)
                 sport_label = SPORT_NAMES.get(sport_type, "🏆 Sport")
+                sport_slug = SPORT_TYPE_SLUGS.get(sport_type, "football")
+                portal_url = f"{MADPLAY_BASE_URL}/it/{sport_slug}.html"
 
                 matches.append({
                     "id": match_id,
@@ -503,8 +548,9 @@ class SportsScraper:
                     "league_logo": league_logo,
                     "time": time_str,
                     "datetime": match_dt,
-                    "url": stream_url,
-                    "portal_url": "https://web01.madplay77.ru/it",
+                    "url": match_url,
+                    "stream_url": match_url,
+                    "portal_url": portal_url,
                 })
 
             return matches
@@ -963,11 +1009,17 @@ class SportsScraper:
             if is_today:
                 # Evita duplicati controllando somiglianza titoli
                 mp_title = mp["title"].lower()
-                already_present = any(
-                    (m["home"].lower() in mp_title and m["away"].lower() in mp_title)
-                    for m in all_matches if m.get("home") and m.get("away")
-                )
-                if not already_present:
+                matched_espn = None
+                for m in all_matches:
+                    if m.get("home") and m.get("away") and m["home"].lower() in mp_title and m["away"].lower() in mp_title:
+                        matched_espn = m
+                        break
+
+                if matched_espn:
+                    matched_espn["url"] = mp["url"]
+                    matched_espn["stream_url"] = mp["url"]
+                    matched_espn["palinsesto_url"] = mp.get("portal_url", MADPLAY_FOOTBALL_PAGE)
+                else:
                     all_matches.append({
                         "id": f"mp_{mp['id']}",
                         "sport": mp["sport_name"],
@@ -982,10 +1034,10 @@ class SportsScraper:
                         "is_live": "LIVE" in mp["time"],
                         "is_completed": False,
                         "datetime": dt,
-                        "url": DEFAULT_PALINSESTO_URL,
-                        "palinsesto_url": DEFAULT_PALINSESTO_URL,
-                        "tv_channels": "Diretta.it / Canali Sportivi",
-                        "stream_url": None,
+                        "url": mp["url"],
+                        "palinsesto_url": mp.get("portal_url", MADPLAY_FOOTBALL_PAGE),
+                        "tv_channels": "MadPlay77 Live Streaming",
+                        "stream_url": mp["url"],
                     })
 
         # 5. Se la lega specifica richiesta non gioca oggi (es. Serie A di martedì), trova il prossimo turno!
@@ -1051,7 +1103,25 @@ class SportsScraper:
             is_upcoming=is_upcoming_round
         )
 
-        pal_url = matched_league_cfg.get("palinsesto_url") if matched_league_cfg else DEFAULT_PALINSESTO_URL
+        pal_url = MADPLAY_FOOTBALL_PAGE
+        if sport_filter:
+            sf = sport_filter.lower()
+            if sf in ("basket", "pallacanestro"):
+                pal_url = f"{MADPLAY_BASE_URL}/it/basketball.html"
+            elif sf == "tennis":
+                pal_url = f"{MADPLAY_BASE_URL}/it/tennis.html"
+            elif sf in ("f1", "motogp", "motori"):
+                pal_url = f"{MADPLAY_BASE_URL}/it/motorsport.html"
+            else:
+                pal_url = MADPLAY_FOOTBALL_PAGE
+        elif matched_league_cfg:
+            sp = matched_league_cfg.get("sport", "").lower()
+            if sp == "basket":
+                pal_url = f"{MADPLAY_BASE_URL}/it/basketball.html"
+            elif sp == "tennis":
+                pal_url = f"{MADPLAY_BASE_URL}/it/tennis.html"
+            else:
+                pal_url = MADPLAY_FOOTBALL_PAGE
         return {
             "found": len(all_matches) > 0,
             "matches": all_matches,
@@ -1214,7 +1284,8 @@ class SportsScraper:
         ).strip()
         tokens = [t for t in clean_q.split() if len(t) >= 2]
 
-        # 1. Cerca con priorità negli scoreboard ufficiali ESPN (match center e palinsesto ufficiale)
+        # 1. Cerca con priorità negli scoreboard ufficiali ESPN
+        madplay_events = await self.get_live_matches()
         for l_key in ("serie_a", "champions_league", "premier_league", "la_liga", "bundesliga", "serie_b", "coppa_italia", "nba", "euroleague", "serie_a_basket", "tennis_atp", "tennis_wta"):
             evs = await self.fetch_league_events(l_key, fetch_upcoming=True)
             for ev in evs:
@@ -1226,8 +1297,18 @@ class SportsScraper:
                     elif re.search(rf"\b{re.escape(tok)}", t_low):
                         score += 3
                 if score > 0:
+                    # Controlla se la partita è presente su MadPlay77 per fornire il link diretto
+                    for mp in madplay_events:
+                        mp_t = mp["title"].lower()
+                        if (ev.get("home") and ev["home"].lower() in mp_t) or (ev.get("away") and ev["away"].lower() in mp_t):
+                            ev["url"] = mp["url"]
+                            ev["stream_url"] = mp["url"]
+                            ev["palinsesto_url"] = mp.get("portal_url", MADPLAY_FOOTBALL_PAGE)
+                            break
+
                     v_top = ev["title"].replace(" vs ", " contro ")
-                    voice = f"Magia ragazzi! Vi ho messo il palinsesto e tutti i dettagli per {v_top} in chat! Date un'occhiata!"
+                    voice = f"Magia ragazzi! Vi ho messo il link della partita e tutti i dettagli per {v_top} in chat! Date un'occhiata!"
+                    pal_link = ev.get("palinsesto_url") or MADPLAY_FOOTBALL_PAGE
                     return {
                         "found": True,
                         "type": "single_match",
@@ -1235,12 +1316,11 @@ class SportsScraper:
                         "best_match": ev,
                         "all_matches": [ev],
                         "voice_summary": voice,
-                        "palinsesto_url": ev.get("palinsesto_url", DEFAULT_PALINSESTO_URL),
-                        "portal_url": ev.get("palinsesto_url", DEFAULT_PALINSESTO_URL),
+                        "palinsesto_url": pal_link,
+                        "portal_url": pal_link,
                     }
 
-        # 2. Corrispondenza negli altri eventi live tracciati (fallback live)
-        madplay_events = await self.get_live_matches()
+        # 2. Corrispondenza diretta negli eventi live tracciati su MadPlay77
         scored = []
         for m in madplay_events:
             t_low = m["title"].lower()
@@ -1261,12 +1341,9 @@ class SportsScraper:
         if scored:
             scored.sort(key=lambda x: x[0], reverse=True)
             best = dict(scored[0][1])
-            best["url"] = DEFAULT_PALINSESTO_URL
-            best["palinsesto_url"] = DEFAULT_PALINSESTO_URL
-            best["tv_channels"] = "Diretta.it / Canali Sportivi"
-            best["stream_url"] = None
             top_t = best['title'].replace(" vs ", " contro ")
-            voice = f"Magia ragazzi! Vi ho lasciato il palinsesto in chat per {top_t}! Date un'occhiata!"
+            voice = f"Magia ragazzi! Vi ho lasciato il link della partita in chat per {top_t}! Date un'occhiata!"
+            pal_u = best.get("portal_url") or MADPLAY_FOOTBALL_PAGE
             return {
                 "found": True,
                 "type": "single_match",
@@ -1274,8 +1351,8 @@ class SportsScraper:
                 "best_match": best,
                 "all_matches": [m for _, m in scored],
                 "voice_summary": voice,
-                "palinsesto_url": DEFAULT_PALINSESTO_URL,
-                "portal_url": DEFAULT_PALINSESTO_URL,
+                "palinsesto_url": pal_u,
+                "portal_url": pal_u,
             }
 
         # 3. Nessuna corrispondenza: fallback elegante con i match in evidenza stasera
@@ -1341,25 +1418,22 @@ class SportsScraper:
             tv_info = m.get("tv_channels") or "Sky Sport / DAZN / NOW"
             embed.add_field(name="📺 Trasmissione TV Ufficiale", value=f"**{tv_info}**", inline=False)
 
-            raw_match_url = m.get("url") or DEFAULT_PALINSESTO_URL
-            match_url = DEFAULT_PALINSESTO_URL if "madplay" in raw_match_url else raw_match_url
-            raw_palinsesto = m.get("palinsesto_url") or DEFAULT_PALINSESTO_URL
-            palinsesto_url = DEFAULT_PALINSESTO_URL if "madplay" in raw_palinsesto else raw_palinsesto
+            match_url = m.get("url") or m.get("stream_url") or MADPLAY_FOOTBALL_PAGE
+            palinsesto_url = m.get("palinsesto_url") or MADPLAY_FOOTBALL_PAGE
 
             links_desc = (
-                f"• [📊 Match Center & Dettagli Ufficiali]({match_url})\n"
-                f"• [📅 Palinsesto Ufficiale {m.get('league', '')}]({palinsesto_url})\n"
+                f"• [📺 **Guarda la Partita su MadPlay77**]({match_url})\n"
+                f"• [🌐 Palinsesto Completo MadPlay77]({palinsesto_url})\n"
                 f"• [📺 Guida TV Sky Sport & Canali]({SKY_GUIDA_TV_URL})\n"
                 f"• [⚡ Diretta.it - Risultati in Tempo Reale]({DEFAULT_PALINSESTO_URL})"
             )
-            embed.add_field(name="🔗 Link Palinsesto & Diretta", value=links_desc, inline=False)
-            embed.set_footer(text="Franchino Sports • Palinsesto Ufficiale")
+            embed.add_field(name="🔗 Link Partita & Palinsesto", value=links_desc, inline=False)
+            embed.set_footer(text="Franchino Sports • Palinsesto MadPlay77")
 
             view = discord.ui.View()
-            view.add_item(discord.ui.Button(label="Match Center & Dettagli", url=match_url, style=discord.ButtonStyle.link, emoji="📊"))
-            view.add_item(discord.ui.Button(label="Palinsesto Competizione", url=palinsesto_url, style=discord.ButtonStyle.link, emoji="📅"))
+            view.add_item(discord.ui.Button(label="Guarda la Partita", url=match_url, style=discord.ButtonStyle.link, emoji="📺"))
+            view.add_item(discord.ui.Button(label="Palinsesto MadPlay77", url=palinsesto_url, style=discord.ButtonStyle.link, emoji="🌐"))
             view.add_item(discord.ui.Button(label="Guida TV Sky Sport", url=SKY_GUIDA_TV_URL, style=discord.ButtonStyle.link, emoji="📺"))
-            view.add_item(discord.ui.Button(label="Diretta.it Live", url=DEFAULT_PALINSESTO_URL, style=discord.ButtonStyle.link, emoji="⚡"))
             return embed, view, voice_text
 
         # C. Palinsesto Incontri di Oggi / Stasera
@@ -1376,7 +1450,7 @@ class SportsScraper:
             else:
                 embed_title = "🏆 Palinsesto Sportivo di Stasera & Grandi Match"
 
-            embed_desc = "Ecco il quadro completo delle sfide, gli orari e i link del palinsesto ufficiale per seguire lo sport!"
+            embed_desc = "Ecco il quadro completo delle sfide, gli orari e i link delle partite per seguirle su MadPlay77!"
 
             embed = discord.Embed(
                 title=embed_title,
@@ -1396,8 +1470,7 @@ class SportsScraper:
                 if m.get("score"):
                     time_disp += f" (**{m['score']}**)"
 
-                raw_target = m.get("url") or m.get("palinsesto_url") or DEFAULT_PALINSESTO_URL
-                target_link = DEFAULT_PALINSESTO_URL if "madplay" in raw_target else raw_target
+                target_link = m.get("url") or m.get("stream_url") or MADPLAY_FOOTBALL_PAGE
                 link_md = f"[{m['title']}]({target_link})"
 
                 line = f"• {time_disp} — {link_md}"
@@ -1412,15 +1485,20 @@ class SportsScraper:
             embed.set_footer(text=footer_txt)
 
             view = discord.ui.View()
-            pal_raw = result.get("palinsesto_url") or DEFAULT_PALINSESTO_URL
-            palinsesto_target = DEFAULT_PALINSESTO_URL if "madplay" in pal_raw else pal_raw
-            league_lbl = req_league or req_sport or "Ufficiale"
-            if len(league_lbl) > 18:
-                league_lbl = league_lbl[:15] + "..."
+            # Pulsanti diretti per le prime 2 partite presenti su MadPlay77
+            stream_count = 0
+            for m in matches:
+                m_url = m.get("url") or m.get("stream_url")
+                if m_url and "madplay77.ru" in m_url and stream_count < 2:
+                    short_title = m["title"]
+                    if len(short_title) > 28:
+                        short_title = short_title[:25] + "..."
+                    view.add_item(discord.ui.Button(label=f"Partita: {short_title}", url=m_url, style=discord.ButtonStyle.link, emoji="📺"))
+                    stream_count += 1
 
-            view.add_item(discord.ui.Button(label=f"Palinsesto {league_lbl}", url=palinsesto_target, style=discord.ButtonStyle.link, emoji="📅"))
+            palinsesto_target = result.get("palinsesto_url") or MADPLAY_FOOTBALL_PAGE
+            view.add_item(discord.ui.Button(label="Palinsesto MadPlay77", url=palinsesto_target, style=discord.ButtonStyle.link, emoji="🌐"))
             view.add_item(discord.ui.Button(label="Guida TV Sky Sport", url=SKY_GUIDA_TV_URL, style=discord.ButtonStyle.link, emoji="📺"))
-            view.add_item(discord.ui.Button(label="Palinsesto Live Diretta.it", url=DEFAULT_PALINSESTO_URL, style=discord.ButtonStyle.link, emoji="⚡"))
             return embed, view, voice_text
 
         # D. Not Found / Fallback
@@ -1431,11 +1509,11 @@ class SportsScraper:
         )
         featured = result.get("featured", [])
         if featured:
-            lines = [f"• **{f['title']}** ({f.get('sport_name') or f.get('league', 'Sport')}) - `{f['time']}` → [Palinsesto]({DEFAULT_PALINSESTO_URL})" for f in featured[:5]]
+            lines = [f"• **{f['title']}** ({f.get('sport_name') or f.get('league', 'Sport')}) - `{f['time']}` → [Guarda la Partita]({f.get('url', MADPLAY_FOOTBALL_PAGE)})" for f in featured[:5]]
             embed.add_field(name="🔥 Eventi Principali nel Palinsesto di Oggi:", value="\n".join(lines), inline=False)
 
         view = discord.ui.View()
-        view.add_item(discord.ui.Button(label="Palinsesto Completo Diretta.it", url=DEFAULT_PALINSESTO_URL, style=discord.ButtonStyle.link, emoji="📅"))
+        view.add_item(discord.ui.Button(label="Palinsesto MadPlay77", url=MADPLAY_FOOTBALL_PAGE, style=discord.ButtonStyle.link, emoji="🌐"))
         view.add_item(discord.ui.Button(label="Guida TV Sky Sport", url=SKY_GUIDA_TV_URL, style=discord.ButtonStyle.link, emoji="📺"))
         return embed, view, voice_text
 
