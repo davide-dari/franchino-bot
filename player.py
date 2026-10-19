@@ -887,9 +887,19 @@ class GuildPlayer:
             pass
         self.voice_client = None
 
-    async def connect(self, channel: discord.VoiceChannel, text_channel: Optional[discord.TextChannel] = None) -> discord.VoiceClient:
+    async def connect(
+        self,
+        channel: discord.VoiceChannel,
+        text_channel: Optional[discord.TextChannel] = None,
+        is_auto: bool = False,
+    ) -> Optional[discord.VoiceClient]:
         """Connette Franchino al canale vocale specificato e attiva l'ascolto dei comandi vocali."""
         async with self._connect_lock:
+            # Se è una connessione automatica e il cooldown di disconnessione manuale è attivo, non connetterti
+            if is_auto and self.has_manual_leave_cooldown():
+                logger.debug(f"🛑 Auto-connessione annullata per '{self.guild.name}': cooldown disconnessione manuale attivo.")
+                return None
+
             # Backoff / cooldown sulle riconnessioni per evitare rate limit Gateway Voice OP 4 (Close Code 4021)
             now = time.monotonic()
             time_since_last_connect = now - getattr(self, "_last_connect_time", 0.0)
@@ -901,8 +911,13 @@ class GuildPlayer:
                 logger.debug(f"⏳ Cooldown connessione vocale per '{self.guild.name}': attesa {wait_time:.1f}s...")
                 await asyncio.sleep(wait_time)
 
+                if is_auto and self.has_manual_leave_cooldown():
+                    logger.debug(f"🛑 Auto-connessione annullata dopo attesa per '{self.guild.name}': cooldown attivo.")
+                    return None
+
             self._last_connect_time = time.monotonic()
-            self.clear_manual_leave_cooldown()
+            if not is_auto:
+                self.clear_manual_leave_cooldown()
 
             self.text_channel = resolve_preferred_text_channel(self.guild, text_channel or self.text_channel or channel)
 
@@ -973,6 +988,7 @@ class GuildPlayer:
         NON chiama MAI self.connect() per evitare loop di riconnessione e rate limit 4021.
         """
         try:
+            consecutive_disconnected_checks = 0
             while True:
                 await asyncio.sleep(2.0)
                 if self._restarting:
@@ -981,11 +997,18 @@ class GuildPlayer:
                 if (not self.voice_client or not self.voice_client.is_connected()) and self.guild.voice_client:
                     if self.guild.voice_client.is_connected():
                         self.voice_client = self.guild.voice_client
+                        consecutive_disconnected_checks = 0
 
                 # Se non è connesso, non tentare di riconnetterti:
                 # la riconnessione è gestita esclusivamente da on_voice_state_update o comandi utente.
                 if not self.voice_client or not self.voice_client.is_connected():
+                    consecutive_disconnected_checks += 1
+                    if consecutive_disconnected_checks >= 5:
+                        logger.debug(f"🛑 Watchdog vocale per '{self.guild.name}' terminato per disconnessione prolungata.")
+                        break
                     continue
+
+                consecutive_disconnected_checks = 0
 
                 reader = getattr(self.voice_client, "_reader", None)
                 router_dead = bool(
@@ -1028,8 +1051,26 @@ class GuildPlayer:
             if not channel and self.guild.voice_client and self.guild.voice_client.channel:
                 channel = self.guild.voice_client.channel
             if not channel:
+                bot_user = getattr(self.bot, "user", None)
+                bot_id = bot_user.id if bot_user else 0
+                if not bot_id and getattr(self.guild, "me", None):
+                    bot_id = getattr(self.guild.me, "id", 0)
+                afk_channel = getattr(self.guild, "afk_channel", None)
                 for vc_ch in self.guild.voice_channels:
-                    human_ids = [uid for uid in vc_ch.voice_states.keys() if uid != self.bot.user.id]
+                    if afk_channel and (vc_ch == afk_channel or getattr(vc_ch, "id", None) == getattr(afk_channel, "id", None)):
+                        continue
+                    human_ids = []
+                    for uid in getattr(vc_ch, "voice_states", {}).keys():
+                        if bot_id and uid == bot_id:
+                            continue
+                        m = self.guild.get_member(uid) if hasattr(self.guild, "get_member") else None
+                        if m and getattr(m, "bot", False):
+                            continue
+                        u = getattr(self.bot, "get_user", lambda _: None)(uid)
+                        if u and getattr(u, "bot", False):
+                            continue
+                        if m is not None or u is not None:
+                            human_ids.append(uid)
                     if human_ids:
                         channel = vc_ch
                         break
@@ -1574,6 +1615,8 @@ class GuildPlayer:
                         await self.text_channel.send("👋 **Franchino lascia la console per inattività!** A presto ragazzi! 🎧")
                     except Exception:
                         pass
+                if hasattr(self, "set_manual_leave_cooldown"):
+                    self.set_manual_leave_cooldown(180.0)
                 await self.disconnect()
         except asyncio.CancelledError:
             pass

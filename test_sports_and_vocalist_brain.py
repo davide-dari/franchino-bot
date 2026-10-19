@@ -142,11 +142,15 @@ class TestSportsScraperEngine(unittest.IsolatedAsyncioTestCase):
 
     async def test_inter_search_does_not_match_winterthur(self):
         """'streaming inter' non deve matchare 'Winterthur' per semplice sottostringa."""
-        res = await sports_scraper.search_event("streaming inter")
-        self.assertTrue(res.get("found"))
-        title = res.get("best_match", {}).get("title", "")
-        self.assertNotIn("Winterthur", title)
-        self.assertTrue(any(k in title.lower() for k in ("inter", "internazionale")))
+        fake_events = [
+            {"title": "Inter vs Juventus", "home": "Inter", "away": "Juventus", "league": "Serie A", "sport": "Calcio"}
+        ]
+        with patch.object(sports_scraper, "fetch_league_events", AsyncMock(return_value=fake_events)):
+            res = await sports_scraper.search_event("streaming inter")
+            self.assertTrue(res.get("found"))
+            title = res.get("best_match", {}).get("title", "")
+            self.assertNotIn("Winterthur", title)
+            self.assertTrue(any(k in title.lower() for k in ("inter", "internazionale")))
 
     async def test_motorsport_f1_and_motogp(self):
         """Verifica il recupero informazioni su F1 e MotoGP."""
