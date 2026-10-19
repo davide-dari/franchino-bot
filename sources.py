@@ -126,11 +126,11 @@ class SourceManager:
         except Exception:
             pass
 
-        # Client YouTube: 'default' usa automaticamente (web_embedded, tv_downgraded, web) quando ci sono i cookie,
-        # mentre 'android' e 'visionos' funzionano senza cookie.
+        # Client YouTube: 'visionos' e 'android' bypassano i blocchi antibot dei datacenter (Oracle, AWS, Docker)
+        # anche senza cookie o con cookie scaduti.
         yt_extractor_args = {
             "youtube": {
-                "player_client": ["android", "default", "web_embedded"],
+                "player_client": ["visionos", "android", "mediaconnect", "ios", "default"],
             }
         }
 
@@ -527,7 +527,7 @@ class SourceManager:
             fallback_opts = dict(self.ydl_opts_stream)
             fallback_opts["extractor_args"] = {
                 "youtube": {
-                    "player_client": ["android", "web_safari", "visionos"],
+                    "player_client": ["visionos", "android", "mediaconnect", "ios"],
                 }
             }
             if "cookiefile" in fallback_opts:
@@ -613,7 +613,7 @@ class SourceManager:
         try:
             return self._do_extract_single(target, requester, self.ydl_opts_stream, download=True)
         except Exception as first_err:
-            logger.warning(f"Primo tentativo download fallito per '{target}': {first_err}. Riprovo con client web_safari/android...")
+            logger.warning(f"Primo tentativo download fallito per '{target}': {first_err}. Riprovo senza cookies con visionos/android...")
             fallback_opts = {
                 "format": "ba[abr<=160]/251/140/bestaudio/best",
                 "noplaylist": True,
@@ -625,15 +625,13 @@ class SourceManager:
                 "remote_components": ["ejs:github"],
                 "extractor_args": {
                     "youtube": {
-                        "player_client": ["web_safari", "android", "visionos"],
+                        "player_client": ["visionos", "android", "mediaconnect", "ios"],
                     }
                 },
                 "socket_timeout": 8.0,
             }
             if NODE_PATH:
                 fallback_opts["js_runtimes"] = {"node": {}}
-            if "cookiefile" in self.ydl_opts_stream:
-                fallback_opts["cookiefile"] = self.ydl_opts_stream["cookiefile"]
             return self._do_extract_single(target, requester, fallback_opts, download=True)
 
     async def ensure_stream_url(self, song: SongInfo) -> str:
