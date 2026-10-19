@@ -279,6 +279,8 @@ class FranchinoControlsView(View):
     @discord.ui.button(emoji="❌", label="Disconnetti", style=discord.ButtonStyle.danger, row=4)
     async def leave_btn(self, interaction: discord.Interaction, button: Button):
         """Disconnette il bot dal canale vocale."""
+        if hasattr(self.player, "set_manual_leave_cooldown"):
+            self.player.set_manual_leave_cooldown(60.0)
         await self.player.disconnect()
         self.stop()
         await interaction.response.send_message("👋 Franchino ha lasciato la console! A presto ragazzi!", ephemeral=False)

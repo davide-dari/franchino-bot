@@ -320,6 +320,36 @@ class GuildPlayer:
         self._duck_restore_task: Optional[asyncio.Task] = None
         self._last_entrance_greeting_time: float = 0.0
         self._consecutive_play_errors: int = 0
+        self._last_activity_time: float = time.monotonic()
+        self._manual_leave_until: float = 0.0
+        self._last_connect_time: float = 0.0
+        self._connect_cooldown_seconds: float = 5.0
+
+    def is_connected(self) -> bool:
+        """Verifica se il voice client è attivo e connesso a Discord."""
+        return bool(self.voice_client and self.voice_client.is_connected())
+
+    def set_manual_leave_cooldown(self, seconds: float = 60.0):
+        """Imposta un periodo di cooldown dopo una disconnessione manuale per impedire l'auto-join immediato."""
+        self._manual_leave_until = time.monotonic() + seconds
+
+    def has_manual_leave_cooldown(self) -> bool:
+        """Controlla se è ancora attivo il cooldown di disconnessione manuale."""
+        leave_until = getattr(self, "_manual_leave_until", 0.0)
+        try:
+            return float(leave_until) > time.monotonic()
+        except (TypeError, ValueError):
+            return False
+
+    def clear_manual_leave_cooldown(self):
+        """Azzera il cooldown di disconnessione manuale."""
+        self._manual_leave_until = 0.0
+
+    def record_activity(self):
+        """Registra attività (musica, comandi vocali, interazioni) e aggiorna il timer di inattività."""
+        self._last_activity_time = time.monotonic()
+        if not self.is_playing() and not self.queue:
+            self._reset_inactivity_timer()
 
     @property
     def is_speaking_tts(self) -> bool:
@@ -860,6 +890,20 @@ class GuildPlayer:
     async def connect(self, channel: discord.VoiceChannel, text_channel: Optional[discord.TextChannel] = None) -> discord.VoiceClient:
         """Connette Franchino al canale vocale specificato e attiva l'ascolto dei comandi vocali."""
         async with self._connect_lock:
+            # Backoff / cooldown sulle riconnessioni per evitare rate limit Gateway Voice OP 4 (Close Code 4021)
+            now = time.monotonic()
+            time_since_last_connect = now - getattr(self, "_last_connect_time", 0.0)
+            connect_cooldown = getattr(self, "_connect_cooldown_seconds", 5.0)
+            if time_since_last_connect < connect_cooldown:
+                if self.is_connected() and self.voice_client and self.voice_client.channel == channel:
+                    return self.voice_client
+                wait_time = connect_cooldown - time_since_last_connect
+                logger.debug(f"⏳ Cooldown connessione vocale per '{self.guild.name}': attesa {wait_time:.1f}s...")
+                await asyncio.sleep(wait_time)
+
+            self._last_connect_time = time.monotonic()
+            self.clear_manual_leave_cooldown()
+
             self.text_channel = resolve_preferred_text_channel(self.guild, text_channel or self.text_channel or channel)
 
             # Sincronizza eventuale voice_client già attivo sul server
@@ -924,9 +968,9 @@ class GuildPlayer:
 
     async def _voice_listener_watchdog(self):
         """
-        Watchdog continuo 24/7: controlla ogni 2 secondi che Franchino sia connesso e sempre in ascolto.
-        Se Discord resetta il WebSocket vocale o il router audio si ferma, lo riattiva istantaneamente
-        senza mai andare in pausa!
+        Watchdog audio sink: controlla periodicamente che, SE Franchino è connesso,
+        il sink di ricezione vocale rimanga attivo.
+        NON chiama MAI self.connect() per evitare loop di riconnessione e rate limit 4021.
         """
         try:
             while True:
@@ -938,22 +982,9 @@ class GuildPlayer:
                     if self.guild.voice_client.is_connected():
                         self.voice_client = self.guild.voice_client
 
-                # Se la connessione è caduta ma c'è qualcuno in un canale vocale, riconnettiti automaticamente!
+                # Se non è connesso, non tentare di riconnetterti:
+                # la riconnessione è gestita esclusivamente da on_voice_state_update o comandi utente.
                 if not self.voice_client or not self.voice_client.is_connected():
-                    for vc_ch in self.guild.voice_channels:
-                        human_ids = [
-                            uid for uid in vc_ch.voice_states.keys()
-                            if uid != self.bot.user.id and not (self.guild.get_member(uid) and self.guild.get_member(uid).bot)
-                        ]
-                        if not human_ids:
-                            human_ids = [m.id for m in vc_ch.members if not m.bot]
-                        if human_ids:
-                            try:
-                                logger.info(f"🔄 Riconnessione automatica 24/7 al canale '{vc_ch.name}'...")
-                                await self.connect(vc_ch, self.text_channel or vc_ch)
-                            except Exception as e:
-                                logger.debug(f"Tentativo di riconnessione fallito: {e}")
-                            break
                     continue
 
                 reader = getattr(self.voice_client, "_reader", None)
@@ -973,7 +1004,7 @@ class GuildPlayer:
                 )
                 not_listening = hasattr(self.voice_client, "is_listening") and not self.voice_client.is_listening()
                 if not_listening or router_dead or sink_dead:
-                    logger.info("🔄 Riattivazione automatica del listener vocale di Franchino (sempre in ascolto)...")
+                    logger.info("🔄 Riattivazione automatica del listener vocale di Franchino...")
                     from voice_commands import FranchinoVoiceSink
                     try:
                         if hasattr(self.voice_client, "stop_listening"):
@@ -1508,19 +1539,44 @@ class GuildPlayer:
             logger.warning(f"Impossibile inviare messaggio Now Playing: {e}")
 
     def _reset_inactivity_timer(self):
-        """Disabilitato: Franchino non va MAI in pausa per inattività e resta sempre in ascolto nel canale!"""
+        """Avvia o resetta il timer di inattività: se la stanza resta inattiva per INACTIVITY_TIMEOUT, disconnette il bot."""
         self._cancel_inactivity_timer()
         self._ensure_voice_listening()
+        self._last_activity_time = time.monotonic()
+        if self.is_connected() and not self.is_playing() and not self.queue:
+            self.inactivity_task = self.bot.loop.create_task(self._inactivity_countdown())
 
     def _cancel_inactivity_timer(self):
-        """Cancella eventuali timer."""
+        """Cancella eventuali timer di inattività attivi."""
         if self.inactivity_task and not self.inactivity_task.done():
             self.inactivity_task.cancel()
         self.inactivity_task = None
 
     async def _inactivity_countdown(self):
-        """Franchino rimane sempre connesso e in ascolto 24/7."""
-        return
+        """Disconnette Franchino in modo pulito se rimane inattivo senza brani o comandi vocali per INACTIVITY_TIMEOUT secondi."""
+        timeout = float(INACTIVITY_TIMEOUT)
+        try:
+            while True:
+                now = time.monotonic()
+                elapsed = now - getattr(self, "_last_activity_time", now)
+                remaining = timeout - elapsed
+                if remaining <= 0:
+                    break
+                await asyncio.sleep(min(remaining, 5.0))
+                # Se è iniziata la musica, TTS o ci sono canzoni in coda, fermiamo il conto alla rovescia
+                if self.is_playing() or self.is_speaking_tts or (self.queue and len(self.queue) > 0):
+                    return
+
+            if not self.is_playing() and not self.is_speaking_tts and not self.queue and self.is_connected():
+                logger.info(f"⏳ Inattività di {int(timeout)}s trascorsa su '{self.guild.name}': Franchino lascia la console.")
+                if self.text_channel:
+                    try:
+                        await self.text_channel.send("👋 **Franchino lascia la console per inattività!** A presto ragazzi! 🎧")
+                    except Exception:
+                        pass
+                await self.disconnect()
+        except asyncio.CancelledError:
+            pass
 
     def create_queue_embed(self, page: int = 1) -> discord.Embed:
         """Genera un embed formattato con l'elenco dei brani in coda e paginazione."""

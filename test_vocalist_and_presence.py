@@ -1,7 +1,7 @@
 import asyncio
 import os
 import unittest
-from unittest.mock import MagicMock, AsyncMock, patch
+from unittest.mock import MagicMock, AsyncMock, patch, PropertyMock
 
 import config
 from main import _get_human_ids_in_channel, _get_all_humans_in_voice
@@ -277,6 +277,225 @@ class TestVoicePresenceAndVocalist(unittest.IsolatedAsyncioTestCase):
         mock_player.stop.assert_called_once()
         mock_interaction.response.send_message.assert_not_called()
         mock_interaction.response.defer.assert_called_once()
+
+    def test_manual_leave_cooldown_methods(self):
+        """Verifica impostazione, controllo e cancellazione del cooldown di disconnessione manuale."""
+        mock_bot = MagicMock()
+        mock_guild = MagicMock()
+        mock_source = MagicMock()
+        player = GuildPlayer(mock_bot, mock_guild, mock_source)
+
+        self.assertFalse(player.has_manual_leave_cooldown())
+        player.set_manual_leave_cooldown(60.0)
+        self.assertTrue(player.has_manual_leave_cooldown())
+        player.clear_manual_leave_cooldown()
+        self.assertFalse(player.has_manual_leave_cooldown())
+
+    async def test_presence_loop_respects_manual_leave_cooldown(self):
+        """Verifica che _check_and_sync_voice_presence NON effettui auto-join se il cooldown è attivo."""
+        from main import _check_and_sync_voice_presence, player_manager, bot
+
+        mock_guild = MagicMock(voice_client=None, afk_channel=None)
+        mock_channel = MagicMock(guild=mock_guild, name="Generale")
+        user1 = MagicMock(id=101, bot=False)
+        mock_channel.members = [user1]
+        mock_channel.voice_states = {101: MagicMock()}
+        mock_guild.voice_channels = [mock_channel]
+
+        mock_player = MagicMock()
+        mock_player.has_manual_leave_cooldown.return_value = True
+        mock_player.connect = AsyncMock()
+        mock_player.voice_client = None
+
+        with patch.object(type(bot), "guilds", new_callable=PropertyMock, return_value=[mock_guild]):
+            with patch.object(player_manager, "get_player", return_value=mock_player):
+                await _check_and_sync_voice_presence()
+                mock_player.connect.assert_not_called()
+
+                # Quando il cooldown scade:
+                mock_player.has_manual_leave_cooldown.return_value = False
+                await _check_and_sync_voice_presence()
+                mock_player.connect.assert_called_once()
+
+    async def test_on_voice_state_update_respects_manual_leave_cooldown(self):
+        """Verifica che on_voice_state_update NON effettui auto-join se il cooldown è attivo."""
+        from main import on_voice_state_update, player_manager
+
+        mock_guild = MagicMock()
+        mock_channel = MagicMock(guild=mock_guild, name="Generale")
+        mock_user = MagicMock(id=501, bot=False, display_name="Luca", guild=mock_guild)
+
+        mock_player = MagicMock()
+        mock_player.has_manual_leave_cooldown.return_value = True
+        mock_player.connect = AsyncMock()
+        mock_player.disconnect = AsyncMock()
+        mock_player.voice_client = None
+
+        with patch.object(player_manager, "get_player", return_value=mock_player):
+            before_state = MagicMock(channel=None)
+            after_state = MagicMock(channel=mock_channel)
+            mock_channel.members = [mock_user]
+            mock_channel.voice_states = {501: MagicMock()}
+            mock_guild.voice_channels = [mock_channel]
+
+            await on_voice_state_update(mock_user, before_state, after_state)
+            mock_player.connect.assert_not_called()
+
+    async def test_leave_commands_trigger_manual_leave_cooldown(self):
+        """Verifica che /leave, il pulsante UI e il comando vocale impostino il cooldown di 60s."""
+        from main import leave as leave_slash_cmd, player_manager
+        from views import FranchinoControlsView
+        from voice_commands import FranchinoVoiceSink
+
+        mock_player = MagicMock()
+        mock_player.voice_client = MagicMock(is_connected=MagicMock(return_value=True))
+        mock_player.set_manual_leave_cooldown = MagicMock()
+        mock_player.disconnect = AsyncMock()
+
+        # 1. Slash command /leave
+        mock_ctx = MagicMock()
+        mock_ctx.guild = MagicMock()
+        mock_ctx.send = AsyncMock()
+        with patch.object(player_manager, "get_player", return_value=mock_player):
+            await leave_slash_cmd(mock_ctx)
+            mock_player.set_manual_leave_cooldown.assert_called_with(60.0)
+            mock_player.disconnect.assert_called_once()
+
+        # 2. UI button leave_btn
+        mock_player.reset_mock()
+        mock_player.disconnect = AsyncMock()
+        view = FranchinoControlsView(mock_player)
+        mock_interaction = MagicMock()
+        mock_interaction.response.send_message = AsyncMock()
+        await view.leave_btn.callback(mock_interaction)
+        mock_player.set_manual_leave_cooldown.assert_called_with(60.0)
+        mock_player.disconnect.assert_called_once()
+
+        # 3. Voice command "esci"
+        mock_player.reset_mock()
+        mock_player.disconnect = AsyncMock()
+        mock_player.bot = MagicMock()
+        mock_player.bot.loop = MagicMock()
+        with patch.object(FranchinoVoiceSink, "_monitor_speech_loop", new=lambda self: None):
+            sink = FranchinoVoiceSink(mock_player)
+            sink._notify_channel = AsyncMock()
+            try:
+                user = MagicMock(display_name="Davide")
+                await sink._handle_transcribed_text(user, "Hey Franchino vattene", detected_cmd="vattene")
+                mock_player.set_manual_leave_cooldown.assert_called_with(60.0)
+                mock_player.disconnect.assert_called_once()
+            finally:
+                sink.cleanup()
+
+    def test_afk_channel_exclusion(self):
+        """Verifica che i canali AFK vengano completamente esclusi dal conteggio umani."""
+        mock_guild = MagicMock()
+        afk_channel = MagicMock(id=888, guild=mock_guild)
+        mock_guild.afk_channel = afk_channel
+
+        user1 = MagicMock(id=101, bot=False)
+        afk_channel.members = [user1]
+        afk_channel.voice_states = {101: MagicMock()}
+
+        # 1. _get_human_ids_in_channel sul canale AFK restituisce vuoto
+        humans = _get_human_ids_in_channel(afk_channel)
+        self.assertEqual(humans, [])
+
+        # 2. _get_all_humans_in_voice con solo canale AFK popolato restituisce vuoto
+        mock_guild.voice_channels = [afk_channel]
+        all_humans = _get_all_humans_in_voice(mock_guild)
+        self.assertEqual(all_humans, [])
+
+    def test_uncached_bot_identification(self):
+        """Verifica che un bot non presente nella cache della guild venga riconosciuto come bot tramite bot.get_user."""
+        from main import bot
+
+        mock_guild = MagicMock()
+        mock_channel = MagicMock(guild=mock_guild)
+        mock_guild.afk_channel = None
+
+        # Membro non in cache della guild
+        mock_guild.get_member.return_value = None
+        mock_channel.members = []
+        mock_channel.voice_states = {999: MagicMock()}
+
+        # bot.get_user lo riconosce come bot
+        bot_user_mock = MagicMock(id=999, bot=True)
+        with patch.object(bot, "get_user", return_value=bot_user_mock):
+            humans = _get_human_ids_in_channel(mock_channel)
+            self.assertEqual(humans, [])
+
+        # Se invece è un utente umano non in cache
+        human_user_mock = MagicMock(id=777, bot=False)
+        mock_channel.voice_states = {777: MagicMock()}
+        with patch.object(bot, "get_user", return_value=human_user_mock):
+            humans = _get_human_ids_in_channel(mock_channel)
+            self.assertEqual(humans, [777])
+
+    async def test_inactivity_countdown_disconnects(self):
+        """Verifica che _inactivity_countdown disconnetta pulitamente il bot se inattivo."""
+        import time
+        from config import INACTIVITY_TIMEOUT
+
+        mock_bot = MagicMock()
+        mock_guild = MagicMock()
+        mock_source = MagicMock()
+        player = GuildPlayer(mock_bot, mock_guild, mock_source)
+
+        player.voice_client = MagicMock(is_connected=MagicMock(return_value=True))
+        player.disconnect = AsyncMock()
+        player.is_playing = MagicMock(return_value=False)
+        player._playing_tts = False
+        player.text_channel = MagicMock(send=AsyncMock())
+
+        # Impostiamo l'ultima attività indietro nel tempo per far scadere il timeout
+        player._last_activity_time = time.monotonic() - (INACTIVITY_TIMEOUT + 10.0)
+
+        await player._inactivity_countdown()
+        player.disconnect.assert_called_once()
+        player.text_channel.send.assert_called_once()
+
+    async def test_inactivity_countdown_aborts_if_playing(self):
+        """Verifica che _inactivity_countdown non disconnetta se c'è musica in corso."""
+        import time
+        from config import INACTIVITY_TIMEOUT
+
+        mock_bot = MagicMock()
+        mock_guild = MagicMock()
+        mock_source = MagicMock()
+        player = GuildPlayer(mock_bot, mock_guild, mock_source)
+
+        player.voice_client = MagicMock(is_connected=MagicMock(return_value=True))
+        player.disconnect = AsyncMock()
+        player.is_playing = MagicMock(return_value=True)
+        player._playing_tts = False
+
+        player._last_activity_time = time.monotonic() - (INACTIVITY_TIMEOUT + 10.0)
+
+        await player._inactivity_countdown()
+        player.disconnect.assert_not_called()
+
+    async def test_watchdog_never_calls_connect(self):
+        """Verifica che _voice_listener_watchdog non chiami MAI self.connect() se non connesso."""
+        mock_bot = MagicMock()
+        mock_guild = MagicMock()
+        mock_source = MagicMock()
+        player = GuildPlayer(mock_bot, mock_guild, mock_source)
+
+        player.voice_client = None
+        player.guild.voice_client = None
+        player.connect = AsyncMock()
+
+        # Esegui un'iterazione del watchdog facendolo uscire con un'eccezione o timeout
+        task = asyncio.create_task(player._voice_listener_watchdog())
+        await asyncio.sleep(0.05)
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+        player.connect.assert_not_called()
 
 
 if __name__ == "__main__":

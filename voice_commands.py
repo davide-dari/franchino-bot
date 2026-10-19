@@ -1231,6 +1231,8 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
         from player import resolve_preferred_text_channel, build_commands_embed, COLOR_FRANCHINO
 
         lower_text = text.lower().strip()
+        if hasattr(self.player, "record_activity"):
+            self.player.record_activity()
         uid = getattr(user, "id", 0)
         now = time.monotonic()
 
@@ -2835,6 +2837,8 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
 
         # 9. Comando ESCI / DISCONNETTI
         if any(w in cmd_lower for w in ("esci", "vattene", "disconnetti", "ciao", "fuori", "slogga")):
+            if hasattr(self.player, "set_manual_leave_cooldown"):
+                self.player.set_manual_leave_cooldown(60.0)
             await self._notify_channel(f"🎙️ **{user.display_name}** mi ha salutato. Franchino lascia la console! 👋")
             await self.player.disconnect()
             return
