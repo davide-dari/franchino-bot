@@ -612,6 +612,74 @@ class TestVoicePresenceAndVocalist(unittest.IsolatedAsyncioTestCase):
         await player.restart_console()
         player.connect.assert_called_once_with(human_ch, human_ch)
 
+    def test_uncached_unknown_user_treated_as_human(self):
+        """Verifica che un utente in voice_states né in guild cache né in bot.get_user (intents.members disattivati) sia considerato umano."""
+        from main import _get_human_ids_in_channel, bot
+
+        mock_guild = MagicMock()
+        mock_guild.afk_channel = None
+        mock_guild.get_member.return_value = None
+        mock_channel = MagicMock(guild=mock_guild)
+        mock_channel.members = []
+        mock_channel.voice_states = {54321: MagicMock()}
+
+        with patch.object(bot, "get_user", return_value=None):
+            humans = _get_human_ids_in_channel(mock_channel)
+            self.assertEqual(humans, [54321])
+
+    async def test_inactivity_countdown_aborts_if_humans_in_channel(self):
+        """Verifica che _inactivity_countdown NON disconnetta Franchino se ci sono utenti umani nel canale vocale."""
+        import time
+        from config import INACTIVITY_TIMEOUT
+
+        mock_bot = MagicMock()
+        mock_guild = MagicMock()
+        mock_source = MagicMock()
+        player = GuildPlayer(mock_bot, mock_guild, mock_source)
+
+        mock_channel = MagicMock()
+        mock_channel.guild = mock_guild
+        mock_channel.members = []
+        mock_channel.voice_states = {12345: MagicMock()}
+
+        player.voice_client = MagicMock(is_connected=MagicMock(return_value=True), channel=mock_channel)
+        player.disconnect = AsyncMock()
+        player.is_playing = MagicMock(return_value=False)
+        player._playing_tts = False
+        player.text_channel = MagicMock(send=AsyncMock())
+
+        player._last_activity_time = time.monotonic() - (INACTIVITY_TIMEOUT + 10.0)
+
+        with patch("main.bot.get_user", return_value=None):
+            with patch.object(mock_guild, "get_member", return_value=None):
+                await player._inactivity_countdown()
+
+        player.disconnect.assert_not_called()
+        player.text_channel.send.assert_not_called()
+
+    async def test_bot_self_disconnect_does_not_trigger_cooldown(self):
+        """Verifica che se Franchino si disconnette internamente (_is_disconnecting=True), non venga impostato il manual leave cooldown."""
+        from main import on_voice_state_update, player_manager, bot
+
+        mock_guild = MagicMock()
+        mock_channel = MagicMock(guild=mock_guild, name="Generale")
+        bot_member = MagicMock(id=999, bot=True, guild=mock_guild)
+        mock_guild.me = bot_member
+
+        mock_player = MagicMock()
+        mock_player._is_disconnecting = True
+        mock_player.set_manual_leave_cooldown = MagicMock()
+        mock_player.disconnect = AsyncMock()
+
+        with patch.object(type(bot), "user", new_callable=PropertyMock, return_value=MagicMock(id=999)):
+            with patch.object(player_manager, "get_player", return_value=mock_player):
+                before_state = MagicMock(channel=mock_channel)
+                after_state = MagicMock(channel=None)
+                await on_voice_state_update(bot_member, before_state, after_state)
+
+                mock_player.set_manual_leave_cooldown.assert_not_called()
+                mock_player.disconnect.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

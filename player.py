@@ -324,6 +324,7 @@ class GuildPlayer:
         self._manual_leave_until: float = 0.0
         self._last_connect_time: float = 0.0
         self._connect_cooldown_seconds: float = 5.0
+        self._is_disconnecting: bool = False
 
     def is_connected(self) -> bool:
         """Verifica se il voice client è attivo e connesso a Discord."""
@@ -1069,8 +1070,7 @@ class GuildPlayer:
                         u = getattr(self.bot, "get_user", lambda _: None)(uid)
                         if u and getattr(u, "bot", False):
                             continue
-                        if m is not None or u is not None:
-                            human_ids.append(uid)
+                        human_ids.append(uid)
                     if human_ids:
                         channel = vc_ch
                         break
@@ -1131,22 +1131,26 @@ class GuildPlayer:
 
     async def disconnect(self):
         """Disconnette Franchino dal canale vocale e pulisce lo stato."""
-        async with self._connect_lock:
-            self._cancel_inactivity_timer()
-            if hasattr(self, "_watchdog_task") and self._watchdog_task:
-                self._watchdog_task.cancel()
-                self._watchdog_task = None
-            self.queue.clear()
-            self.current = None
+        self._is_disconnecting = True
+        try:
+            async with self._connect_lock:
+                self._cancel_inactivity_timer()
+                if hasattr(self, "_watchdog_task") and self._watchdog_task:
+                    self._watchdog_task.cancel()
+                    self._watchdog_task = None
+                self.queue.clear()
+                self.current = None
 
-            if self.now_playing_message:
-                try:
-                    await self.now_playing_message.edit(view=None)
-                except Exception:
-                    pass
-                self.now_playing_message = None
+                if self.now_playing_message:
+                    try:
+                        await self.now_playing_message.edit(view=None)
+                    except Exception:
+                        pass
+                    self.now_playing_message = None
 
-            await self._cleanup_stale_voice_client()
+                await self._cleanup_stale_voice_client()
+        finally:
+            self._is_disconnecting = False
 
     def pause(self):
         if self.is_playing():
@@ -1609,14 +1613,24 @@ class GuildPlayer:
                     return
 
             if not self.is_playing() and not self.is_speaking_tts and not self.queue and self.is_connected():
+                # Verifichiamo se ci sono utenti umani nel canale vocale
+                channel = getattr(self.voice_client, "channel", None)
+                if channel:
+                    try:
+                        from main import _get_human_ids_in_channel
+                        human_ids = _get_human_ids_in_channel(channel)
+                        if human_ids:
+                            # Ci sono utenti umani nella stanza: Franchino NON abbandona la console
+                            return
+                    except Exception:
+                        pass
+
                 logger.info(f"⏳ Inattività di {int(timeout)}s trascorsa su '{self.guild.name}': Franchino lascia la console.")
                 if self.text_channel:
                     try:
                         await self.text_channel.send("👋 **Franchino lascia la console per inattività!** A presto ragazzi! 🎧")
                     except Exception:
                         pass
-                if hasattr(self, "set_manual_leave_cooldown"):
-                    self.set_manual_leave_cooldown(180.0)
                 await self.disconnect()
         except asyncio.CancelledError:
             pass

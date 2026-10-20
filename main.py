@@ -147,6 +147,10 @@ def _get_human_ids_in_channel(vc_channel: discord.VoiceChannel, excluding_user_i
             human_ids.add(uid)
             continue
 
+        # Se né member né user sono in cache (intents.members disattivati),
+        # l'ID connesso a voice_states è un utente umano reale nel canale vocale
+        human_ids.add(uid)
+
     return list(human_ids)
 
 
@@ -423,6 +427,9 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
         if getattr(player, "_restarting", False) is True:
             return
         if before.channel and not after.channel:
+            is_self_disconnect = getattr(player, "_is_disconnecting", False)
+            if is_self_disconnect is True:
+                return
             if hasattr(player, "set_manual_leave_cooldown"):
                 player.set_manual_leave_cooldown(60.0)
             await player.disconnect()
