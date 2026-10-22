@@ -12,6 +12,7 @@ import yt_dlp
 
 from config import (
     NODE_PATH,
+    YOUTUBE_PROXY,
     SPOTIPY_CLIENT_ID,
     SPOTIPY_CLIENT_SECRET,
     COLOR_FRANCHINO,
@@ -20,6 +21,28 @@ from config import (
 )
 
 logger = logging.getLogger("Franchino.Sources")
+
+
+def is_youtube_bot_or_cookie_error(err: Union[Exception, str]) -> bool:
+    """Riconosce se un errore di yt-dlp è dovuto a bot check, cookie scaduti o blocco datacenter."""
+    msg = str(err).lower()
+    patterns = [
+        "sign in to confirm you’re not a bot",
+        "sign in to confirm you're not a bot",
+        "use --cookies-from-browser",
+        "use --cookies for the authentication",
+        "please sign in",
+        "confirm you're not a bot",
+        "confirm you’re not a bot",
+        "login required",
+        "bot verification",
+        "failed to decrypt",
+        "invalid cookie",
+        "expired cookie",
+        "the page needs to be reloaded",
+        "requested format is not available",
+    ]
+    return any(p in msg for p in patterns)
 
 
 def format_duration(seconds: Optional[int]) -> str:
@@ -126,11 +149,11 @@ class SourceManager:
         except Exception:
             pass
 
-        # Client YouTube: 'visionos' e 'android' bypassano i blocchi antibot dei datacenter (Oracle, AWS, Docker)
+        # Client YouTube: 'android', 'visionos', 'android_vr' bypassano i blocchi antibot dei datacenter (Oracle, AWS, Docker)
         # anche senza cookie o con cookie scaduti.
         yt_extractor_args = {
             "youtube": {
-                "player_client": ["visionos", "android", "mediaconnect", "ios", "default"],
+                "player_client": ["android", "visionos", "android_vr", "default"],
             }
         }
 
@@ -170,6 +193,15 @@ class SourceManager:
         if NODE_PATH:
             self.ydl_opts_flat["js_runtimes"] = {"node": {}}
 
+        # Configurazione eventuale proxy residenziale/SOCKS5/HTTP
+        if YOUTUBE_PROXY:
+            self.ydl_opts_stream["proxy"] = YOUTUBE_PROXY
+            self.ydl_opts_flat["proxy"] = YOUTUBE_PROXY
+            logger.info(f"Configurato proxy YouTube: {YOUTUBE_PROXY}")
+
+        self._cookies_enabled: bool = False
+        self._cookies_explicitly_disabled: bool = False
+        self._cookies_path: Optional[str] = None
         self._configure_cookies()
 
     def _get_cached_song(self, key: str, requester: Optional[Union[discord.Member, discord.User, str]] = None) -> Optional[SongInfo]:
@@ -212,6 +244,8 @@ class SourceManager:
 
     def _configure_cookies(self):
         """Rileva cookies.txt e ne crea una copia scrivibile in /tmp per evitare errori di permessi."""
+        if getattr(self, "_cookies_explicitly_disabled", False):
+            return
         import shutil
         for cookie_path in ["cookies.txt", "../cookies.txt", "/app/cookies.txt"]:
             if os.path.exists(cookie_path) and os.path.getsize(cookie_path) > 0:
@@ -223,8 +257,37 @@ class SourceManager:
                 except Exception:
                     self.ydl_opts_stream["cookiefile"] = cookie_path
                     self.ydl_opts_flat["cookiefile"] = cookie_path
+                self._cookies_enabled = True
+                self._cookies_path = cookie_path
                 logger.info(f"File cookies rilevato e configurato da: {cookie_path}")
                 return
+
+    def disable_cookies(self, reason: str = ""):
+        """Disattiva i cookies non validi/scaduti per evitare che blocchino i client mobili di yt-dlp."""
+        if not getattr(self, "_cookies_enabled", False):
+            return
+        logger.warning(f"⚠️ Disattivazione automatica cookie YouTube ({reason}). Commutazione immediata a client mobili puri.")
+        self._cookies_enabled = False
+        self._cookies_explicitly_disabled = True
+        self.ydl_opts_stream.pop("cookiefile", None)
+        self.ydl_opts_flat.pop("cookiefile", None)
+        for p in ["/tmp/franchino_cookies.txt"]:
+            try:
+                if os.path.exists(p):
+                    os.remove(p)
+            except Exception:
+                pass
+
+    def _get_mobile_extractor_opts(self, base_opts: Dict[str, Any]) -> Dict[str, Any]:
+        """Restituisce opzioni pulite per i client mobili puri ('android', 'visionos', 'android_vr') senza cookie."""
+        clean = dict(base_opts)
+        clean.pop("cookiefile", None)
+        clean["extractor_args"] = {
+            "youtube": {
+                "player_client": ["android", "visionos", "android_vr"],
+            }
+        }
+        return clean
 
     async def resolve_url_or_query(self, query: str, requester: Optional[Union[discord.Member, discord.User]] = None) -> List[SongInfo]:
         """
@@ -454,10 +517,19 @@ class SourceManager:
 
     def _extract_youtube_playlist(self, url: str, requester: Optional[Union[discord.Member, discord.User]]) -> List[SongInfo]:
         """Estrae tutti i brani di una playlist YouTube rapidamente in modalità flat."""
-        with yt_dlp.YoutubeDL(self.ydl_opts_flat) as ydl:
-            info = ydl.extract_info(url, download=False)
-            if not info:
-                raise ValueError("Nessuna informazione trovata per questa playlist YouTube.")
+        info = None
+        try:
+            with yt_dlp.YoutubeDL(self.ydl_opts_flat) as ydl:
+                info = ydl.extract_info(url, download=False)
+        except Exception as e:
+            if is_youtube_bot_or_cookie_error(e):
+                self.disable_cookies(f"Playlist extraction bot check: {e}")
+            flat_mobile = self._get_mobile_extractor_opts(self.ydl_opts_flat)
+            with yt_dlp.YoutubeDL(flat_mobile) as ydl:
+                info = ydl.extract_info(url, download=False)
+
+        if not info:
+            raise ValueError("Nessuna informazione trovata per questa playlist YouTube.")
 
             entries = info.get("entries", [])
             songs = []
@@ -514,28 +586,57 @@ class SourceManager:
                     is_direct_stream=False
                 )
 
-        if "cookiefile" not in self.ydl_opts_stream:
+        if "cookiefile" not in self.ydl_opts_stream and not getattr(self, "_cookies_explicitly_disabled", False):
             self._configure_cookies()
 
+        # Stadio 1: Estrazione streaming con le opzioni correnti (include cookie se disponibili)
         try:
             song = self._do_extract_single(target, requester, self.ydl_opts_stream, download=False)
-            if song:
+            if song and song.stream_url:
                 self._cache_song(target.strip().lower(), song)
-            return song
+                return song
         except Exception as first_err:
-            logger.warning(f"Primo tentativo estrazione streaming per '{target}': {first_err}. Riprovo con client alternativi...")
-            fallback_opts = dict(self.ydl_opts_stream)
-            fallback_opts["extractor_args"] = {
-                "youtube": {
-                    "player_client": ["visionos", "android", "mediaconnect", "ios"],
-                }
-            }
-            if "cookiefile" in fallback_opts:
-                del fallback_opts["cookiefile"]
-            song = self._do_extract_single(target, requester, fallback_opts, download=False)
-            if song:
+            if is_youtube_bot_or_cookie_error(first_err):
+                self.disable_cookies(f"Rilevato blocco bot/cookie nel primo tentativo: {first_err}")
+            logger.warning(f"Primo tentativo estrazione streaming per '{target}': {first_err}. Riprovo con client mobili puri...")
+
+        # Stadio 2: Estrazione streaming con client mobili puri ('android', 'visionos', 'android_vr') SENZA cookie
+        mobile_opts = self._get_mobile_extractor_opts(self.ydl_opts_stream)
+        try:
+            song = self._do_extract_single(target, requester, mobile_opts, download=False)
+            if song and song.stream_url:
                 self._cache_song(target.strip().lower(), song)
-            return song
+                return song
+        except Exception as second_err:
+            logger.warning(f"Secondo tentativo streaming (mobile puro) per '{target}': {second_err}. Riprovo con download temporaneo locale...")
+
+        # Stadio 3: Download audio temporaneo su disco (elimina blocchi di decipher/streaming da datacenter)
+        try:
+            song = self._do_extract_single(target, requester, mobile_opts, download=True)
+            if song and song.stream_url:
+                self._cache_song(target.strip().lower(), song)
+                return song
+        except Exception as third_err:
+            logger.warning(f"Terzo tentativo (download locale) per '{target}': {third_err}.")
+
+        # Stadio 4: Se target era una query di ricerca (ytsearch1:...) che non è riuscita ad estrarre il formato,
+        # risolviamo prima l'ID con flat search e poi estraiamo il video diretto
+        if target.startswith("ytsearch1:") or target.startswith("ytsearch:"):
+            try:
+                flat_mobile = self._get_mobile_extractor_opts(self.ydl_opts_flat)
+                with yt_dlp.YoutubeDL(flat_mobile) as ydl:
+                    search_res = ydl.extract_info(target, download=False)
+                    if search_res and "entries" in search_res and search_res["entries"]:
+                        first_entry = search_res["entries"][0]
+                        v_id = first_entry.get("id")
+                        if v_id:
+                            direct_v_url = f"https://www.youtube.com/watch?v={v_id}"
+                            return self._extract_youtube_single(direct_v_url, requester)
+            except Exception as fourth_err:
+                logger.error(f"Tutti i tentativi di estrazione falliti per '{target}': {fourth_err}")
+
+        # Se tutti gli stadi falliscono, solleva l'eccezione descrittiva
+        raise RuntimeError(f"Impossibile estrarre flusso audio per '{target}' dopo tutti i tentativi di bypass.")
 
     def _do_extract_single(self, target: str, requester: Optional[Union[discord.Member, discord.User]], opts: Dict[str, Any], download: bool = False) -> SongInfo:
         cache_dir = "/tmp/franchino_cache"
@@ -572,6 +673,21 @@ class SourceManager:
 
             stream_url = local_file or info.get("url")
             http_headers = info.get("http_headers")
+
+            # Fallback intelligente su formati audio se top-level url non è popolato
+            if not stream_url and info.get("formats"):
+                audio_formats = [
+                    f for f in info.get("formats", [])
+                    if f.get("acodec") != "none" and f.get("url")
+                ]
+                if audio_formats:
+                    # Preferisci formato audio opus (251) o m4a (140)
+                    preferred = [f for f in audio_formats if str(f.get("format_id")) in ("251", "140")] or audio_formats
+                    best_f = preferred[-1]
+                    stream_url = best_f.get("url")
+                    if not http_headers:
+                        http_headers = best_f.get("http_headers")
+
             is_direct_stream = (local_file is None and stream_url is not None and (stream_url.startswith("http://") or stream_url.startswith("https://")))
 
             return SongInfo(
@@ -607,32 +723,20 @@ class SourceManager:
 
     def _download_youtube_audio(self, target: str, requester: Optional[Union[discord.Member, discord.User]]) -> SongInfo:
         """Scarica il flusso audio in /tmp/franchino_cache (fallback se lo streaming diretto incontra blocchi di rete)."""
-        if "cookiefile" not in self.ydl_opts_stream:
-            self._configure_cookies()
-
+        mobile_opts = self._get_mobile_extractor_opts(self.ydl_opts_stream)
         try:
-            return self._do_extract_single(target, requester, self.ydl_opts_stream, download=True)
+            return self._do_extract_single(target, requester, mobile_opts, download=True)
         except Exception as first_err:
-            logger.warning(f"Primo tentativo download fallito per '{target}': {first_err}. Riprovo senza cookies con visionos/android...")
-            fallback_opts = {
-                "format": "ba[abr<=160]/251/140/bestaudio/best",
-                "noplaylist": True,
-                "quiet": True,
-                "no_warnings": True,
-                "source_address": "0.0.0.0",
-                "extract_flat": False,
-                "cachedir": self.ytdlp_cache_dir,
-                "remote_components": ["ejs:github"],
-                "extractor_args": {
-                    "youtube": {
-                        "player_client": ["visionos", "android", "mediaconnect", "ios"],
-                    }
-                },
-                "socket_timeout": 8.0,
+            if is_youtube_bot_or_cookie_error(first_err):
+                self.disable_cookies(f"Download audio error: {first_err}")
+            logger.warning(f"Download audio fallito per '{target}': {first_err}. Riprovo con visionos/android puro...")
+            vision_opts = dict(mobile_opts)
+            vision_opts["extractor_args"] = {
+                "youtube": {
+                    "player_client": ["visionos", "android"],
+                }
             }
-            if NODE_PATH:
-                fallback_opts["js_runtimes"] = {"node": {}}
-            return self._do_extract_single(target, requester, fallback_opts, download=True)
+            return self._do_extract_single(target, requester, vision_opts, download=True)
 
     async def ensure_stream_url(self, song: SongInfo) -> str:
         """
@@ -680,7 +784,16 @@ class SourceManager:
             song.is_direct_stream = cached.is_direct_stream
             return song.stream_url
 
-        fresh_info = await asyncio.to_thread(self._extract_youtube_single, target, song.requester)
+        fresh_info = None
+        try:
+            fresh_info = await asyncio.to_thread(self._extract_youtube_single, target, song.requester)
+        except Exception as e:
+            logger.warning(f"Estrazione streaming in ensure_stream_url fallita per '{target}': {e}. Riprovo con download locale...")
+            try:
+                fresh_info = await asyncio.to_thread(self._download_youtube_audio, target, song.requester)
+            except Exception as dl_err:
+                logger.error(f"Anche il download audio in ensure_stream_url è fallito per '{target}': {dl_err}")
+                raise dl_err
 
         song.stream_url = fresh_info.stream_url
         song.http_headers = fresh_info.http_headers
@@ -702,8 +815,19 @@ class SourceManager:
             artist_hint = seed_song.uploader or ""
             clean_title = re.sub(r"\(.*?\)|\[.*?\]", "", seed_song.title).strip()
             search_q = f"ytsearch8:{artist_hint} {clean_title} musica".strip()
-            with yt_dlp.YoutubeDL(self.ydl_opts_flat) as ydl:
-                info = ydl.extract_info(search_q, download=False)
+            info = None
+            try:
+                with yt_dlp.YoutubeDL(self.ydl_opts_flat) as ydl:
+                    info = ydl.extract_info(search_q, download=False)
+            except Exception as e:
+                if is_youtube_bot_or_cookie_error(e):
+                    self.disable_cookies(f"AutoPlay search error: {e}")
+                flat_mobile = self._get_mobile_extractor_opts(self.ydl_opts_flat)
+                try:
+                    with yt_dlp.YoutubeDL(flat_mobile) as ydl:
+                        info = ydl.extract_info(search_q, download=False)
+                except Exception:
+                    return None
                 if not info or "entries" not in info:
                     return None
                 candidates = []

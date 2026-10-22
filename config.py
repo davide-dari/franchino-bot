@@ -30,6 +30,9 @@ except ValueError:
 # Percorso per Node.js (usato da yt-dlp per risolvere le sfide JS di YouTube)
 NODE_PATH = shutil.which("node") or shutil.which("nodejs")
 
+# Proxy opzionale per YouTube (SOCKS5 o HTTP per bypassare restrizioni datacenter)
+YOUTUBE_PROXY = os.getenv("YOUTUBE_PROXY", "").strip() or None
+
 # Colori degli Embed Discord di Franchino
 COLOR_FRANCHINO = 0xFF6F00   # Arancione console / DJ vibe
 COLOR_SUCCESS = 0x2ECC71     # Verde successo

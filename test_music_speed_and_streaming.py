@@ -191,6 +191,104 @@ class TestMusicPlaybackSpeedAndOptimization(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(player.current.stream_url, "/tmp/franchino_cache/BROKENSTREAM.opus")
             self.assertFalse(player.current.is_direct_stream)
 
+    def test_is_youtube_bot_or_cookie_error_detection(self):
+        """Verifica che la funzione riconosca tutte le varianti di errore antibot o cookie scaduti."""
+        from sources import is_youtube_bot_or_cookie_error
+
+        err_samples = [
+            "ERROR: [youtube] uIylHZcRMBI: Sign in to confirm you’re not a bot. Use --cookies-from-browser",
+            "ERROR: [youtube] Sign in to confirm you're not a bot.",
+            "Please sign in. Use --cookies-from-browser or --cookies for the authentication",
+            "yt_dlp.utils.ExtractorError: Bot verification failed",
+            "Login required to confirm you’re not a bot",
+            "Requested format is not available. Use --list-formats",
+            "The page needs to be reloaded.",
+        ]
+        for err in err_samples:
+            self.assertTrue(is_youtube_bot_or_cookie_error(err), f"Fallito riconoscimento per: {err}")
+
+        # Errori normali non devono essere scambiati per bot check
+        self.assertFalse(is_youtube_bot_or_cookie_error("HTTP Error 404: Not Found"))
+        self.assertFalse(is_youtube_bot_or_cookie_error("Video unavailable in this country"))
+
+    def test_disable_cookies_strips_cookiefile_and_prevents_reloading(self):
+        """Verifica che disable_cookies rimuova cookiefile dalle opzioni e non li ricarichi."""
+        sm = SourceManager()
+        sm.ydl_opts_stream["cookiefile"] = "/tmp/fake_cookies.txt"
+        sm.ydl_opts_flat["cookiefile"] = "/tmp/fake_cookies.txt"
+        sm._cookies_enabled = True
+
+        sm.disable_cookies("Test auto-heal")
+        self.assertNotIn("cookiefile", sm.ydl_opts_stream)
+        self.assertNotIn("cookiefile", sm.ydl_opts_flat)
+        self.assertFalse(sm._cookies_enabled)
+        self.assertTrue(sm._cookies_explicitly_disabled)
+
+        # Tentativo di re-configure cookies deve essere ignorato
+        sm._configure_cookies()
+        self.assertNotIn("cookiefile", sm.ydl_opts_stream)
+
+    def test_extract_youtube_single_auto_heals_on_bot_error(self):
+        """Verifica che _extract_youtube_single disabiliti i cookie al primo errore bot e riesca con client mobili."""
+        sm = SourceManager()
+        sm.ydl_opts_stream["cookiefile"] = "/tmp/corrupt_cookies.txt"
+        sm._cookies_enabled = True
+
+        call_records = []
+        expected_song = SongInfo(
+            title="Bypassed Song",
+            webpage_url="https://www.youtube.com/watch?v=BYPASSED123",
+            stream_url="https://rr1.googlevideo.com/videoplayback?id=bypassed",
+            duration=150,
+            is_direct_stream=True,
+        )
+
+        def mock_do_extract(target, requester, opts, download=False):
+            call_records.append({"opts": opts, "download": download})
+            if "cookiefile" in opts:
+                raise RuntimeError("ERROR: [youtube] ABC: Sign in to confirm you’re not a bot.")
+            return expected_song
+
+        with patch.object(sm, "_do_extract_single", side_effect=mock_do_extract):
+            res = sm._extract_youtube_single("https://www.youtube.com/watch?v=BYPASSED123", None)
+
+            self.assertEqual(res.title, "Bypassed Song")
+            self.assertEqual(res.stream_url, expected_song.stream_url)
+            # Verifica che i cookie siano stati disabilitati automaticamente
+            self.assertFalse(sm._cookies_enabled)
+            self.assertNotIn("cookiefile", sm.ydl_opts_stream)
+            # Verifica che il secondo tentativo abbia usato client mobili senza cookie
+            self.assertEqual(len(call_records), 2)
+            second_call = call_records[1]
+            self.assertNotIn("cookiefile", second_call["opts"])
+            clients = second_call["opts"]["extractor_args"]["youtube"]["player_client"]
+            self.assertIn("android", clients)
+            self.assertIn("visionos", clients)
+
+    async def test_ensure_stream_url_falls_back_to_download_audio_on_error(self):
+        """Verifica che ensure_stream_url ripieghi su _download_youtube_audio se l'estrazione streaming solleva eccezione."""
+        sm = SourceManager()
+        song = SongInfo(
+            title="Download Fallback Test",
+            webpage_url="https://www.youtube.com/watch?v=DOWNLOADFALL1",
+            stream_url=None,
+            duration=120,
+        )
+        downloaded = SongInfo(
+            title="Download Fallback Test",
+            webpage_url="https://www.youtube.com/watch?v=DOWNLOADFALL1",
+            stream_url="/tmp/franchino_cache/DOWNLOADFALL1.webm",
+            duration=120,
+            is_direct_stream=False,
+        )
+
+        with patch.object(sm, "_extract_youtube_single", side_effect=RuntimeError("Sign in to confirm you're not a bot")):
+            with patch.object(sm, "_download_youtube_audio", return_value=downloaded):
+                stream_url = await sm.ensure_stream_url(song)
+                self.assertEqual(stream_url, "/tmp/franchino_cache/DOWNLOADFALL1.webm")
+                self.assertEqual(song.stream_url, "/tmp/franchino_cache/DOWNLOADFALL1.webm")
+                self.assertFalse(song.is_direct_stream)
+
 
 if __name__ == "__main__":
     unittest.main()
