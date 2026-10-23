@@ -1,0 +1,28 @@
+version: '3.8'
+
+services:
+  streambot:
+    image: ghcr.io/ysdragon/streambot:latest
+    container_name: streambot
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - TOKEN=${STREAMBOT_TOKEN}
+      - PREFIX=${STREAMBOT_PREFIX:-$}
+      - COMMAND_CHANNEL_ID=${STREAMBOT_COMMAND_CHANNEL_ID:-}
+      - VIDEO_CHANNEL_ID=${STREAMBOT_VIDEO_CHANNEL_ID:-}
+      - STREAM_WIDTH=1280
+      - STREAM_HEIGHT=720
+      - STREAM_FPS=30
+      - STREAM_BITRATE=2500
+    volumes:
+      - ./data/streambot:/app/videos
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+        reservations:
+          cpus: "0.2"
+          memory: 128M

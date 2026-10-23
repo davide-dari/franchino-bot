@@ -1718,6 +1718,167 @@ async def stream_cmd(ctx: commands.Context, *, partita_o_squadra: Optional[str] 
 
 
 @bot.hybrid_command(
+    name="partita_video",
+    aliases=["video_partita", "golive_partita", "stream_video"],
+    description="Trasmetti la partita in diretta video ('Go Live' / Screen Share) nel canale vocale con StreamBot!"
+)
+async def partita_video_cmd(ctx: commands.Context, *, squadra_o_partita: Optional[str] = "live"):
+    """Avvia la trasmissione video in diretta della partita nel canale vocale tramite StreamBot (senza pubblicità)."""
+    await ctx.defer()
+    from streambot_service import streambot_client, is_streambot_configured
+    from sports_scraper import sports_scraper
+    from central_hub import hub
+
+    if not is_streambot_configured():
+        await ctx.send(
+            "⚠️ **StreamBot non è configurato.** Inserisci `STREAMBOT_TOKEN` nel file `.env` per abilitare la trasmissione video 'Go Live'!",
+            ephemeral=True
+        )
+        return
+
+    voice_ch = getattr(getattr(ctx.author, "voice", None), "channel", None)
+    if not voice_ch:
+        await ctx.send(
+            "⚠️ **Devi essere connesso a un canale vocale** per avviare la trasmissione video della partita!",
+            ephemeral=True
+        )
+        return
+
+    query = (squadra_o_partita or "live").strip()
+    match = await sports_scraper.resolve_match_for_streaming(query)
+    if not match:
+        await ctx.send(
+            f"❌ Non ho trovato nessuna partita live corrispondente a **{query}**. Prova con `/partite` per vedere il palinsesto!",
+            ephemeral=True
+        )
+        return
+
+    stream_url = match.get("stream_url") or match.get("match_page_url") or match.get("url")
+    if not stream_url:
+        await ctx.send(
+            f"❌ Nessun flusso video disponibile per **{match.get('title', 'la partita')}**.",
+            ephemeral=True
+        )
+        return
+
+    title = match.get("title", "Partita Live")
+    try:
+        embed, view = await streambot_client.start_video_stream(
+            guild=ctx.guild,
+            voice_channel=voice_ch,
+            text_channel=ctx.channel,
+            stream_url=stream_url,
+            title=title,
+            is_sports=True,
+            requester=ctx.author
+        )
+        await ctx.send(
+            content="📺 **Diretta video avviata con successo!** Apri il Go Live di StreamBot nel canale vocale per guardare la partita.",
+            embed=embed,
+            view=view
+        )
+        asyncio.create_task(
+            hub.archive_interaction(
+                user_id=str(ctx.author.id),
+                user_name=ctx.author.display_name,
+                raw_query=f"partita_video {query}",
+                intent="sports_video_stream",
+                ai_response=title,
+                voice_summary="La diretta video è iniziata in vocale!",
+                channel_name=ctx.channel.name if hasattr(ctx.channel, 'name') else None,
+                metadata={"query": query, "match_id": match.get("id"), "url": stream_url}
+            )
+        )
+    except Exception as e:
+        logger.exception("Errore avvio video stream su StreamBot")
+        await ctx.send(f"❌ Errore durante l'avvio della diretta video: {e}", ephemeral=True)
+
+
+@bot.hybrid_command(
+    name="video",
+    aliases=["golive", "streambot"],
+    description="Controlla o avvia una trasmissione video 'Go Live' con StreamBot (play, stop, pausa, riprendi)"
+)
+async def video_cmd(
+    ctx: commands.Context,
+    azione_o_url: str,
+    *,
+    opzioni: Optional[str] = None
+):
+    """
+    Controlla StreamBot o trasmette video in diretta:
+    - /video play <url_o_ricerca>
+    - /video stop
+    - /video pausa
+    - /video riprendi
+    - /video <url>
+    """
+    await ctx.defer()
+    from streambot_service import streambot_client, is_streambot_configured
+
+    if not is_streambot_configured():
+        await ctx.send(
+            "⚠️ **StreamBot non è configurato.** Inserisci `STREAMBOT_TOKEN` nel file `.env` per abilitare la trasmissione video 'Go Live'!",
+            ephemeral=True
+        )
+        return
+
+    act = azione_o_url.strip().lower()
+
+    if act in ("stop", "ferma", "interrompi", "esci"):
+        success = await streambot_client.stop_video_stream(ctx.channel)
+        if success:
+            await ctx.send("⏹️ **Diretta video interrotta.** StreamBot ha lasciato il canale.")
+        else:
+            await ctx.send("⚠️ Impossibile interrompere lo streaming o StreamBot non attivo.")
+        return
+
+    if act in ("pausa", "pause"):
+        success = await streambot_client.pause_video_stream(ctx.channel)
+        if success:
+            await ctx.send("⏸️ **Diretta video messa in pausa.**")
+        else:
+            await ctx.send("⚠️ Impossibile mettere in pausa lo streaming.")
+        return
+
+    if act in ("riprendi", "resume", "play_resume"):
+        success = await streambot_client.resume_video_stream(ctx.channel)
+        if success:
+            await ctx.send("▶️ **Diretta video ripresa!**")
+        else:
+            await ctx.send("⚠️ Impossibile riprendere lo streaming.")
+        return
+
+    target_url = opzioni if act == "play" and opzioni else azione_o_url
+    if act == "play" and opzioni:
+        target_url = opzioni
+
+    voice_ch = getattr(getattr(ctx.author, "voice", None), "channel", None)
+    if not voice_ch:
+        await ctx.send("⚠️ Devi essere connesso a un canale vocale per avviare la diretta video!", ephemeral=True)
+        return
+
+    is_yt = ("youtube.com" in target_url or "youtu.be" in target_url)
+    is_sp = ("madplay" in target_url or ".m3u8" in target_url)
+    title = "Video Stream" if not is_yt else "YouTube Video"
+
+    try:
+        embed, view = await streambot_client.start_video_stream(
+            guild=ctx.guild,
+            voice_channel=voice_ch,
+            text_channel=ctx.channel,
+            stream_url=target_url,
+            title=title,
+            is_sports=is_sp,
+            is_youtube=is_yt,
+            requester=ctx.author
+        )
+        await ctx.send(embed=embed, view=view)
+    except Exception as e:
+        await ctx.send(f"❌ Errore durante l'avvio della diretta video: {e}", ephemeral=True)
+
+
+@bot.hybrid_command(
     name="partite",
     aliases=["match", "partite_stasera"],
     description="Palinsesto sportivo completo (Calcio, Serie A, Champions, NBA, Tennis, F1, MotoGP) & streaming!"

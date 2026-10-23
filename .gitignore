@@ -26,6 +26,7 @@ data/*.db-wal
 data/*.db-shm
 data/postgres/
 data/ollama/
+data/streambot/
 postgres_data/
 ollama_data/
 
