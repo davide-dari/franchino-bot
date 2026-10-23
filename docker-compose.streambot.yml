@@ -2,7 +2,7 @@ version: '3.8'
 
 services:
   streambot:
-    image: ghcr.io/ysdragon/streambot:latest
+    image: quay.io/ydrag0n/streambot:latest
     container_name: streambot
     restart: unless-stopped
     env_file:
@@ -15,9 +15,11 @@ services:
       - STREAM_WIDTH=1280
       - STREAM_HEIGHT=720
       - STREAM_FPS=30
-      - STREAM_BITRATE=2500
+      - STREAM_BITRATE_KBPS=2000
+      - STREAM_MAX_BITRATE_KBPS=2500
+      - STREAM_H26X_PRESET=ultrafast
     volumes:
-      - ./data/streambot:/app/videos
+      - ./data/streambot:/home/bots/StreamBot/videos
     deploy:
       resources:
         limits:
