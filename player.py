@@ -258,12 +258,26 @@ def build_commands_embed() -> discord.Embed:
     )
 
     embed.add_field(
+        name="📺 Streaming Video Go Live (Screen Share) & Sport Live",
+        value=(
+            "Guarda le partite o i video in diretta streaming nel canale vocale con StreamBot (zero pubblicità & SponsorBlock):\n"
+            "• **`/partita_video <squadra>`** (o **`/partita video <squadra>`**) — Avvia la diretta video 'Go Live' della partita!\n"
+            "• **`/stream <squadra>`** (o **`/partita stream <squadra>`**) — Ascolta la telecronaca audio in vocale da MadPlay77\n"
+            "• **`/video [play|stop|pausa|riprendi] [url]`** — Condivisione schermo di video YouTube o streaming web\n"
+            "• **`/partite [lega]`** — Palinsesto sportivo completo (Calcio, Serie A, Champions, NBA, Tennis, F1, MotoGP)\n"
+            "• A voce: **\"Hey Franchino trasmetti la partita del Milan in video\"** • **\"Hey Franchino ferma il video\"**"
+        ),
+        inline=False
+    )
+
+    embed.add_field(
         name="💬 Comandi Slash & Chat",
         value=(
+            f"`/partita_video <squadra>` • `/partita video <squadra>` • `/video [play|stop|pausa] [url]` • `/stream <squadra>` • `/partite`\n"
             f"`/ora` • `/meteo [citta]` • `/timer <tempo> [motivo]` • `/calcola <operazione>` • `/lancia [dado|moneta]` • `/barzelletta`\n"
             f"`/cisei` (`/ping`, `/cisenti`, `/seivivo`) • `/play <brano>` • `/pause` • `/resume` • `/skip` • `/stop` • `/queue` • `/volume <1-100>`\n"
             f"`/saluta` • `/brindisi` • `/abbraccio` • `/carica` • `/auguri` • `/buonanotte` • `/cinque` • `/troll`\n"
-            f"`/partita <squadra>` • `/wiki <domanda>` (`/outlands`) • `/effetto <filtro>` • `/suono <effetto>` • `/radio` • `/salva` • `/preferiti` • `/riavvia` • `/comandi`\n"
+            f"`/partita <squadra>` • `/wiki <domanda>` (`/outlands`, `/vendor`, `/prezzi`, `/patch`, `/status`) • `/radio` • `/comandi` • `!sync`\n"
             f"**Admin:** `/sposta` • `/spostatutti` • `/scollega` • `/muta` • `/smuta` • `/ruolo` • `/soprannome` • `/timeout` • `/pulisci` • `/kick` • `/ban`"
         ),
         inline=False

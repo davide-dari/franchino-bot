@@ -1573,6 +1573,88 @@ async def partita_cmd(
         raw_parts.append(str(dettaglio))
     raw_query = " ".join(raw_parts).strip() or "stasera"
 
+    is_video = bool(re.search(r"\b(video|golive|schermo|go live)\b", raw_query, flags=re.IGNORECASE))
+    if is_video:
+        from streambot_service import streambot_client, is_streambot_configured
+
+        clean_q = re.sub(
+            r"^(?:(?:(?:hey+|ehi+|hei+|ey+|ei+)\s+)?(?:franchino\s+)?)?"
+            r"(?:puoi\s+)?(?:per\s+favore\s+)?"
+            r"(?:trasmetti|streamma|metti|fai\s+partire|ascolta|fammi\s+ascoltare|riproduci|avvia|collega|stream|streaming)?\s*"
+            r"(?:(?:la|il|lo|l['’]|i|gli|le)\s+)?"
+            r"(?:partita|telecronaca|streaming|diretta|audio|match|palinsesto|video)?\s*"
+            r"(?:(?:di|del|della|dei|degli|dello|d['’])\s+)?",
+            "",
+            raw_query,
+            flags=re.IGNORECASE
+        )
+        clean_q = re.sub(r"\b(video|golive|schermo|go live|stream|streamma|telecronaca|trasmetti|audio|ascolta)\b", "", clean_q, flags=re.IGNORECASE).strip(" ,.!?:;-") or "live"
+
+        if not is_streambot_configured():
+            await ctx.send(
+                "⚠️ **StreamBot non è configurato.** Inserisci `STREAMBOT_TOKEN` nel file `.env` per abilitare la trasmissione video 'Go Live'!",
+                ephemeral=True
+            )
+            return
+
+        voice_ch = getattr(getattr(ctx.author, "voice", None), "channel", None)
+        if not voice_ch:
+            await ctx.send(
+                "⚠️ **Devi essere connesso a un canale vocale** per avviare la trasmissione video della partita!",
+                ephemeral=True
+            )
+            return
+
+        match = await sports_scraper.resolve_match_for_streaming(clean_q)
+        if not match:
+            await ctx.send(
+                f"❌ Non ho trovato nessuna partita live corrispondente a **{clean_q}**. Prova con `/partite` per vedere il palinsesto!",
+                ephemeral=True
+            )
+            return
+
+        stream_url = match.get("stream_url") or match.get("match_page_url") or match.get("url")
+        if not stream_url:
+            await ctx.send(
+                f"❌ Nessun flusso video disponibile per **{match.get('title', 'la partita')}**.",
+                ephemeral=True
+            )
+            return
+
+        title = match.get("title", "Partita Live")
+        try:
+            embed, view = await streambot_client.start_video_stream(
+                guild=ctx.guild,
+                voice_channel=voice_ch,
+                text_channel=ctx.channel,
+                stream_url=stream_url,
+                title=title,
+                is_sports=True,
+                requester=ctx.author
+            )
+            await ctx.send(
+                content="📺 **Diretta video avviata con successo!** Apri il Go Live di StreamBot nel canale vocale per guardare la partita.",
+                embed=embed,
+                view=view
+            )
+            asyncio.create_task(
+                hub.archive_interaction(
+                    user_id=str(ctx.author.id),
+                    user_name=ctx.author.display_name,
+                    raw_query=f"partita video {clean_q}",
+                    intent="sports_video_stream",
+                    ai_response=title,
+                    voice_summary="La diretta video è iniziata in vocale!",
+                    channel_name=ctx.channel.name if hasattr(ctx.channel, 'name') else None,
+                    metadata={"query": clean_q, "match_id": match.get("id"), "url": stream_url}
+                )
+            )
+            return
+        except Exception as e:
+            logger.exception("Errore avvio video stream su StreamBot")
+            await ctx.send(f"❌ Errore durante l'avvio della diretta video: {e}", ephemeral=True)
+            return
+
     is_stream = bool(re.search(r"\b(stream|streamma|telecronaca|trasmetti|audio|ascolta)\b", raw_query, flags=re.IGNORECASE))
 
     if is_stream:
@@ -1801,7 +1883,7 @@ async def partita_video_cmd(ctx: commands.Context, *, squadra_o_partita: Optiona
 )
 async def video_cmd(
     ctx: commands.Context,
-    azione_o_url: str,
+    azione_o_url: Optional[str] = None,
     *,
     opzioni: Optional[str] = None
 ):
@@ -1815,6 +1897,33 @@ async def video_cmd(
     """
     await ctx.defer()
     from streambot_service import streambot_client, is_streambot_configured
+
+    if not azione_o_url or azione_o_url.strip().lower() in ("help", "aiuto", "comandi"):
+        embed = discord.Embed(
+            title="📺 Guida Comandi Video & Go Live (StreamBot)",
+            description=(
+                "Franchino e StreamBot ti permettono di trasmettere partite sportive e video in diretta vocale (**Go Live / Screen Share 720p/1080p**) senza pubblicità!\n\n"
+                "**Comandi Partite Sportive:**\n"
+                "• `/partita video <squadra>` — Avvia la diretta video di una partita (es. `/partita video Milan`)\n"
+                "• `/partita_video <squadra>` — Alternativa diretta per avviare il Go Live\n"
+                "• `/stream <squadra>` — Ascolta solo la telecronaca audio in vocale\n"
+                "• `/partite` — Mostra il palinsesto completo di stasera (Calcio, Basket, F1, MotoGP)\n\n"
+                "**Comandi Video Generali:**\n"
+                "• `/video <link_o_youtube>` — Trasmette qualsiasi video YouTube o stream HLS\n"
+                "• `/video play <link>` — Avvia la riproduzione video\n"
+                "• `/video pausa` — Mette in pausa la trasmissione\n"
+                "• `/video riprendi` — Riprende la trasmissione\n"
+                "• `/video stop` — Ferma la trasmissione e fa uscire StreamBot\n\n"
+                "**Comandi Vocali:**\n"
+                "• *\"Hey Franchino trasmetti la partita del Milan in video\"*\n"
+                "• *\"Hey Franchino metti il video della partita\"*\n"
+                "• *\"Hey Franchino ferma il video\"*"
+            ),
+            color=COLOR_FRANCHINO
+        )
+        embed.set_footer(text="Franchino Video Streamer • Powered by StreamBot & AdBlock Engine")
+        await ctx.send(embed=embed)
+        return
 
     if not is_streambot_configured():
         await ctx.send(

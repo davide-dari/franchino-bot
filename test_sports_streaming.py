@@ -504,6 +504,10 @@ class TestSlashAndPrefixCommandParsing(unittest.TestCase):
         self.assertFalse(is_stream)
         self.assertEqual(q.lower(), "stasera")
 
+        # Permutazione 7: /partita video Milan
+        is_video = bool(re.search(r"\b(video|golive|schermo|go live)\b", "video Milan", flags=re.IGNORECASE))
+        self.assertTrue(is_video)
+
 
 class TestStreamBotIntegration(unittest.IsolatedAsyncioTestCase):
     """Test suite per l'integrazione di StreamBot e la trasmissione video pulita Go Live."""
