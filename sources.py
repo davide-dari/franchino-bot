@@ -91,6 +91,8 @@ class SongInfo:
                 color = COLOR_YOUTUBE
             elif self.source_type == "sports_stream":
                 color = discord.Color.red().value
+            elif self.source_type == "soundcloud":
+                color = 0xFF5500
             else:
                 color = COLOR_FRANCHINO
 
@@ -109,6 +111,8 @@ class SongInfo:
             badge = "🟢 Spotify"
         elif self.source_type == "sports_stream":
             badge = "⚽ MadPlay77 Live"
+        elif self.source_type == "soundcloud":
+            badge = "🟠 SoundCloud"
         else:
             badge = "🔴 YouTube"
         embed.set_footer(text=f"Franchino DJ • {badge}", icon_url="https://cdn-icons-png.flaticon.com/512/3845/3845868.png")
@@ -263,10 +267,10 @@ class SourceManager:
                 return
 
     def disable_cookies(self, reason: str = ""):
-        """Disattiva i cookies non validi/scaduti per evitare che blocchino i client mobili di yt-dlp."""
+        """Disattiva i cookies non validi/scaduti per evitare che blocchino i client di yt-dlp."""
         if not getattr(self, "_cookies_enabled", False):
             return
-        logger.warning(f"⚠️ Disattivazione automatica cookie YouTube ({reason}). Commutazione immediata a client mobili puri.")
+        logger.warning(f"⚠️ Disattivazione automatica cookie YouTube ({reason}). Commutazione a client alternativi.")
         self._cookies_enabled = False
         self._cookies_explicitly_disabled = True
         self.ydl_opts_stream.pop("cookiefile", None)
@@ -279,12 +283,12 @@ class SourceManager:
                 pass
 
     def _get_mobile_extractor_opts(self, base_opts: Dict[str, Any]) -> Dict[str, Any]:
-        """Restituisce opzioni pulite per i client mobili puri ('android', 'visionos', 'android_vr') senza cookie."""
+        """Restituisce opzioni pulite con client alternativi ('android', 'visionos', 'android_vr', 'web_creator', 'mweb', 'ios', 'tv') senza cookie."""
         clean = dict(base_opts)
         clean.pop("cookiefile", None)
         clean["extractor_args"] = {
             "youtube": {
-                "player_client": ["android", "visionos", "android_vr"],
+                "player_client": ["android", "visionos", "android_vr", "web_creator", "mweb", "ios", "tv"],
             }
         }
         return clean
@@ -598,9 +602,9 @@ class SourceManager:
         except Exception as first_err:
             if is_youtube_bot_or_cookie_error(first_err):
                 self.disable_cookies(f"Rilevato blocco bot/cookie nel primo tentativo: {first_err}")
-            logger.warning(f"Primo tentativo estrazione streaming per '{target}': {first_err}. Riprovo con client mobili puri...")
+            logger.warning(f"Primo tentativo estrazione streaming per '{target}': {first_err}. Riprovo con client alternativi...")
 
-        # Stadio 2: Estrazione streaming con client mobili puri ('android', 'visionos', 'android_vr') SENZA cookie
+        # Stadio 2: Estrazione streaming con client alternativi ('web_creator', 'mweb', 'ios', 'tv')
         mobile_opts = self._get_mobile_extractor_opts(self.ydl_opts_stream)
         try:
             song = self._do_extract_single(target, requester, mobile_opts, download=False)
@@ -608,7 +612,7 @@ class SourceManager:
                 self._cache_song(target.strip().lower(), song)
                 return song
         except Exception as second_err:
-            logger.warning(f"Secondo tentativo streaming (mobile puro) per '{target}': {second_err}. Riprovo con download temporaneo locale...")
+            logger.warning(f"Secondo tentativo streaming per '{target}': {second_err}. Riprovo con download temporaneo locale...")
 
         # Stadio 3: Download audio temporaneo su disco (elimina blocchi di decipher/streaming da datacenter)
         try:
@@ -635,8 +639,98 @@ class SourceManager:
             except Exception as fourth_err:
                 logger.error(f"Tutti i tentativi di estrazione falliti per '{target}': {fourth_err}")
 
+        # Stadio 5: Fallback definitivo su SoundCloud (Bypass totale bot-detection YouTube)
+        logger.info(f"🔄 Tentativo finale fallback SoundCloud per '{target}'...")
+        try:
+            fallback_song = self._extract_soundcloud_fallback(target, requester)
+            if fallback_song and fallback_song.stream_url:
+                self._cache_song(target.strip().lower(), fallback_song)
+                return fallback_song
+        except Exception as sc_err:
+            logger.error(f"Fallback finale SoundCloud fallito per '{target}': {sc_err}")
+
         # Se tutti gli stadi falliscono, solleva l'eccezione descrittiva
         raise RuntimeError(f"Impossibile estrarre flusso audio per '{target}' dopo tutti i tentativi di bypass.")
+
+    def _extract_soundcloud_fallback(
+        self,
+        target: str,
+        requester: Optional[Union[discord.Member, discord.User, str]]
+    ) -> Optional[SongInfo]:
+        """
+        Motore di fallback automatico ad alta resilienza:
+        Quando YouTube applica il blocco anti-bot ('Sign in to confirm you're not a bot'),
+        ricerca ed estrae la traccia audio equivalente da SoundCloud (zero bot-check, zero DRM).
+        """
+        clean_query = target
+        if target.startswith("ytsearch1:") or target.startswith("ytsearch:"):
+            clean_query = re.sub(r"^ytsearch\d*:", "", target).strip()
+        elif "youtube.com" in target or "youtu.be" in target:
+            # Tenta di estrarre il titolo via oEmbed ufficiale YouTube (non subisce mai bot check)
+            try:
+                import requests
+                oembed_url = f"https://www.youtube.com/oembed?url={target}&format=json"
+                r = requests.get(oembed_url, timeout=3.0)
+                if r.status_code == 200:
+                    data = r.json()
+                    clean_query = data.get("title") or clean_query
+            except Exception:
+                pass
+
+        logger.info(f"🔎 Ricerca fallback su SoundCloud per: '{clean_query}'...")
+        sc_search_opts = {
+            "format": "ba/bestaudio/best",
+            "quiet": True,
+            "no_warnings": True,
+            "extract_flat": True,
+            "source_address": "0.0.0.0",
+            "socket_timeout": 8.0,
+        }
+
+        try:
+            with yt_dlp.YoutubeDL(sc_search_opts) as ydl:
+                search_res = ydl.extract_info(f"scsearch10:{clean_query}", download=False)
+                if not search_res or "entries" not in search_res:
+                    return None
+
+                entries = search_res.get("entries", [])
+                for entry in entries:
+                    if not entry:
+                        continue
+                    sc_url = entry.get("url")
+                    if not sc_url:
+                        continue
+
+                    # Prova ad estrarre il formato per questa voce (salta quelle con DRM Go+)
+                    try:
+                        with yt_dlp.YoutubeDL({
+                            "format": "ba/bestaudio/best",
+                            "quiet": True,
+                            "no_warnings": True,
+                            "source_address": "0.0.0.0",
+                            "socket_timeout": 8.0,
+                        }) as ydl2:
+                            info = ydl2.extract_info(sc_url, download=False)
+                            if info and info.get("url"):
+                                logger.info(f"✅ Trovata traccia alternativa su SoundCloud: '{info.get('title')}'")
+                                return SongInfo(
+                                    title=info.get("title") or entry.get("title") or clean_query,
+                                    webpage_url=info.get("webpage_url") or sc_url,
+                                    stream_url=info.get("url"),
+                                    duration=int(info.get("duration") or 0),
+                                    thumbnail=info.get("thumbnail"),
+                                    uploader=info.get("uploader"),
+                                    requester=requester,
+                                    source_type="soundcloud",
+                                    http_headers=info.get("http_headers"),
+                                    is_direct_stream=True
+                                )
+                    except Exception:
+                        continue
+        except Exception as sc_err:
+            logger.warning(f"Errore durante fallback SoundCloud per '{clean_query}': {sc_err}")
+
+        return None
 
     def _do_extract_single(self, target: str, requester: Optional[Union[discord.Member, discord.User]], opts: Dict[str, Any], download: bool = False) -> SongInfo:
         cache_dir = "/tmp/franchino_cache"
@@ -728,15 +822,25 @@ class SourceManager:
             return self._do_extract_single(target, requester, mobile_opts, download=True)
         except Exception as first_err:
             if is_youtube_bot_or_cookie_error(first_err):
-                self.disable_cookies(f"Download audio error: {first_err}")
-            logger.warning(f"Download audio fallito per '{target}': {first_err}. Riprovo con visionos/android puro...")
-            vision_opts = dict(mobile_opts)
-            vision_opts["extractor_args"] = {
+                logger.info(f"🛡️ Download audio YouTube bloccato da bot-check per '{target}'. Provo fallback SoundCloud...")
+                fallback_song = self._extract_soundcloud_fallback(target, requester)
+                if fallback_song and fallback_song.stream_url:
+                    return fallback_song
+
+            logger.warning(f"Download audio fallito per '{target}': {first_err}. Riprovo con client alternativi...")
+            alt_opts = dict(mobile_opts)
+            alt_opts["extractor_args"] = {
                 "youtube": {
-                    "player_client": ["visionos", "android"],
+                    "player_client": ["tv", "mweb"],
                 }
             }
-            return self._do_extract_single(target, requester, vision_opts, download=True)
+            try:
+                return self._do_extract_single(target, requester, alt_opts, download=True)
+            except Exception:
+                fallback_song = self._extract_soundcloud_fallback(target, requester)
+                if fallback_song and fallback_song.stream_url:
+                    return fallback_song
+                raise
 
     async def ensure_stream_url(self, song: SongInfo) -> str:
         """
@@ -792,8 +896,13 @@ class SourceManager:
             try:
                 fresh_info = await asyncio.to_thread(self._download_youtube_audio, target, song.requester)
             except Exception as dl_err:
-                logger.error(f"Anche il download audio in ensure_stream_url è fallito per '{target}': {dl_err}")
-                raise dl_err
+                logger.warning(f"Download audio in ensure_stream_url fallito per '{target}': {dl_err}. Provo fallback SoundCloud...")
+                fallback = await asyncio.to_thread(self._extract_soundcloud_fallback, target, song.requester)
+                if fallback and fallback.stream_url:
+                    fresh_info = fallback
+                else:
+                    logger.error(f"Anche il download audio in ensure_stream_url è fallito per '{target}': {dl_err}")
+                    raise dl_err
 
         song.stream_url = fresh_info.stream_url
         song.http_headers = fresh_info.http_headers

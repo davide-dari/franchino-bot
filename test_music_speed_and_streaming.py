@@ -289,6 +289,39 @@ class TestMusicPlaybackSpeedAndOptimization(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(song.stream_url, "/tmp/franchino_cache/DOWNLOADFALL1.webm")
                 self.assertFalse(song.is_direct_stream)
 
+    def test_extract_youtube_single_falls_back_to_soundcloud_on_bot_block(self):
+        """Verifica che _extract_youtube_single ripieghi su SoundCloud se YouTube è bloccato da bot-check."""
+        sm = SourceManager()
+        expected_sc_song = SongInfo(
+            title="Vamos A La Playa (SoundCloud)",
+            webpage_url="https://soundcloud.com/test/vamos-a-la-playa",
+            stream_url="https://playback.media-streaming.soundcloud.cloud/test.m3u8",
+            duration=180,
+            source_type="soundcloud",
+            is_direct_stream=True,
+        )
+
+        with patch.object(sm, "_do_extract_single", side_effect=RuntimeError("Sign in to confirm you're not a bot")):
+            with patch.object(sm, "_extract_soundcloud_fallback", return_value=expected_sc_song) as mock_sc:
+                song = sm._extract_youtube_single("ytsearch1:Vamos a la playa", None)
+                self.assertIsNotNone(song)
+                self.assertEqual(song.source_type, "soundcloud")
+                self.assertEqual(song.title, "Vamos A La Playa (SoundCloud)")
+                mock_sc.assert_called_once()
+
+    def test_soundcloud_embed_badge_and_color(self):
+        """Verifica che SongInfo con source_type='soundcloud' generi il badge arancione SoundCloud."""
+        sc_song = SongInfo(
+            title="SoundCloud Hit",
+            webpage_url="https://soundcloud.com/artist/hit",
+            stream_url="https://stream.soundcloud.com/hit.m3u8",
+            duration=200,
+            source_type="soundcloud",
+        )
+        embed = sc_song.create_embed()
+        self.assertEqual(embed.color.value, 0xFF5500)
+        self.assertIn("SoundCloud", embed.footer.text)
+
 
 if __name__ == "__main__":
     unittest.main()
