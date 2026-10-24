@@ -1553,7 +1553,7 @@ async def sync_cmd(ctx: commands.Context):
 @bot.hybrid_command(
     name="partita",
     aliases=["partita_live"],
-    description="Cerca una partita, palinsesto o diretta streaming audio (es. /partita stream Milan, /partita Juve)"
+    description="Cerca una partita, palinsesto, diretta audio o video (es. /partita video Milan, /partita Juve)"
 )
 async def partita_cmd(
     ctx: commands.Context,
