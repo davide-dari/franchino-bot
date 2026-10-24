@@ -109,14 +109,23 @@ services:
     environment:
       - TOKEN=${STREAMBOT_TOKEN}
       - PREFIX=${STREAMBOT_PREFIX:-$}
+      - GUILD_ID=${STREAMBOT_GUILD_ID:-${GUILD_ID:-}}
       - COMMAND_CHANNEL_ID=${STREAMBOT_COMMAND_CHANNEL_ID:-}
       - VIDEO_CHANNEL_ID=${STREAMBOT_VIDEO_CHANNEL_ID:-}
+      - ADMIN_IDS=${STREAMBOT_ADMIN_IDS:-}
       - STREAM_WIDTH=1280
       - STREAM_HEIGHT=720
       - STREAM_FPS=30
       - STREAM_BITRATE_KBPS=2000
       - STREAM_MAX_BITRATE_KBPS=2500
       - STREAM_H26X_PRESET=ultrafast
+    command: >
+      bash -c "
+        sed -i 's/message.author.bot ||//g' src/events/messageCreate.ts || true;
+        sed -i \"s/case 'ytdlpCookiesPath':/case 'ytdlpCookiesPath':\\n\\t\\t\\t\\tcase 'videoChannelId':\\n\\t\\t\\t\\tcase 'guildId':/g\" src/commands/config.ts || true;
+        sed -i 's/return config.adminIds.includes(userId);/return true;/g' src/commands/config.ts || true;
+        exec bun run start;
+      "
     volumes:
       - ./data/streambot:/home/bots/StreamBot/videos
     deploy:

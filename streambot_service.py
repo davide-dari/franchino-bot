@@ -7,6 +7,7 @@ con filtraggio automatico anti-pubblicità (zero popup/banner sui flussi sportiv
 import os
 import re
 import time
+import asyncio
 import logging
 from typing import Optional, Dict, Any, Tuple, List, Union
 import discord
@@ -189,12 +190,16 @@ class StreamBotClient:
         if not cmd_channel:
             raise RuntimeError("Nessun canale testuale disponibile per inviare il comando a StreamBot.")
 
-        # 1. Configura dinamicamente il canale vocale su StreamBot affinché entri nel canale corretto
+        # 1. Configura dinamicamente server e canale vocale su StreamBot affinché entri nel canale corretto
+        set_guild_cmd = f"{self.prefix}cfg GUILD_ID {guild.id}"
         set_channel_cmd = f"{self.prefix}cfg VIDEO_CHANNEL_ID {voice_channel.id}"
         try:
+            await cmd_channel.send(set_guild_cmd)
+            await asyncio.sleep(0.3)
             await cmd_channel.send(set_channel_cmd)
+            await asyncio.sleep(0.3)
         except Exception as e:
-            logger.warning(f"Errore configurazione VIDEO_CHANNEL_ID su StreamBot: {e}")
+            logger.warning(f"Errore configurazione StreamBot: {e}")
 
         # 2. Invia il comando di riproduzione con opzioni anti-pubblicità
         opt_str = (" " + " ".join(options)) if options else ""
@@ -226,6 +231,12 @@ class StreamBotClient:
         if requester:
             req_str = requester.mention if hasattr(requester, "mention") else str(requester)
             embed.add_field(name="👤 Richiesto da", value=req_str, inline=True)
+
+        embed.add_field(
+            name="💡 Comando Chat per StreamBot",
+            value=f"Se StreamBot non entra in automatico, invia tu stesso in chat:\n`{play_cmd}`",
+            inline=False
+        )
 
         embed.set_footer(
             text="Franchino Video Streamer • Powered by StreamBot & AdBlock Engine",
