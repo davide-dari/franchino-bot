@@ -1297,7 +1297,7 @@ async def outlands_aiuto_cmd(ctx: commands.Context):
 
 @bot.hybrid_command(
     name="wiki",
-    description="Alias per cercare informazioni sulla wiki di Ultima Online Outlands (o 'aiuto' per gli argomenti)"
+    description="Cerca informazioni e guide sulla wiki di Ultima Online Outlands"
 )
 async def wiki_cmd(ctx: commands.Context, *, domanda: str = "aiuto"):
     await _handle_outlands_query(ctx, domanda)
@@ -1306,7 +1306,7 @@ async def wiki_cmd(ctx: commands.Context, *, domanda: str = "aiuto"):
 @bot.hybrid_command(
     name="script",
     aliases=["scripts", "razor", "razorscript", "razor_script"],
-    description="Cerca e scarica script Razor per UO Outlands da outlands.uorazorscripts.com per qualsiasi skill!"
+    description="Cerca e scarica script Razor per UO Outlands da UORazorScripts"
 )
 async def script_cmd(ctx: commands.Context, skill: Optional[str] = "lista", numero: Optional[int] = None):
     """Mostra tutti gli script Razor per una skill e permette di scaricare il file .razor pronto da usare."""
@@ -1357,7 +1357,7 @@ async def script_cmd(ctx: commands.Context, skill: Optional[str] = "lista", nume
 @bot.hybrid_command(
     name="status",
     aliases=["uo_status", "server_status", "portal", "portale", "portal_status"],
-    description="Verifica se il server di Ultima Online Outlands è online (TCP 2593 e portal.uooutlands.com/server/status)"
+    description="Verifica se il server di Ultima Online Outlands è online"
 )
 async def status_cmd(ctx: commands.Context):
     """Verifica lo stato di connessione TCP e la latenza del server UO Outlands, e mostra il link al portale ufficiale."""
@@ -1373,7 +1373,7 @@ async def status_cmd(ctx: commands.Context):
 
 @bot.hybrid_command(
     name="server",
-    description="Verifica se il server di UO Outlands è online (play.uooutlands.com:2593 e portal.uooutlands.com)"
+    description="Verifica se il server di UO Outlands è online"
 )
 async def server_cmd(ctx: commands.Context):
     """Verifica lo stato del server UO Outlands (alias per /status)."""
@@ -1410,7 +1410,7 @@ async def riavvio_cmd(ctx: commands.Context):
 @bot.hybrid_command(
     name="patch",
     aliases=["patches", "patchnotes", "patch_notes", "ultimapatch", "outlands_patch"],
-    description="Mostra l'ultima patch ufficiale di UO Outlands con note, link al forum e stato riavvio"
+    description="Mostra l'ultima patch ufficiale di UO Outlands con note e link"
 )
 async def patch_cmd(ctx: commands.Context):
     """Mostra l'ultima patch annunciata, l'eventuale riavvio citato e il link diretto al forum."""
@@ -1463,7 +1463,7 @@ async def build_cmd(
 @bot.hybrid_command(
     name="builds",
     aliases=["builds_list", "uoaddicts_builds", "outlands_builds"],
-    description="Mostra le build più utilizzate di UO Outlands da UOAddicts (categorie: popolari, pvm, pvp, recenti)"
+    description="Mostra le build più usate di UO Outlands da UOAddicts (popolari, pvm, pvp)"
 )
 async def builds_cmd(
     ctx: commands.Context,
@@ -1511,7 +1511,7 @@ async def news_cmd(ctx: commands.Context):
 @bot.hybrid_command(
     name="vendor",
     aliases=["vendorsearch"],
-    description="Cerca oggetti e prezzi sui Player Vendor di UO Outlands (portal.uooutlands.com/vendor-search)"
+    description="Cerca oggetti e prezzi sui Player Vendor di UO Outlands"
 )
 async def vendor_cmd(ctx: commands.Context, *, oggetto: str):
     """Cerca i migliori prezzi per un oggetto sui Player Vendor di Ultima Online Outlands."""
@@ -1530,7 +1530,7 @@ async def vendor_cmd(ctx: commands.Context, *, oggetto: str):
 @bot.hybrid_command(
     name="prezzi",
     aliases=["prezzo"],
-    description="Cerca oggetti e prezzi sui Player Vendor di UO Outlands (portal.uooutlands.com/vendor-search)"
+    description="Cerca oggetti e prezzi sui Player Vendor di UO Outlands"
 )
 async def prezzi_cmd(ctx: commands.Context, *, oggetto: str):
     """Cerca i migliori prezzi per un oggetto sui Player Vendor di Ultima Online Outlands."""
@@ -1553,7 +1553,7 @@ async def sync_cmd(ctx: commands.Context):
 @bot.hybrid_command(
     name="partita",
     aliases=["partita_live"],
-    description="Cerca una partita, palinsesto, diretta audio o video (es. /partita video Milan, /partita Juve)"
+    description="Cerca partite, palinsesto, diretta audio o video (es. Milan, Juve)"
 )
 async def partita_cmd(
     ctx: commands.Context,
@@ -1802,7 +1802,7 @@ async def stream_cmd(ctx: commands.Context, *, partita_o_squadra: Optional[str] 
 @bot.hybrid_command(
     name="partita_video",
     aliases=["video_partita", "golive_partita", "stream_video"],
-    description="Trasmetti la partita in diretta video ('Go Live' / Screen Share) nel canale vocale con StreamBot!"
+    description="Trasmetti la partita in diretta video Go Live nel canale vocale con StreamBot!"
 )
 async def partita_video_cmd(ctx: commands.Context, *, squadra_o_partita: Optional[str] = "live"):
     """Avvia la trasmissione video in diretta della partita nel canale vocale tramite StreamBot (senza pubblicità)."""
@@ -1879,7 +1879,7 @@ async def partita_video_cmd(ctx: commands.Context, *, squadra_o_partita: Optiona
 @bot.hybrid_command(
     name="video",
     aliases=["golive", "streambot"],
-    description="Controlla o avvia una trasmissione video 'Go Live' con StreamBot (play, stop, pausa, riprendi)"
+    description="Controlla o avvia lo streaming video Go Live con StreamBot"
 )
 async def video_cmd(
     ctx: commands.Context,
@@ -1990,7 +1990,7 @@ async def video_cmd(
 @bot.hybrid_command(
     name="partite",
     aliases=["match", "partite_stasera"],
-    description="Palinsesto sportivo completo (Calcio, Serie A, Champions, NBA, Tennis, F1, MotoGP) & streaming!"
+    description="Palinsesto sportivo completo (Calcio, Serie A, Champions, NBA, Motori)"
 )
 async def partite_cmd(
     ctx: commands.Context,
@@ -2035,7 +2035,7 @@ async def partite_cmd(
 @bot.hybrid_command(
     name="sport",
     aliases=["palinsesto", "match_stasera"],
-    description="Palinsesto sportivo completo (Calcio, Serie A, Champions, NBA, Tennis, F1, MotoGP) & streaming!"
+    description="Palinsesto sportivo completo (Calcio, Serie A, Champions, NBA, Motori)"
 )
 async def sport_cmd(
     ctx: commands.Context,
@@ -2422,7 +2422,7 @@ async def meteo_cmd(ctx: commands.Context, citta: Optional[str] = "Roma"):
 @bot.hybrid_command(
     name="timer",
     aliases=["promemoria", "sveglia"],
-    description="Imposta un timer vocale asincrono (es. '5m', '10 minuti per la pasta', 'status', 'cancella')"
+    description="Imposta un timer vocale asincrono (es. '5m', '10 minuti', 'cancella')"
 )
 async def timer_cmd(ctx: commands.Context, durata: str, *, motivo: Optional[str] = None):
     """Gestisce timer e promemoria con squillo sveglia e annuncio vocale da vocalist."""
