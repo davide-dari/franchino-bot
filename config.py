@@ -33,18 +33,6 @@ NODE_PATH = shutil.which("node") or shutil.which("nodejs")
 # Proxy opzionale per YouTube (SOCKS5 o HTTP per bypassare restrizioni datacenter)
 YOUTUBE_PROXY = os.getenv("YOUTUBE_PROXY", "").strip() or None
 
-# StreamBot Video Streaming Companion (Go Live video streaming in Discord)
-STREAMBOT_TOKEN = os.getenv("STREAMBOT_TOKEN", "").strip() or None
-STREAMBOT_PREFIX = os.getenv("STREAMBOT_PREFIX", "$").strip() or "$"
-try:
-    STREAMBOT_COMMAND_CHANNEL_ID = int(os.getenv("STREAMBOT_COMMAND_CHANNEL_ID", "0") or "0") or None
-except ValueError:
-    STREAMBOT_COMMAND_CHANNEL_ID = None
-try:
-    STREAMBOT_VIDEO_CHANNEL_ID = int(os.getenv("STREAMBOT_VIDEO_CHANNEL_ID", "0") or "0") or None
-except ValueError:
-    STREAMBOT_VIDEO_CHANNEL_ID = None
-
 # Colori degli Embed Discord di Franchino
 COLOR_FRANCHINO = 0xFF6F00   # Arancione console / DJ vibe
 COLOR_SUCCESS = 0x2ECC71     # Verde successo

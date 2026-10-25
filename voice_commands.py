@@ -1535,17 +1535,11 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
             )
             or any(
                 phrase in cmd_lower
-                for phrase in ("ferma tutto", "basta parlare", "stai zitto", "fai silenzio", "stop tutto", "spegni tutto", "stop musica", "basta musica", "ferma il video", "stop video", "stoppa il video")
+                for phrase in ("ferma tutto", "basta parlare", "stai zitto", "fai silenzio", "stop tutto", "spegni tutto", "stop musica", "basta musica")
             )
         )
         if is_stop_cmd:
             self.player.stop()
-            try:
-                from streambot_service import streambot_client
-                if streambot_client.is_active:
-                    asyncio.create_task(streambot_client.stop_video_stream(self.text_channel))
-            except Exception:
-                pass
             return
 
         # 0B. Comando COMANDI / DIMMI I COMANDI / AIUTO -> Inviato in MESSAGGIO PRIVATO (DM)!
@@ -1683,45 +1677,6 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
         if sport_detected and sport_query:
             from sports_scraper import sports_scraper
             from central_hub import hub
-
-            is_video_request = any(w in cmd_lower for w in ("video", "diretta video", "trasmetti il video", "metti il video", "fai vedere", "schermo", "go live", "video della partita"))
-            if is_video_request:
-                from streambot_service import streambot_client, is_streambot_configured
-                if is_streambot_configured():
-                    match = await sports_scraper.resolve_match_for_streaming(sport_query)
-                    if match:
-                        stream_url = match.get("stream_url") or match.get("match_page_url") or match.get("url")
-                        vc = user.voice.channel if hasattr(user, "voice") and user.voice else (self.player.voice_client.channel if self.player.voice_client else None)
-                        if stream_url and vc:
-                            try:
-                                v_embed, v_view = await streambot_client.start_video_stream(
-                                    guild=vc.guild,
-                                    voice_channel=vc,
-                                    text_channel=self.text_channel,
-                                    stream_url=stream_url,
-                                    title=match.get("title", "Partita Live"),
-                                    is_sports=True,
-                                    requester=user
-                                )
-                                await self._notify_channel(
-                                    message=f"📺 **Franchino Video:** Diretta video avviata per **{match.get('title')}** nel canale vocale!",
-                                    embed=v_embed,
-                                    view=v_view
-                                )
-                                asyncio.create_task(
-                                    hub.archive_interaction(
-                                        user_id=str(user.id),
-                                        user_name=user.display_name,
-                                        raw_query=f"voce_sport_video {sport_query}",
-                                        intent="sports_video_stream",
-                                        ai_response=match.get("title", "Video Stream"),
-                                        voice_summary=f"Diretta video di {match.get('title')}",
-                                        metadata={"query": sport_query, "match_id": match.get("id")}
-                                    )
-                                )
-                                return
-                            except Exception as e:
-                                logger.error(f"Errore video streaming da voce: {e}")
 
             is_stream_request = any(w in cmd_lower for w in ("trasmetti", "streamma", "telecronaca", "fammi ascoltare", "fai partire lo streaming", "metti la telecronaca", "metti lo streaming"))
             if is_stream_request:
@@ -2701,14 +2656,8 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
                     await self._notify_channel(f"🎙️ **{user.display_name}** ha messo in pausa con la voce ⏸️")
                 return
 
-            if q_low in ("in stop", "stop", "muto", "silenzio", "basta", "ferma", "stoppa", "fermati", "zitto", "fai silenzio", "spegni", "taci", "smettila", "ferma il video", "stop video"):
+            if q_low in ("in stop", "stop", "muto", "silenzio", "basta", "ferma", "stoppa", "fermati", "zitto", "fai silenzio", "spegni", "taci", "smettila"):
                 self.player.stop()
-                try:
-                    from streambot_service import streambot_client
-                    if streambot_client.is_active:
-                        asyncio.create_task(streambot_client.stop_video_stream(self.text_channel))
-                except Exception:
-                    pass
                 return
 
             if q_low in ("in loop", "loop", "ripeti"):
@@ -2845,12 +2794,6 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
             "stop", "stoppa", "basta", "ferma", "fermati", "zitto", "muto", "silenzio", "spegni", "svuota"
         )):
             self.player.stop()
-            try:
-                from streambot_service import streambot_client
-                if streambot_client.is_active:
-                    asyncio.create_task(streambot_client.stop_video_stream(self.text_channel))
-            except Exception:
-                pass
             return
 
         # 6. Comando LOOP / RIPETI
@@ -3441,47 +3384,8 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
         if intent in ("sports_stream_voice", "sports_video_stream"):
             from sports_scraper import sports_scraper
             from central_hub import hub
-            from streambot_service import streambot_client, is_streambot_configured
 
             sq = decision.get("sport_query") or command_part
-            is_video_req = (intent == "sports_video_stream") or any(w in command_part.lower() for w in ("video", "schermo", "go live", "fai vedere"))
-
-            if is_video_req and is_streambot_configured():
-                match = await sports_scraper.resolve_match_for_streaming(sq)
-                if match:
-                    stream_url = match.get("stream_url") or match.get("match_page_url") or match.get("url")
-                    vc = user.voice.channel if hasattr(user, "voice") and user.voice else (self.player.voice_client.channel if self.player.voice_client else None)
-                    if stream_url and vc:
-                        try:
-                            v_embed, v_view = await streambot_client.start_video_stream(
-                                guild=vc.guild,
-                                voice_channel=vc,
-                                text_channel=self.text_channel,
-                                stream_url=stream_url,
-                                title=match.get("title", "Partita Live"),
-                                is_sports=True,
-                                requester=user
-                            )
-                            await self._notify_channel(
-                                message=f"📺 **Franchino Video:** Diretta video avviata per **{match.get('title')}** nel canale vocale!",
-                                embed=v_embed,
-                                view=v_view
-                            )
-                            asyncio.create_task(
-                                hub.archive_interaction(
-                                    user_id=str(user.id),
-                                    user_name=user.display_name,
-                                    raw_query=f"brain_sport_video {sq}",
-                                    intent="sports_video_stream",
-                                    ai_response=match.get("title", "Video Stream"),
-                                    voice_summary=f"Diretta video di {match.get('title')}",
-                                    metadata={"query": sq, "match_id": match.get("id")}
-                                )
-                            )
-                            return True
-                        except Exception as e:
-                            logger.error(f"Errore video streaming da brain intent: {e}")
-
             match = await sports_scraper.resolve_match_for_streaming(sq)
             if match:
                 vc = user.voice.channel if hasattr(user, "voice") and user.voice else None
@@ -3608,12 +3512,6 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
                 return True
             elif act == "stop" or any(w in c_low for w in ("stop", "ferma", "stoppa", "fermati", "basta", "zitto", "stai zitto", "muto", "silenzio", "fai silenzio", "spegni", "taci", "smettila", "svuota")):
                 self.player.stop()
-                try:
-                    from streambot_service import streambot_client
-                    if streambot_client.is_active:
-                        asyncio.create_task(streambot_client.stop_video_stream(self.text_channel))
-                except Exception:
-                    pass
                 return True
             elif act == "skip" or any(w in c_low for w in ("skip", "salta", "prossima", "avanti", "cambia")):
                 if self.player.is_active:
