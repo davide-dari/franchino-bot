@@ -121,10 +121,15 @@ services:
       - STREAM_H26X_PRESET=ultrafast
     command: >
       bash -c "
-        sed -i 's/message.author.bot ||//g' src/events/messageCreate.ts || true;
-        sed -i \"s/case 'ytdlpCookiesPath':/case 'ytdlpCookiesPath':\\n\\t\\t\\t\\tcase 'videoChannelId':\\n\\t\\t\\t\\tcase 'guildId':/g\" src/commands/config.ts || true;
-        sed -i 's/return config.adminIds.includes(userId);/return true;/g' src/commands/config.ts || true;
-        exec bun run start;
+        sed -i 's/message.author.bot ||//g' dist/events/messageCreate.js src/events/messageCreate.ts 2>/dev/null || true;
+        sed -i 's/return config.adminIds.includes(userId);/return true;/g' dist/commands/config.js src/commands/config.ts 2>/dev/null || true;
+        if command -v bun >/dev/null 2>&1; then
+          exec bun run start;
+        elif command -v npm >/dev/null 2>&1; then
+          exec npm run start:node;
+        else
+          exec node dist/index.js;
+        fi
       "
     volumes:
       - ./data/streambot:/home/bots/StreamBot/videos
