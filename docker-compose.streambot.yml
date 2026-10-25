@@ -20,6 +20,7 @@ services:
       - STREAM_BITRATE_KBPS=2000
       - STREAM_MAX_BITRATE_KBPS=2500
       - STREAM_H26X_PRESET=ultrafast
+      - YTDLP_COOKIES_PATH=/home/bots/StreamBot/cookies.txt
     command: >
       bash -c "
         sed -i 's/message.author.bot ||//g' dist/events/messageCreate.js src/events/messageCreate.ts 2>/dev/null || true;
@@ -34,6 +35,7 @@ services:
       "
     volumes:
       - ./data/streambot:/home/bots/StreamBot/videos
+      - ./cookies.txt:/home/bots/StreamBot/cookies.txt:ro
     deploy:
       resources:
         limits:
