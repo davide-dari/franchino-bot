@@ -122,11 +122,26 @@ services:
       - YTDLP_COOKIES_PATH=/home/bots/StreamBot/cookies.txt
     command: >
       bash -c "
-        sed -i 's/message.author.bot ||//g' dist/events/messageCreate.js src/events/messageCreate.ts 2>/dev/null || true;
-        sed -i 's/return config.adminIds.includes(userId);/return true;/g' dist/commands/config.js src/commands/config.ts 2>/dev/null || true;
-        if command -v bun >/dev/null 2>&1; then
-          exec bun run start;
-        elif command -v npm >/dev/null 2>&1; then
+        node -e \"
+          const fs = require('fs');
+          ['dist/events/messageCreate.js', 'src/events/messageCreate.ts'].forEach(f => {
+            if (fs.existsSync(f)) {
+              let c = fs.readFileSync(f, 'utf8');
+              c = c.replace(/message\.author\.bot\s*\\|\\|\\s*/g, '');
+              fs.writeFileSync(f, c);
+            }
+          });
+          ['dist/commands/config.js', 'src/commands/config.ts'].forEach(f => {
+            if (fs.existsSync(f)) {
+              let c = fs.readFileSync(f, 'utf8');
+              c = c.replace(/return\\s+config\\.adminIds\\.includes\\(userId\\);/g, 'return true;');
+              c = c.replace(/k\\.toLowerCase\\(\\)\\s*===\\s*parameter\\.toLowerCase\\(\\)/g, 'k.toLowerCase().replace(/_/g, \\\"\\\") === parameter.toLowerCase().replace(/_/g, \\\"\\\")');
+              c = c.replace(/case\\s+['\\\"]videosDir['\\\"]:/g, 'case \\\"videoChannelId\\\": case \\\"guildId\\\": case \\\"videosDir\\\":');
+              fs.writeFileSync(f, c);
+            }
+          });
+        \" 2>/dev/null || true;
+        if command -v npm >/dev/null 2>&1; then
           exec npm run start:node;
         else
           exec node dist/index.js;
