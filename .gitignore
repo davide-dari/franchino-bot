@@ -38,6 +38,7 @@ data/franchino_memoria.json
 dataset/
 voice_dataset/
 models/
+vendor/
 *.onnx
 *.onnx.json
 

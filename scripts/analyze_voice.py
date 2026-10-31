@@ -62,11 +62,18 @@ HOP_SEC = 0.020       # 20 ms
 # =============================================================================
 def read_wav(path: str) -> Tuple["np.ndarray", int]:
     """Legge un WAV PCM (8/16/32 bit) e lo restituisce come float mono in [-1, 1]."""
-    with wave.open(path, "rb") as wf:
-        canali = wf.getnchannels()
-        larghezza = wf.getsampwidth()
-        rate = wf.getframerate()
-        grezzo = wf.readframes(wf.getnframes())
+    try:
+        with wave.open(path, "rb") as wf:
+            canali = wf.getnchannels()
+            larghezza = wf.getsampwidth()
+            rate = wf.getframerate()
+            grezzo = wf.readframes(wf.getnframes())
+    except wave.Error as e:
+        raise ValueError(
+            f"{path}: formato non leggibile ({e}). La libreria standard non legge i WAV "
+            "IEEE float (formato 3): converti prima con "
+            "`ffmpeg -i input.wav -c:a pcm_s16le output.wav`."
+        ) from e
 
     if larghezza == 1:
         dati = (np.frombuffer(grezzo, dtype=np.uint8).astype(np.float32) - 128.0) / 128.0

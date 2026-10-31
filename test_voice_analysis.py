@@ -148,3 +148,39 @@ class TestCli:
         esito = av.main([str(tmp_path / "non_esiste.wav")])
         assert esito == 1
         assert "⚠️" in capsys.readouterr().out
+
+
+# ===========================================================================
+# Formati non supportati: messaggio chiaro invece di un errore criptico
+# ===========================================================================
+def scrivi_wav_float(path, frequenza: float = 200.0, durata: float = 0.5, rate: int = 16000):
+    """WAV IEEE float (formato 3): torchaudio lo produce di default."""
+    import struct
+
+    n = int(durata * rate)
+    dati = np.sin(2 * math.pi * frequenza * np.arange(n) / rate).astype("<f4").tobytes()
+    with open(str(path), "wb") as fh:
+        fh.write(b"RIFF" + struct.pack("<I", 36 + len(dati)) + b"WAVE")
+        fh.write(b"fmt " + struct.pack("<IHHIIHH", 16, 3, 1, rate, rate * 4, 4, 32))
+        fh.write(b"data" + struct.pack("<I", len(dati)) + dati)
+    return str(path)
+
+
+class TestFormatiNonSupportati:
+    def test_wav_float_da_errore_spiegato(self, tmp_path):
+        """Il WAV float è quello che scrive torchaudio: va detto come convertirlo."""
+        import scripts.analyze_voice as av
+
+        path = scrivi_wav_float(tmp_path / "float.wav")
+        with pytest.raises(ValueError) as err:
+            av.analizza(path)
+        messaggio = str(err.value)
+        assert "pcm_s16le" in messaggio
+        assert "float" in messaggio.lower()
+
+    def test_il_cli_segnala_il_file_illeggibile(self, tmp_path, capsys):
+        import scripts.analyze_voice as av
+
+        path = scrivi_wav_float(tmp_path / "float.wav")
+        assert av.main([path]) == 1
+        assert "⚠️" in capsys.readouterr().out
