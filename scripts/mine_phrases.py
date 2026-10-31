@@ -237,6 +237,37 @@ def durata_file(path: str) -> float:
     return int(m.group(1)) * 3600 + int(m.group(2)) * 60 + float(m.group(3))
 
 
+def misura_lufs(path: str) -> Optional[float]:
+    """Loudness integrata (LUFS) secondo EBU R128."""
+    stderr = esegui_ffmpeg(["-i", path, "-af", "ebur128", "-f", "null", "-"])
+    blocco = stderr.split("Integrated loudness")[-1] if "Integrated loudness" in stderr else stderr
+    m = re.search(r"I:\s*(-?[0-9]+\.[0-9]+)\s*LUFS", blocco)
+    return float(m.group(1)) if m else None
+
+
+def normalizza_lufs(path: str, target_lufs: float = -16.0, peak_db: float = -1.0) -> Optional[float]:
+    """Porta la clip al loudness target con un gain statico (+ limiter sui picchi).
+
+    Un gain statico è preferibile a `loudnorm` dinamico: su clip da 1-2 secondi
+    il compressore adattivo pomperebbe e cambierebbe il timbro della frase.
+    Serve a far suonare allo stesso volume un "Magia!" urlato e uno sussurrato.
+    """
+    attuale = misura_lufs(path)
+    if attuale is None:
+        return None
+    gain = target_lufs - attuale
+    if abs(gain) < 0.1:
+        return attuale
+    temp = path + ".norm.wav"
+    esegui_ffmpeg([
+        "-i", path,
+        "-af", f"volume={gain:.2f}dB,alimiter=limit={10 ** (peak_db / 20):.4f}:level=false",
+        "-ac", "1", "-ar", "44100", "-acodec", "pcm_s16le", temp,
+    ])
+    shutil.move(temp, path)
+    return misura_lufs(path)
+
+
 # =============================================================================
 # Programma principale
 # =============================================================================
@@ -254,6 +285,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--max-per-frase", type=int, default=6,
                     help="quante varianti tenere per ogni frase")
     ap.add_argument("--mp3", action="store_true", default=True, help="crea anche l'anteprima mp3")
+    ap.add_argument("--target-lufs", type=float, default=-16.0,
+                    help="loudness target EBU R128 per ogni clip (default -16 LUFS)")
 
     args = ap.parse_args(argv)
 
@@ -338,6 +371,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         wav_path = os.path.join(out, base + ".wav")
         sorgente = next(p for p in args.input if os.path.basename(p) == cand.sorgente)
         ritaglia_e_masterizza(sorgente, cand.inizio, cand.fine, wav_path)
+        # Loudness uniforme: un "Magia!" urlato e uno sussurrato devono suonare
+        # allo stesso volume, altrimenti in Discord sembra un errore di mixing.
+        lufs = normalizza_lufs(wav_path, args.target_lufs)
         cand.file_wav = wav_path
         cand.f0_hz = stima_f0(wav_path)
         cand.tonalita = classifica_tonalita(cand.f0_hz)

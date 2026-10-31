@@ -152,39 +152,59 @@ sono a orecchio).
 
 ---
 
-## 6. Taratura DSP misurata (fatta)
+## 6. Taratura DSP misurata (fatta, e rifatta)
 
 La catena di effetti di `player.py` era tarata a orecchio. Ora è tarata sui dati:
 `scripts/analyze_voice.py` misura **F0** (autocorrelazione) e **LTAS** (energia
-per banda d'ottava) di due file e ne calcola la distanza.
+per banda d'ottava) e ne calcola la distanza fra due file.
 
-Riferimento: 10,3 secondi di voce reale, ottenuti separando 90 s di una traccia
-con demucs (le 6 clip con la base 18-29 dB sotto la voce).
+### Riferimento corretto
 
-| | Prima | Dopo | Voce reale |
+Le **11 registrazioni** estratte dalla voce vera (16,2 s: sei "Magia!", quattro
+"una favola", un "grazie") sono il riferimento definitivo: voce parlata, senza
+musica, con la pulizia misurata e verificata.
+
+**F0 mediana: 157 Hz.**
+
+> ⚠️ **Correzione di una taratura precedente.** La prima stima usava 10 secondi
+> ricavati da tracce dance, dove Franchino **urla** sopra la base: misurava
+> 197 Hz. Su quel riferimento sbagliato avevo preferito `DiegoNeural` (193 Hz).
+> Con le registrazioni pulite il dato vero è 157 Hz, e `GiuseppeNeural` a −6 Hz
+> (155 Hz) era già quasi perfetto. La voce primaria è quindi tornata Giuseppe.
+
+| | Giuseppe −6 Hz | Diego 0 Hz | **Giuseppe −6 + catena nuova** |
 |---|---|---|---|
-| Voce TTS | Giuseppe, −6 Hz | **Diego, 0 Hz** | — |
-| Pitch (F0 mediana) | 150 Hz (−4,8 semitoni) | **193 Hz (−0,4 semitoni)** | 197 Hz |
-| Banda più forte | **125 Hz** (voce cupa) | **500 Hz** | 500 Hz |
-| Distanza spettrale 250-4000 Hz | 3,32 dB | **1,82 dB** | — |
+| Pitch (riferimento 157 Hz) | 155 Hz (−0,2 st) | 193 Hz (**+3,6 st**) | **152 Hz (−0,6 st)** |
+| Distanza 250-4000 Hz, senza EQ | 2,24 dB | 2,32 dB | — |
+| Distanza con la catena | 1,72 dB (precedente) | — | **1,16 dB** |
 
-Catena nuova (sostituisce le quattro equalizzazioni precedenti):
+Catena finale (in `player.py`):
 
 ```
-equalizer=f=250:t=q:w=1.0:g=-5     # la sintesi aveva troppa energia a 250 Hz
-equalizer=f=500:t=q:w=1.2:g=2      # corpo della voce, dov'è il picco reale
-equalizer=f=4000:t=q:w=1.5:g=-2.5  # controllo delle sibilanti
+equalizer=f=250:t=q:w=1.0:g=-3      # la sintesi ha troppo poco corpo a 250 Hz
+equalizer=f=500:t=q:w=1.2:g=1.5     # dov'è il picco reale della sua voce
+equalizer=f=2000:t=q:w=1.2:g=-2.5   # la sintesi esagera fra 2 e 4 kHz
+equalizer=f=4000:t=q:w=1.5:g=-2
 ```
 
-Restano invariati compressore, eco e volume (sono firma della persona, non timbro).
-Le bande **63/125 Hz** e **8 kHz** sono escluse dal confronto: demucs svuota i
-bassi e l'mp3 della sorgente taglia gli alti, quindi non sarebbero misure oneste.
+Restano invariati compressore, eco e volume (sono firma della persona, non
+timbro). Le bande **63/125 Hz** e **8 kHz** sono escluse dal confronto: demucs
+svuota i bassi e l'mp3 della sorgente taglia gli alti.
 
-Per rifare la misura quando cambierà la voce:
+### Loudness delle frasi registrate
+
+Le registrazioni avevano **5,8 LU di scarto** fra loro: due "Magia!" andavano
+da −14,0 a −19,8 LUFS, cioè uno sembrava il quadruplo dell'altro. In un canale
+vocale è un errore di mixing evidente. `scripts/mine_phrases.py` ora normalizza
+ogni clip a **−16 LUFS** con gain statico e limiter (non `loudnorm` dinamico:
+su 1-2 secondi pomperebbe). Dopo: scarto **0,6 LU**.
+
+### Come rifare la misura
 
 ```bash
 pip install numpy        # unica dipendenza dello script
 python scripts/analyze_voice.py riferimento.wav voce_bot.wav --compare
 ```
 
-Per un ascolto A/B delle due versioni: `dataset/_voce_dsp/` (cartella ignorata da git).
+Ascolto A/B: `dataset/_voce_dsp/CONFRONTO_prima_diego.mp3` e
+`CONFRONTO_dopo_giuseppe.mp3` (cartella ignorata da git).
