@@ -65,9 +65,9 @@ Il progetto è ottimizzato specificamente per **Oracle Cloud Always Free (Ampere
 
 | Servizio Docker | Descrizione | RAM Utilizzata | Allocazione CPU |
 |---|---|---|---|
-| `franchino-bot` | Bot Discord, Audio DSP, STT, Player | ~250 MB | Max 1.5 CPU |
-| `central-hub-db` | PostgreSQL 16 Alpine (Hub Dati) | ~35 MB | Max 0.5 CPU |
-| `ollama` | Motore AI Locale con Gemma 2 2B | ~2.0 GB | Max 2.0 CPU |
+| `franchino-bot` | Bot Discord, Audio DSP, STT, Player | ~250 MB | Max 0.50 CPU |
+| `central-hub-db` | PostgreSQL 16 Alpine (Hub Dati) | ~35 MB | Max 0.10 CPU |
+| `ollama` | Motore AI Locale con Gemma 2 2B | ~2.0 GB | Max 1.40 CPU |
 | **TOTALE USATO** | **Tutti e 3 i container attivi** | **~2.3 GB / 12 GB** | **0.1% a riposo** |
 | **RISORSE LIBERE** | **Disponibili per altri progetti** | **~9.7 GB (79%+)** | **Fluido & Freddo** |
 

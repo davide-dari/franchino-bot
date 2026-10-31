@@ -84,6 +84,7 @@ player_manager = PlayerManager(bot, source_manager)
 _presence_loop_task: Optional[asyncio.Task] = None
 _uo_news_task: Optional[asyncio.Task] = None
 _uo_patch_task: Optional[asyncio.Task] = None
+_tts_warm_task: Optional[asyncio.Task] = None
 
 
 def _get_human_ids_in_channel(vc_channel: discord.VoiceChannel, excluding_user_id: Optional[int] = None) -> list[int]:
@@ -401,6 +402,12 @@ async def on_ready():
     from brain import brain
     asyncio.create_task(hub.initialize())
     asyncio.create_task(brain.initialize())
+
+    # 7. Preriscalda la cache TTS delle frasi canoniche: le risposte fisse partono a latenza zero
+    global _tts_warm_task
+    if _tts_warm_task is None or _tts_warm_task.done():
+        from player import warm_tts_cache
+        _tts_warm_task = asyncio.create_task(warm_tts_cache())
 
     # 5. Imposta l'attività di stato
     try:

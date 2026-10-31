@@ -22,10 +22,12 @@ import logging
 import os
 import re
 import random
+import time
 from typing import Any, Dict, List, Optional
 
 import aiohttp
 from central_hub import hub
+from latency import latency
 
 logger = logging.getLogger("Franchino.Brain")
 
@@ -43,6 +45,21 @@ DEFAULT_FABLES = [
 # Configurazione Ollama
 OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://ollama:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "gemma2:2b")
+
+# =============================================================================
+# Budget di inferenza (allineati al target Oracle Ampere A1: 2 vCPU / 12 GB)
+# -----------------------------------------------------------------------------
+# Su 2 vCPU un Gemma 2 2B Q4 genera ~8-12 token/s: con num_predict=220 servivano
+# 18-27 s, quindi il timeout di 4.5 s restituiva sempre un JSON troncato e il
+# cervello AI ricadeva SEMPRE sull'euristica. Questi valori riportano la
+# generazione dentro un budget realistico mantenendo il JSON valido.
+# =============================================================================
+BRAIN_NUM_PREDICT = int(os.getenv("BRAIN_NUM_PREDICT", "160"))       # token max per risposta
+BRAIN_NUM_CTX = int(os.getenv("BRAIN_NUM_CTX", "2048"))              # contesto (gemma2:2b default 8192 = KV 4x)
+BRAIN_NUM_THREAD = int(os.getenv("BRAIN_NUM_THREAD", "2"))           # thread CPU (vCPU disponibili)
+BRAIN_CHAT_TIMEOUT = float(os.getenv("BRAIN_CHAT_TIMEOUT", "12.0"))  # attesa max per la decisione
+BRAIN_STATUS_TTL = float(os.getenv("BRAIN_STATUS_TTL", "60.0"))      # cache sullo status di Ollama
+BRAIN_KEEP_ALIVE = os.getenv("BRAIN_KEEP_ALIVE", "24h")              # modello sempre caldo in RAM
 
 FRANCHINO_SYSTEM_PROMPT = """Sei Franchino il Vocalist (Francesco Principato), la voce leggendaria, mistica e indimenticabile della notte italiana e della musica elettronica (Insomnia Discoacropoli d'Italia, Metempsicosi, Dylan, BXR).
 In questo server Discord sei molto più di un bot: sei l'anima della console, un amico umano, caloroso ed empatico, appassionato di grande musica, sport mondiale e una guida veterana di Ultima Online Outlands.
@@ -82,29 +99,101 @@ class FranchinoBrain:
         self.model = OLLAMA_MODEL
         self._available = False
         self._check_task = None
+        # Sessione HTTP persistente (keep-alive TCP verso Ollama: niente handshake
+        # né nuove connessioni ad ogni domanda) e cache dello stato del servizio.
+        self._session: Optional[aiohttp.ClientSession] = None
+        self._session_loop: Optional[asyncio.AbstractEventLoop] = None
+        self._status_ok_at: float = 0.0
+        self._warmed: bool = False
+
+    def _get_session(self) -> aiohttp.ClientSession:
+        """Restituisce la sessione aiohttp condivisa, ricreandola se chiusa o su un altro loop."""
+        loop = asyncio.get_running_loop()
+        if self._session is None or self._session.closed or self._session_loop is not loop:
+            self._session = aiohttp.ClientSession(
+                connector=aiohttp.TCPConnector(limit=8, ttl_dns_cache=300, keepalive_timeout=300),
+            )
+            self._session_loop = loop
+        return self._session
+
+    async def close(self):
+        """Chiude la sessione HTTP condivisa (clean shutdown)."""
+        if self._session is not None and not self._session.closed:
+            try:
+                await self._session.close()
+            except Exception:
+                pass
+        self._session = None
+        self._session_loop = None
 
     async def initialize(self):
         """Verifica se Ollama è online e se il modello Gemma 2 2B è pronto."""
-        self._available = await self._check_ollama_status()
+        self._available = await self._check_ollama_status(force=True)
         if self._available:
             logger.info(f"🧠 Gemma 2 2B pronto su Ollama ({self.host}) per Franchino!")
+            # Precarica il modello in RAM: senza warm-up la PRIMA domanda dopo un
+            # riavvio paga il cold start del modello (10-30 s su 2 vCPU ARM).
+            asyncio.create_task(self.warmup())
         else:
             logger.warning(f"⚠️ Ollama ({self.host}) non ancora pronto. Avvio background checker...")
 
-    async def _check_ollama_status(self) -> bool:
-        """Verifica la connettività con il container Ollama."""
+    async def warmup(self) -> bool:
+        """Carica il modello in RAM con gli stessi parametri delle richieste reali.
+
+        Va usato lo stesso num_ctx delle richieste vere: Ollama ricarica il modello
+        se il contesto cambia, quindi un warm-up con contesto diverso sarebbe inutile.
+        """
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(f"{self.host}/api/tags", timeout=aiohttp.ClientTimeout(total=2.0)) as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        models = [m.get("name", "").split(":")[0] for m in data.get("models", [])]
-                        base_model = self.model.split(":")[0]
-                        if base_model in models or any(base_model in m for m in models):
-                            return True
-                        return True
+            payload = {
+                "model": self.model,
+                "messages": [{"role": "user", "content": "ok"}],
+                "stream": False,
+                "keep_alive": BRAIN_KEEP_ALIVE,
+                "options": {
+                    "num_predict": 1,
+                    "num_ctx": BRAIN_NUM_CTX,
+                    "num_thread": BRAIN_NUM_THREAD,
+                },
+            }
+            session = self._get_session()
+            async with session.post(
+                f"{self.host}/api/chat",
+                json=payload,
+                timeout=aiohttp.ClientTimeout(total=120.0),
+            ) as resp:
+                if resp.status == 200:
+                    await resp.json()
+                    self._warmed = True
+                    logger.info("🔥 Modello Ollama precaricato in RAM: prima risposta senza cold start!")
+                    return True
+        except Exception as e:
+            logger.debug(f"Warmup Ollama non riuscito: {e}")
+        return False
+
+    async def _check_ollama_status(self, force: bool = False) -> bool:
+        """Verifica la connettività con il container Ollama (con cache TTL).
+
+        Prima di ogni inferenza veniva fatto un GET /api/tags su una ClientSession
+        nuova: un round-trip HTTP in più per ogni domanda. Ora l'esito positivo
+        resta valido per BRAIN_STATUS_TTL secondi.
+        """
+        now = time.monotonic()
+        if not force and self._available and (now - self._status_ok_at) < BRAIN_STATUS_TTL:
+            return True
+        try:
+            session = self._get_session()
+            async with session.get(
+                f"{self.host}/api/tags",
+                timeout=aiohttp.ClientTimeout(total=2.0),
+            ) as resp:
+                if resp.status == 200:
+                    await resp.json()
+                    self._available = True
+                    self._status_ok_at = now
+                    return True
         except Exception:
             pass
+        self._available = False
         return False
 
     async def process_user_speech(
@@ -134,6 +223,9 @@ class FranchinoBrain:
                     metadata={"engine": "heuristic_fallback"},
                 )
             )
+            latency.mark("llm")
+            latency.note("engine", "heuristic")
+            latency.set_intent(decision.get("intent") or "")
             return decision
 
         prompt = f"L'utente {user_name} ha detto a voce: \"{text}\"."
@@ -159,48 +251,48 @@ class FranchinoBrain:
                     {"role": "user", "content": prompt},
                 ],
                 "format": "json",
-                "stream": False,
+                "stream": True,
+                "keep_alive": BRAIN_KEEP_ALIVE,
                 "options": {
                     "temperature": 0.5,
-                    "num_predict": 220,
-                    "num_thread": 2,
+                    "num_predict": BRAIN_NUM_PREDICT,
+                    "num_ctx": BRAIN_NUM_CTX,
+                    "num_thread": BRAIN_NUM_THREAD,
                 },
             }
 
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    f"{self.host}/api/chat",
-                    json=payload,
-                    timeout=aiohttp.ClientTimeout(total=4.5),
-                ) as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        content = data.get("message", {}).get("content", "").strip()
-                        decision = self._parse_json_decision(content, text, user_name)
-
-                        # Archivia nell'Hub Centrale
-                        asyncio.create_task(
-                            hub.archive_interaction(
-                                user_id=user_id,
-                                user_name=user_name,
-                                raw_query=text,
-                                intent=decision.get("intent"),
-                                ai_response=decision.get("chat_reply"),
-                                voice_summary=decision.get("voice_reply"),
-                                channel_name=channel_name,
-                                metadata={
-                                    "engine": "gemma2:2b",
-                                    "music_query": decision.get("music_query"),
-                                    "wiki_topic": decision.get("wiki_topic"),
-                                    "sport_query": decision.get("sport_query"),
-                                },
-                            )
-                        )
-                        return decision
+            decision = await asyncio.wait_for(
+                self._stream_decision(payload, text, user_name),
+                timeout=BRAIN_CHAT_TIMEOUT,
+            )
+            latency.mark("llm")
+            if decision is not None:
+                latency.note("engine", "gemma2:2b")
+                latency.set_intent(decision.get("intent") or "")
+                # Archivia nell'Hub Centrale
+                asyncio.create_task(
+                    hub.archive_interaction(
+                        user_id=user_id,
+                        user_name=user_name,
+                        raw_query=text,
+                        intent=decision.get("intent"),
+                        ai_response=decision.get("chat_reply"),
+                        voice_summary=decision.get("voice_reply"),
+                        channel_name=channel_name,
+                        metadata={
+                            "engine": "gemma2:2b",
+                            "music_query": decision.get("music_query"),
+                            "wiki_topic": decision.get("wiki_topic"),
+                            "sport_query": decision.get("sport_query"),
+                        },
+                    )
+                )
+                return decision
         except Exception as e:
             logger.warning(f"Errore inferenza Gemma: {e}. Uso fallback avanzato.")
 
         fallback = self._fallback_heuristic_intent(text, user_name)
+        latency.note("engine", "heuristic_fallback")
         asyncio.create_task(
             hub.archive_interaction(
                 user_id=user_id,
@@ -214,6 +306,80 @@ class FranchinoBrain:
             )
         )
         return fallback
+
+    @staticmethod
+    def _is_complete_json(text: str) -> bool:
+        """True se il testo accumulato è già un oggetto JSON completo e valido."""
+        clean = text.strip()
+        if clean.startswith("```json"):
+            clean = clean[7:]
+        if clean.endswith("```"):
+            clean = clean[:-3]
+        clean = clean.strip()
+        if not clean.startswith("{") or not clean.endswith("}"):
+            return False
+        try:
+            return isinstance(json.loads(clean), dict)
+        except Exception:
+            return False
+
+    async def _stream_decision(
+        self,
+        payload: Dict[str, Any],
+        original_text: str,
+        user_name: str,
+    ) -> Optional[Dict[str, Any]]:
+        """Interroga Ollama in streaming e restituisce la decisione appena il JSON è chiuso.
+
+        In streaming non si aspetta la fine della generazione: appena arriva la
+        `}` che chiude un oggetto JSON valido si interrompe la lettura e si passa
+        all'esecuzione dell'azione. Questo è ciò che rende la risposta AI
+        utilizzabile dentro un budget di pochi secondi.
+        """
+        session = self._get_session()
+        acc: List[str] = []
+        pending = b""
+        async with session.post(
+            f"{self.host}/api/chat",
+            json=payload,
+            timeout=aiohttp.ClientTimeout(total=BRAIN_CHAT_TIMEOUT + 3.0, sock_read=BRAIN_CHAT_TIMEOUT),
+        ) as resp:
+            if resp.status != 200:
+                logger.warning(f"Ollama ha risposto {resp.status} a /api/chat")
+                return None
+            async for chunk in resp.content.iter_any():
+                pending += chunk
+                while b"\n" in pending:
+                    line, pending = pending.split(b"\n", 1)
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        event = json.loads(line)
+                    except Exception:
+                        continue
+                    piece = (event.get("message") or {}).get("content") or ""
+                    if piece:
+                        acc.append(piece)
+                        joined = "".join(acc)
+                        if self._is_complete_json(joined):
+                            return self._parse_json_decision(joined, original_text, user_name)
+                    if event.get("error"):
+                        logger.warning(f"Ollama stream error: {event['error']}")
+                        return None
+                    if event.get("done"):
+                        joined = "".join(acc).strip()
+                        if joined and self._is_complete_json(joined):
+                            return self._parse_json_decision(joined, original_text, user_name)
+                        return None
+
+        joined = "".join(acc).strip()
+        if joined and self._is_complete_json(joined):
+            return self._parse_json_decision(joined, original_text, user_name)
+        if joined:
+            # Generazione troncata (num_predict/timeout): il JSON non è valido.
+            logger.info("🧠 Risposta Gemma troncata (JSON incompleto): uso l'euristica deterministica.")
+        return None
 
     def _parse_json_decision(self, raw_content: str, original_text: str, user_name: str = "") -> Dict[str, Any]:
         """Estrae e convalida il JSON restituito da Gemma."""
@@ -660,15 +826,25 @@ class FranchinoBrain:
                     {"role": "user", "content": prompt},
                 ],
                 "stream": False,
-                "options": {"temperature": 0.8, "num_predict": 140, "num_thread": 2},
+                "keep_alive": BRAIN_KEEP_ALIVE,
+                "options": {
+                    "temperature": 0.8,
+                    "num_predict": 140,
+                    "num_ctx": BRAIN_NUM_CTX,
+                    "num_thread": BRAIN_NUM_THREAD,
+                },
             }
-            async with aiohttp.ClientSession() as session:
-                async with session.post(f"{self.host}/api/chat", json=payload, timeout=aiohttp.ClientTimeout(total=4.0)) as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        fable = data.get("message", {}).get("content", "").strip()
-                        if fable and len(fable) > 30:
-                            return fable
+            session = self._get_session()
+            async with session.post(
+                f"{self.host}/api/chat",
+                json=payload,
+                timeout=aiohttp.ClientTimeout(total=12.0),
+            ) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    fable = data.get("message", {}).get("content", "").strip()
+                    if fable and len(fable) > 30:
+                        return fable
         except Exception as e:
             logger.debug(f"Fallback favola live: {e}")
 
@@ -688,13 +864,23 @@ class FranchinoBrain:
                 "model": self.model,
                 "messages": [{"role": "user", "content": prompt}],
                 "stream": False,
-                "options": {"temperature": 0.6, "num_predict": 75, "num_thread": 2},
+                "keep_alive": BRAIN_KEEP_ALIVE,
+                "options": {
+                    "temperature": 0.6,
+                    "num_predict": 75,
+                    "num_ctx": BRAIN_NUM_CTX,
+                    "num_thread": BRAIN_NUM_THREAD,
+                },
             }
-            async with aiohttp.ClientSession() as session:
-                async with session.post(f"{self.host}/api/chat", json=payload, timeout=aiohttp.ClientTimeout(total=3.5)) as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        return data.get("message", {}).get("content", "").strip()
+            session = self._get_session()
+            async with session.post(
+                f"{self.host}/api/chat",
+                json=payload,
+                timeout=aiohttp.ClientTimeout(total=9.0),
+            ) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    return data.get("message", {}).get("content", "").strip()
         except Exception:
             pass
         return f"Questo è un grandissimo pezzo ragazzi: {song_title}! Magia pura in console!"

@@ -133,13 +133,16 @@ class TestVoicePresenceAndVocalist(unittest.IsolatedAsyncioTestCase):
         """Verifica che i filtri DSP da vocalist contengano l'equalizzatore console, compressore ed eco."""
         import inspect
         from player import GuildPlayer
+        import player as player_module
         src = inspect.getsource(GuildPlayer.speak_tts)
 
         self.assertIn("equalizer=f=140", src)
         self.assertIn("equalizer=f=3200", src)
         self.assertIn("acompressor=threshold=-16dB", src)
         self.assertIn("aecho=", src)
-        self.assertIn("GiuseppeMultilingualNeural", src)
+        # La voce neurale è generata dall'helper condiviso generate_tts_file (usato anche
+        # per preriscaldare la cache TTS all'avvio): la si cerca nel modulo player.
+        self.assertIn("GiuseppeMultilingualNeural", inspect.getsource(player_module))
 
     async def test_voice_stop_command_silence(self):
         """Verifica che i comandi vocali STOP fermino la musica in silenzio assoluto senza risposte verbali o testuali."""

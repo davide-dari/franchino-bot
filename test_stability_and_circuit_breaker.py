@@ -486,7 +486,9 @@ class TestDockerComposeMemoryLimit(unittest.TestCase):
         match = re.search(r'franchino-bot:.*?(?:\n\s{2}[a-zA-Z]|\Z)', content, re.DOTALL)
         self.assertIsNotNone(match, "Sezione franchino-bot non trovata in docker-compose.yml")
         bot_section = match.group(0)
+        # Ignora le righe di commento: i limiti sono definiti dal blocco, non dai commenti
+        bot_section = "\n".join(l for l in bot_section.splitlines() if not l.strip().startswith("#"))
 
-        mem_match = re.search(r'limits:\s*\n\s+cpus:\s*"1\.5"\s*\n\s+memory:\s*([0-9]+[MG])', bot_section)
+        mem_match = re.search(r'limits:\s*\n\s+cpus:\s*"[0-9.]+"\s*\n\s+memory:\s*([0-9]+[MG])', bot_section)
         self.assertIsNotNone(mem_match, "Limits memory non trovato nella sezione franchino-bot")
         self.assertEqual(mem_match.group(1), "2560M", f"Atteso 2560M, trovato {mem_match.group(1)}")

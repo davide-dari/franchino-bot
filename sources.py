@@ -535,24 +535,24 @@ class SourceManager:
         if not info:
             raise ValueError("Nessuna informazione trovata per questa playlist YouTube.")
 
-            entries = info.get("entries", [])
-            songs = []
-            for entry in entries:
-                if not entry:
-                    continue
-                v_url = entry.get("url") or f"https://www.youtube.com/watch?v={entry.get('id')}"
-                song = SongInfo(
-                    title=entry.get("title", "Traccia sconosciuta"),
-                    webpage_url=v_url,
-                    stream_url=None,  # Estratto on demand quando sarà in cima alla coda
-                    duration=int(entry.get("duration") or 0),
-                    thumbnail=entry.get("thumbnail"),
-                    uploader=entry.get("uploader"),
-                    requester=requester,
-                    source_type="youtube"
-                )
-                songs.append(song)
-            return songs
+        entries = info.get("entries", [])
+        songs = []
+        for entry in entries:
+            if not entry:
+                continue
+            v_url = entry.get("url") or f"https://www.youtube.com/watch?v={entry.get('id')}"
+            song = SongInfo(
+                title=entry.get("title", "Traccia sconosciuta"),
+                webpage_url=v_url,
+                stream_url=None,  # Estratto on demand quando sarà in cima alla coda
+                duration=int(entry.get("duration") or 0),
+                thumbnail=entry.get("thumbnail"),
+                uploader=entry.get("uploader"),
+                requester=requester,
+                source_type="youtube"
+            )
+            songs.append(song)
+        return songs
 
     def _find_cached_file(self, video_id: str) -> Optional[str]:
         """Cerca se il file audio per il video_id è già presente nella cache locale su disco."""

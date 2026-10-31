@@ -24,6 +24,7 @@ if TYPE_CHECKING:
 
 from outlands_wiki import normalize_uo_speech
 from config import DEFAULT_CHAT_REMINDER
+from latency import latency
 
 logger = logging.getLogger("Franchino.VoiceCommands")
 
@@ -381,7 +382,7 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
     CHANNELS = 2      # Stereo
     BYTES_PER_SECOND = SAMPLE_RATE * SAMPLE_WIDTH * CHANNELS  # 192.000 byte/s
 
-    SILENCE_THRESHOLD_SEC = 0.65  # Rileva la fine della frase in soli 650ms per risposte ultra-veloci!
+    SILENCE_THRESHOLD_SEC = 0.50  # Fine frase rilevata in 500ms: -150ms di latenza percepita su ogni richiesta
     MIN_PHRASE_SEC = 0.45         # 450ms minimi per eliminare rumori brevi di microfono, respiri e colpi di tosse
     MAX_PHRASE_SEC = 10.0         # Fino a 10 secondi per titoli lunghi + nome artista
     MAX_BUFFER_SEC = 12.0         # Limite massimo di sicurezza per speaker buffer (~2.3 MB)
@@ -974,6 +975,9 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
                 logger.debug(f"🔇 Audio da {key} ignorato: silenzio o rumore impercettibile ({avg_rms} RMS, {max_amp} max amp)")
                 return
 
+            # Telemetria: da qui in poi l'audio contiene voce, misuriamo STT/router/LLM/TTS
+            latency.start(src="voice")
+
             # 2. Mixdown stereo -> mono
             mono_48k = audioop.tomono(stereo_pcm_48k, self.SAMPLE_WIDTH, 0.5, 0.5)
 
@@ -1015,12 +1019,18 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
                     timeout=10.0,
                 )
         except sr.UnknownValueError:
+            latency.abandon("stt_unknown")
             return
         except Exception as e:
             logger.debug(f"Errore SpeechRecognition: {e}")
+            latency.abandon("stt_error")
             return
 
+        # Il riconoscimento vocale è concluso: da qui in poi è tutto locale
+        latency.mark("stt")
+
         if not res:
+            latency.abandon("stt_empty")
             return
 
         candidates = []
@@ -1033,6 +1043,7 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
             candidates.append(res.strip())
 
         if not candidates:
+            latency.abandon("stt_no_candidates")
             return
 
         # Arricchimento candidati con normalizzazione fonetica specifica per l'italiano e gaming terms
@@ -1046,6 +1057,7 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
 
         user = await self._resolve_user_object(key, speaker_obj)
         uid = getattr(user, "id", 0)
+        latency.set_user(getattr(user, "display_name", "") or "")
         now = time.monotonic()
 
         # Verifica se l'utente ha una sessione attiva (pending wake follow-up di 10s o dettatura DM)
@@ -1217,6 +1229,7 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
         else:
             # NESSUN RICHIAMO A FRANCHINO: Ignora totalmente! Non risponde e non interrompe la conversazione.
             logger.debug(f"🔇 [{user.display_name}] audio ignorato (nessun richiamo a Franchino): '{candidates[0]}'")
+            latency.abandon("no_wake_word")
             return
 
 
@@ -1225,6 +1238,9 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
         except Exception as e:
             logger.error(f"❌ Errore critico gestione comando vocale '{selected_text}' da {user.display_name}: {e}", exc_info=True)
             await self._notify_channel(f"⚠️ Si è verificato un errore durante l'elaborazione del comando: `{e}`")
+        finally:
+            # Chiude la telemetria della richiesta (log di una riga con tutti gli stadi)
+            latency.finish()
 
     async def _handle_transcribed_text(self, user, text: str, detected_cmd: Optional[str] = None):
         """Analizza il testo trascritto ed esegue il comando per qualsiasi utente del canale, SOLTANTO se è stato chiamato Franchino."""
@@ -2848,6 +2864,7 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
             # Controllo di sicurezza -1: Richiesta Formula Super Matematico Jack in fallback
             from jack_math_engine import jack_engine, hardware_optimizer
             jack_fb = jack_engine.classify(command_part)
+            latency.mark("jack")
             if jack_fb.intent == "jack_math_boost" and jack_fb.probability >= 0.25:
                 logger.info(f"🧠 Intercettata richiesta Formula Super Matematico Jack in fallback da {user.display_name}: '{command_part}'")
                 telem = hardware_optimizer.get_hardware_telemetry()
@@ -3074,7 +3091,7 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
                             current_song_title=self.player.current.title if self.player.current else None,
                             channel_name=self.player.text_channel.name if self.player.text_channel else None,
                         ),
-                        timeout=5.0,
+                        timeout=13.0,
                     )
                 except Exception as be:
                     logger.debug(f"Brain timeout o errore fallback euristico: {be}")
@@ -3105,7 +3122,7 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
                             current_song_title=self.player.current.title if self.player.current else None,
                             channel_name=self.player.text_channel.name if self.player.text_channel else None,
                         ),
-                        timeout=5.0,
+                        timeout=13.0,
                     )
                 except Exception:
                     decision = brain.decide_intent(
@@ -3177,6 +3194,7 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
         Ritorna True se gestito, False se deve proseguire (es. musica).
         """
         intent = decision.get("intent", "chat")
+        latency.set_intent(intent)
 
         if intent == "jack_math_boost":
             from jack_math_engine import jack_engine, hardware_optimizer

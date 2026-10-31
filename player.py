@@ -19,6 +19,7 @@ from config import (
     FRANCHINO_ENTRANCE_QUOTES
 )
 from sources import SongInfo, SourceManager, format_duration
+from latency import latency
 from views import FranchinoControlsView, QueuePaginationView
 
 logger = logging.getLogger("Franchino.Player")
@@ -27,6 +28,141 @@ FFMPEG_OPTIONS = {
     "before_options": "-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5",
     "options": "-vn"
 }
+
+# ==============================================================================
+# TTS: cache su disco e preriscaldamento delle frasi canoniche
+# ------------------------------------------------------------------------------
+# La generazione vocale (edge-tts, fallback gTTS) costa 300-700 ms di rete: le
+# frasi che Franchino pronuncia sempre uguali vengono pre-generate all'avvio
+# così la risposta parte a latenza zero.
+# ==============================================================================
+TTS_CACHE_DIR = "/tmp/franchino_cache"
+
+# Frasi pronunciate identiche ad ogni sessione (vedi voice_commands.py)
+WARM_TTS_PHRASES: Tuple[str, ...] = (
+    "Magia! Dimmi tutto, sono qui in console!",
+    "Dimmi il titolo!",
+    "A chi vuoi mandare il messaggio?",
+    "Ti sento forte e chiaro! Se mi senti a scatti, dimmi pure Franchino riavviati!",
+)
+
+
+def _tts_cache_key(text: str, dramatic_fable: bool = False) -> str:
+    """Chiave md5 stabile per una frase (stesso schema storico, cache già esistente valida)."""
+    import hashlib
+    return hashlib.md5(f"vocalist_v2_{text.strip().lower()}_{dramatic_fable}".encode("utf-8")).hexdigest()
+
+
+def tts_cache_path(text: str, dramatic_fable: bool = False, gtts: bool = False) -> str:
+    """Path del file in cache. Il suffisso distingue la voce edge-tts da quella gTTS.
+
+    Distinguere i due motori è necessario: la catena ffmpeg applica un pitch shift
+    solo ai file gTTS. Con un nome unico, un file gTTS ripreso dalla cache veniva
+    riprodotto senza il filtro di correzione (voce sbagliata dopo il primo ascolto).
+    """
+    suffix = ".gtts.mp3" if gtts else ".mp3"
+    return os.path.join(TTS_CACHE_DIR, f"tts_{_tts_cache_key(text, dramatic_fable)}{suffix}")
+
+
+def find_cached_tts(text: str, dramatic_fable: bool = False) -> Tuple[Optional[str], bool]:
+    """Cerca la frase in cache. Ritorna (path, usato_gtts) oppure (None, False)."""
+    edge_path = tts_cache_path(text, dramatic_fable, gtts=False)
+    try:
+        if os.path.isfile(edge_path) and os.path.getsize(edge_path) > 100:
+            return edge_path, False
+        gtts_path = tts_cache_path(text, dramatic_fable, gtts=True)
+        if os.path.isfile(gtts_path) and os.path.getsize(gtts_path) > 100:
+            return gtts_path, True
+    except OSError:
+        pass
+    return None, False
+
+
+async def generate_tts_file(text: str, dramatic_fable: bool = False) -> Tuple[Optional[str], bool]:
+    """Genera il file vocale (edge-tts, poi gTTS) e lo lascia in cache.
+
+    Ritorna (path, usato_gtts). Isolata da speak_tts per poter preriscaldare la
+    cache all'avvio senza un player connesso.
+    """
+    try:
+        os.makedirs(TTS_CACHE_DIR, exist_ok=True)
+    except OSError as e:
+        logger.debug(f"Impossibile creare la cache TTS: {e}")
+
+    # 1. Microsoft Edge Neural TTS (voce maschile italiana espressiva)
+    try:
+        import edge_tts
+        pitch_val = "-10Hz" if dramatic_fable else "-6Hz"
+        rate_val = "-4%" if dramatic_fable else "+0%"
+        target = tts_cache_path(text, dramatic_fable, gtts=False)
+        try:
+            communicate = edge_tts.Communicate(
+                text=text,
+                voice="it-IT-GiuseppeMultilingualNeural",
+                pitch=pitch_val,
+                rate=rate_val,
+            )
+            await asyncio.wait_for(communicate.save(target), timeout=12.0)
+        except Exception as ve:
+            logger.warning(f"⚠️ GiuseppeMultilingualNeural non disponibile ({ve}), fallback su DiegoNeural...")
+            communicate = edge_tts.Communicate(
+                text=text,
+                voice="it-IT-DiegoNeural",
+                pitch="-12Hz" if dramatic_fable else "-8Hz",
+                rate=rate_val,
+            )
+            await asyncio.wait_for(communicate.save(target), timeout=12.0)
+
+        if os.path.isfile(target) and os.path.getsize(target) > 100:
+            logger.info(f"🔊 Audio vocalist generato con successo tramite edge-tts per: '{text[:45]}'")
+            return target, False
+    except Exception as e:
+        logger.warning(f"⚠️ edge-tts non riuscito ({e}), fallback su gTTS in corso...")
+
+    # 2. Fallback d'emergenza a gTTS (con pitch shift maschile in FFmpeg)
+    def _generate_gtts(phrase: str, dest: str) -> bool:
+        try:
+            from gtts import gTTS
+            tts = gTTS(text=phrase, lang="it", slow=False)
+            tts.save(dest)
+            return True
+        except Exception as ge:
+            logger.error(f"❌ Errore generazione anche con gTTS: {ge}")
+            return False
+
+    gtts_target = tts_cache_path(text, dramatic_fable, gtts=True)
+    try:
+        ok = await asyncio.wait_for(asyncio.to_thread(_generate_gtts, text, gtts_target), timeout=10.0)
+    except Exception as ge:
+        logger.warning(f"⚠️ Timeout o errore fallback gTTS: {ge}")
+        ok = False
+
+    if ok and os.path.isfile(gtts_target) and os.path.getsize(gtts_target) > 100:
+        return gtts_target, True
+    return None, False
+
+
+async def warm_tts_cache(phrases: Optional[Tuple[str, ...]] = None) -> int:
+    """Preriscalda la cache TTS delle frasi canoniche (best effort, mai bloccante)."""
+    if phrases is None:
+        phrases = WARM_TTS_PHRASES
+
+    generati = 0
+    for phrase in phrases:
+        cached, _ = find_cached_tts(phrase, False)
+        if cached:
+            continue
+        try:
+            path, _ = await generate_tts_file(phrase, False)
+            if path:
+                generati += 1
+        except Exception as e:
+            logger.debug(f"Warm TTS fallito per '{phrase[:30]}': {e}")
+
+    if generati:
+        logger.info(f"🔊 Cache TTS preriscaldata: {generati} frasi canoniche pronte a latenza zero.")
+    return generati
+
 
 # ==============================================================================
 # 12 Effetti Audio Musicali DJ in Tempo Reale (FFmpeg Audio Filters)
@@ -468,68 +604,21 @@ class GuildPlayer:
         if (self.is_playing() or self.is_paused()) and not interrupt_music and not self._playing_tts:
             return
 
-        cache_dir = "/tmp/franchino_cache"
-        os.makedirs(cache_dir, exist_ok=True)
-        import hashlib
-        cache_hash = hashlib.md5(f"vocalist_v2_{text.strip().lower()}_{dramatic_fable}".encode("utf-8")).hexdigest()
-        tts_file = os.path.join(cache_dir, f"tts_{cache_hash}.mp3")
-        used_gtts_fallback = False
-        generated_ok = os.path.isfile(tts_file) and os.path.getsize(tts_file) > 100
+        # 1. Cache su disco: se la frase è già stata generata, zero attesa di rete
+        tts_file, used_gtts_fallback = find_cached_tts(text, dramatic_fable)
+        generated_ok = tts_file is not None
 
-        # 1. Se non è già in cache, genera la voce tramite Microsoft Edge Neural TTS
-        # Utilizza la voce neurale espressiva italiana (GiuseppeMultilingualNeural o DiegoNeural)
+        # 2. Altrimenti genera (edge-tts, poi gTTS) tramite l'helper condiviso
         if not generated_ok:
-            try:
-                import edge_tts
-                pitch_val = "-10Hz" if dramatic_fable else "-6Hz"
-                rate_val = "-4%" if dramatic_fable else "+0%"
-                try:
-                    communicate = edge_tts.Communicate(
-                        text=text,
-                        voice="it-IT-GiuseppeMultilingualNeural",
-                        pitch=pitch_val,
-                        rate=rate_val,
-                    )
-                    await asyncio.wait_for(communicate.save(tts_file), timeout=12.0)
-                    generated_ok = os.path.isfile(tts_file) and os.path.getsize(tts_file) > 100
-                except Exception as ve:
-                    logger.warning(f"⚠️ GiuseppeMultilingualNeural non disponibile ({ve}), fallback su DiegoNeural...")
-                    communicate = edge_tts.Communicate(
-                        text=text,
-                        voice="it-IT-DiegoNeural",
-                        pitch="-12Hz" if dramatic_fable else "-8Hz",
-                        rate=rate_val,
-                    )
-                    await asyncio.wait_for(communicate.save(tts_file), timeout=12.0)
-                    generated_ok = os.path.isfile(tts_file) and os.path.getsize(tts_file) > 100
+            tts_file, used_gtts_fallback = await generate_tts_file(text, dramatic_fable)
+            generated_ok = tts_file is not None
 
-                if generated_ok:
-                    logger.info(f"🔊 Audio vocalist generato con successo tramite edge-tts per: '{text[:45]}'")
-            except Exception as e:
-                logger.warning(f"⚠️ edge-tts non riuscito ({e}), fallback su gTTS in corso...")
-
-        # 2. Fallback d'emergenza a gTTS (con pitch shift maschile in FFmpeg)
-        if not generated_ok:
-            def _generate_gtts(phrase: str) -> bool:
-                try:
-                    from gtts import gTTS
-                    tts = gTTS(text=phrase, lang="it", slow=False)
-                    tts.save(tts_file)
-                    return True
-                except Exception as ge:
-                    logger.error(f"❌ Errore generazione anche con gTTS: {ge}")
-                    return False
-
-            try:
-                generated_ok = await asyncio.wait_for(asyncio.to_thread(_generate_gtts, text), timeout=10.0)
-            except Exception as ge:
-                logger.warning(f"⚠️ Timeout o errore fallback gTTS: {ge}")
-                generated_ok = False
-            used_gtts_fallback = True
-
-        if not generated_ok or not os.path.isfile(tts_file):
+        if not generated_ok or not tts_file or not os.path.isfile(tts_file):
             logger.error(f"❌ Impossibile generare l'audio vocale per la frase: '{text}'")
             return
+
+        # Telemetria: file vocale pronto (cache o generazione appena conclusa)
+        latency.mark("tts")
 
         async with self._tts_lock:
             if not self.voice_client or not self.voice_client.is_connected():
@@ -609,6 +698,8 @@ class GuildPlayer:
                 transformed = discord.PCMVolumeTransformer(source, volume=min(1.0, self.volume + 0.35))
                 logger.info(f"🗣️ Avvio riproduzione audio TTS nella stanza vocale: '{text[:50]}'")
                 self.voice_client.play(transformed, after=_after_tts)
+                # Telemetria: primo audio vocale effettivamente in onda
+                latency.mark("first_audio")
 
                 async def _tts_completion_monitor():
                     try:
