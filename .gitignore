@@ -34,6 +34,13 @@ ollama_data/
 data/radio_streams.json
 data/franchino_memoria.json
 
+# Dataset vocale e modelli addestrati (voce di una persona reale: MAI pubblicare)
+dataset/
+voice_dataset/
+models/
+*.onnx
+*.onnx.json
+
 # Sistema operativo & IDE
 .DS_Store
 Thumbs.db
