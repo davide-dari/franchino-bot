@@ -29,6 +29,11 @@ data/ollama/
 postgres_data/
 ollama_data/
 
+# Stato runtime del bot (cache stream radio, memoria dei comportamenti)
+# Sono dati locali che si rigenerano: non vanno versionati.
+data/radio_streams.json
+data/franchino_memoria.json
+
 # Sistema operativo & IDE
 .DS_Store
 Thumbs.db

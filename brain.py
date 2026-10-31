@@ -243,6 +243,13 @@ class FranchinoBrain:
         except Exception as e:
             logger.debug(f"Errore RAG prompt injection: {e}")
 
+        # Memoria: se l'utente ha uno storico di offese, anche il cervello AI ne tiene conto
+        try:
+            from memoria import memoria as _memoria
+            prompt += _memoria.prompt_note(user_id)
+        except Exception as e:
+            logger.debug(f"Nota memoria non applicata: {e}")
+
         try:
             payload = {
                 "model": self.model,

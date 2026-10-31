@@ -1378,6 +1378,12 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
             )
             return
 
+        # 3-bis. MEMORIA: Franchino si ricorda chi lo tratta male e risponde a tono.
+        # Il congedo singolo resta gentile (livello 0); dalla seconda volta il tono sale.
+        if await self._check_offense_and_reply(user, cmd_lower):
+            return
+
+
         # 4. Feedback audio / microfono / qualità connessione
         audio_feedback_pat = re.compile(
             r'\b(?:non\s+(?:ti|si)\s+sente|si\s+sente\s+(?:male|basso|piano)|lagghi|'
@@ -2665,6 +2671,25 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
             raw_query = play_match.group(1).strip()
             q_low = raw_query.lower()
 
+            # RADIO IN DIRETTA: "metti m2o", "metti radio deejay", "metti radio gamma"
+            from radio import find_radio, wants_generic_radio, extract_radio_name
+            station = find_radio(q_low)
+            if station is not None:
+                latency.set_intent("radio")
+                await self._play_radio(user, station, requester_arg)
+                return
+            if wants_generic_radio(q_low):
+                latency.set_intent("radio")
+                await self._send_radio_list(user)
+                return
+            radio_name = extract_radio_name(q_low)
+            if radio_name:
+                # Nome non in catalogo: lo cerco, e se non è una radio prosegue come musica
+                latency.set_intent("radio")
+                if await self._play_radio(user, None, requester_arg, radio_name=radio_name,
+                                          announce_missing=False):
+                    return
+
             # Disambiguazione immediata: controlli DJ espliciti con "metti in pausa", "metti pausa", "metti in loop", ecc.
             if q_low in ("in pausa", "pausa", "aspetta", "un attimo"):
                 if self.player.is_playing():
@@ -3181,6 +3206,106 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
                 await self._notify_channel(
                     f"⚠️ Non sono riuscito a trovare **{music_query}**: `{e}`"
                 )
+
+    async def _check_offense_and_reply(self, user, cmd_lower: str) -> bool:
+        """Registra l'eventuale offesa e risponde a tono. True se la richiesta è gestita.
+
+        Prima offesa lieve (congedo singolo): comportamento normale, nessuna ramanzina.
+        Dal livello 1 in su Franchino ricorda e risponde con tono crescente.
+        """
+        try:
+            from memoria import detect_offense, memoria, KIND_CONGEDO
+        except Exception as e:
+            logger.debug(f"Memoria non disponibile: {e}")
+            return False
+
+        offense = detect_offense(cmd_lower)
+        if offense is None:
+            return False
+
+        record = memoria.record(getattr(user, "id", 0), getattr(user, "display_name", ""), offense)
+        if record.level < 1:
+            return False
+
+        latency.set_intent("social_interaction")
+        chat_reply, voice_reply = memoria.reply(record)
+        await self._notify_channel(chat_reply)
+        asyncio.create_task(
+            self.player.speak_tts(voice_reply, wait=False, interrupt_music=True, keep_paused_after=False)
+        )
+
+        # Il congedo resta un comando valido: se ha chiesto di uscire, Franchino esce
+        # (dopo aver risposto a tono).
+        if offense.kind == KIND_CONGEDO and any(
+            w in cmd_lower for w in ("esci", "vattene", "disconnetti", "slogga", "fuori")
+        ):
+            if hasattr(self.player, "set_manual_leave_cooldown"):
+                self.player.set_manual_leave_cooldown(60.0)
+            await self.player.disconnect()
+        return True
+
+    async def _play_radio(self, user, station, requester_arg, radio_name: Optional[str] = None,
+                          announce_missing: bool = True) -> bool:
+        """Risolve e mette in onda una radio in diretta. True se ha davvero suonato.
+
+        Con announce_missing=False (radio non in catalogo) il fallimento è silenzioso
+        e la richiesta prosegue come normale ricerca musicale.
+        """
+        from radio import resolve_stream
+        from sources import SongInfo
+
+        display = station.name if station else (radio_name or "Radio")
+        if announce_missing:
+            await self._notify_channel(
+                f"📻 **{user.display_name}** ha chiesto: *\"{display}\"* — cerco il flusso live..."
+            )
+
+        try:
+            stream = await resolve_stream(station=station, name=None if station else radio_name)
+        except Exception as e:
+            logger.warning(f"Risoluzione radio '{display}' fallita: {e}")
+            stream = None
+
+        if not stream:
+            if announce_missing:
+                await self._notify_channel(
+                    f"⚠️ Non trovo un flusso attivo per **{display}**. "
+                    f"Se è una radio poco nota, prova con il nome esatto dell'emittente."
+                )
+            return False
+
+        song = SongInfo(
+            title=f"📻 {stream.station} — Live",
+            webpage_url=stream.homepage or "",
+            stream_url=stream.url,
+            duration=0,
+            thumbnail=stream.favicon or None,
+            uploader=f"Radio Live • {stream.quality}",
+            requester=requester_arg,
+            source_type="radio",
+            search_query=station.key if station else "",
+            is_direct_stream=True,
+        )
+        self.player._manual_stop = False
+        await self.player.play_now([song], text_channel=self.player.text_channel)
+        logger.info(f"📻 In onda la radio '{stream.station}' ({stream.quality}) per {user.display_name}")
+        return True
+
+    async def _send_radio_list(self, user) -> None:
+        """Elenco delle radio disponibili quando la richiesta è generica."""
+        from radio import catalog_lines
+
+        embed = discord.Embed(
+            title="📻 Radio in diretta con Franchino",
+            description=(
+                f"**{user.display_name}**, ecco le emittenti che conosco. "
+                "Dimmi *\"Franchino metti m2o\"* (o un'altra radio) e vado a prendere il flusso live!\n\n"
+                + "\n".join(catalog_lines(20))
+            ),
+            color=0xFF5500,
+        )
+        embed.set_footer(text="Franchino DJ • Radio Live • Se non è in lista, prova col nome esatto: la cerco io")
+        await self._notify_channel("", embed=embed)
 
     async def _dispatch_brain_decision(self, user, decision: Dict[str, Any], command_part: str) -> bool:
         """

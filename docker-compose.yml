@@ -83,6 +83,8 @@ services:
       - DB_NAME=franchino_hub
       - OLLAMA_HOST=http://ollama:11434
       - OLLAMA_MODEL=gemma2:2b
+      # PO token provider per YouTube: vuoto = disattivato (vedi .env.example)
+      - POT_PROVIDER_URL=${POT_PROVIDER_URL:-}
     depends_on:
       central-hub-db:
         condition: service_healthy
@@ -106,3 +108,30 @@ services:
         reservations:
           cpus: "0.20"
           memory: 256M
+
+  # ========================================================
+  # 4. PO Token Provider per YouTube (OPZIONALE ma consigliato)
+  # --------------------------------------------------------
+  # Da datacenter (Oracle/AWS/Docker) YouTube chiede "Sign in to confirm
+  # you're not a bot". Questo servizio fornisce a yt-dlp i PO token che
+  # sbloccano l'estrazione, quindi la musica torna a suonare da YouTube
+  # invece di ripiegare su SoundCloud.
+  #
+  # Attivazione:
+  #   docker compose --profile pot up -d
+  # e in .env:
+  #   POT_PROVIDER_URL=http://bgutil-provider:4416
+  # ========================================================
+  bgutil-provider:
+    image: brainicism/bgutil-ytdlp-pot-provider:latest
+    container_name: bgutil-provider
+    restart: unless-stopped
+    profiles: ["pot"]
+    ports:
+      - "127.0.0.1:4416:4416"
+    deploy:
+      resources:
+        limits:
+          # Servizio leggero e attivo solo col profilo "pot": nessun limite CPU
+          # stringente (la token generation dura pochi ms), solo la memoria.
+          memory: 320M

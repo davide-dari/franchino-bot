@@ -18,7 +18,7 @@ from config import (
     DEFAULT_VOLUME,
     FRANCHINO_LIVENESS_QUOTES
 )
-from sources import SourceManager
+from sources import SourceManager, SongInfo
 from player import PlayerManager, resolve_preferred_text_channel, build_commands_embed
 from views import FranchinoControlsView, QueuePaginationView
 
@@ -575,6 +575,25 @@ async def on_message(message: discord.Message):
             await cisei_cmd(ctx)
             return
 
+        # MEMORIA: se qualcuno insulta Franchino in chat, se lo ricorda e risponde a tono
+        try:
+            from memoria import detect_offense, memoria
+
+            offense = detect_offense(clean_lower)
+            if offense is not None:
+                record = memoria.record(message.author.id, message.author.display_name, offense)
+                if record.level >= 1:
+                    chat_reply, voice_reply = memoria.reply(record)
+                    await message.reply(chat_reply)
+                    guild_player = player_manager.get_player(message.guild) if message.guild else None
+                    if guild_player and guild_player.voice_client and guild_player.voice_client.is_connected():
+                        asyncio.create_task(
+                            guild_player.speak_tts(voice_reply, wait=False, interrupt_music=True)
+                        )
+                    return
+        except Exception as mem_err:
+            logger.debug(f"Memoria in chat non applicata: {mem_err}")
+
     await bot.process_commands(message)
 
 
@@ -693,6 +712,37 @@ async def play(ctx: commands.Context, *, brano: str):
 
     await ctx.defer()
     player = player_manager.get_player(ctx.guild)
+
+    # RADIO IN DIRETTA: /play m2o, !play radio deejay, /play radio gamma
+    try:
+        from radio import find_radio, extract_radio_name, resolve_stream
+
+        station = find_radio(brano)
+        radio_name = None if station else extract_radio_name(brano)
+        if station is not None or radio_name:
+            stream = await resolve_stream(station=station, name=radio_name)
+            if stream:
+                radio_song = SongInfo(
+                    title=f"📻 {stream.station} — Live",
+                    webpage_url=stream.homepage or "",
+                    stream_url=stream.url,
+                    duration=0,
+                    thumbnail=stream.favicon or None,
+                    uploader=f"Radio Live • {stream.quality}",
+                    requester=ctx.author,
+                    source_type="radio",
+                    search_query=station.key if station else "",
+                    is_direct_stream=True,
+                )
+                player._manual_stop = False
+                await player.play_now([radio_song], text_channel=ctx.channel)
+                return
+            if station is not None:
+                await ctx.send(f"⚠️ Non trovo un flusso attivo per **{station.name}** in questo momento. Riprova tra poco!")
+                return
+            # Non era una radio: si prosegue con la normale ricerca musicale
+    except Exception as radio_err:
+        logger.debug(f"Gestione radio nel comando play fallita: {radio_err}")
 
     try:
         songs = await source_manager.resolve_url_or_query(brano, ctx.author)

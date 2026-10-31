@@ -1,11 +1,12 @@
 import asyncio
 import os
 import re
+import time
 import urllib.request
 import json
 import logging
 from dataclasses import dataclass
-from typing import Optional, List, Dict, Any, Union
+from typing import Optional, List, Dict, Any, Union, Tuple
 import discord
 import requests
 import yt_dlp
@@ -21,6 +22,22 @@ from config import (
 )
 
 logger = logging.getLogger("Franchino.Sources")
+
+# =============================================================================
+# Motore musicale: preferenze e resilienza
+# =============================================================================
+# PO token provider (bgutil-ytdlp-pot-provider): è la contromisura ufficiale al
+# bot-check di YouTube sui datacenter. Se configurato, yt-dlp ottiene dal
+# provider i token che gli servono e l'estrazione torna a funzionare.
+POT_PROVIDER_URL = (os.getenv("POT_PROVIDER_URL", "") or "").strip()
+# Motore preferito: "youtube" (default) prova sempre YouTube per primo
+MUSIC_PREFER = (os.getenv("MUSIC_PREFER", "youtube") or "youtube").strip().lower()
+# SoundCloud come ultima spiaggia: 1 = sì (default), 0 = meglio fallire che suonare altrove
+ALLOW_SOUNDCLOUD_FALLBACK = (
+    os.getenv("MUSIC_ALLOW_SOUNDCLOUD", "1") or "1"
+).strip().lower() not in ("0", "false", "no", "off")
+# Dopo un bot-check, per quanto tempo non ritentare YouTube (secondi)
+YOUTUBE_BLOCK_COOLDOWN = float(os.getenv("YOUTUBE_BLOCK_COOLDOWN", "300") or 300)
 
 
 def is_youtube_bot_or_cookie_error(err: Union[Exception, str]) -> bool:
@@ -93,6 +110,8 @@ class SongInfo:
                 color = discord.Color.red().value
             elif self.source_type == "soundcloud":
                 color = 0xFF5500
+            elif self.source_type == "radio":
+                color = 0xFF3B30
             else:
                 color = COLOR_FRANCHINO
 
@@ -113,6 +132,8 @@ class SongInfo:
             badge = "⚽ MadPlay77 Live"
         elif self.source_type == "soundcloud":
             badge = "🟠 SoundCloud"
+        elif self.source_type == "radio":
+            badge = "📻 Radio Live"
         else:
             badge = "🔴 YouTube"
         embed.set_footer(text=f"Franchino DJ • {badge}", icon_url="https://cdn-icons-png.flaticon.com/512/3845/3845868.png")
@@ -160,6 +181,26 @@ class SourceManager:
                 "player_client": ["android", "visionos", "android_vr", "default"],
             }
         }
+
+        # PO token provider: se configurato, yt-dlp lo interroga per ottenere i
+        # token anti-bot. È la differenza tra "Sign in to confirm you're not a bot"
+        # e un'estrazione che funziona da datacenter.
+        if POT_PROVIDER_URL:
+            base_pot = POT_PROVIDER_URL if POT_PROVIDER_URL.endswith("/") else POT_PROVIDER_URL + "/"
+            yt_extractor_args["youtubepot-bgutilhttp"] = {"base_url": [base_pot]}
+            logger.info(f"🔑 PO token provider configurato per YouTube: {base_pot}")
+        else:
+            logger.info(
+                "ℹ️ Nessun PO token provider (POT_PROVIDER_URL vuoto): da IP datacenter "
+                "YouTube può chiedere la verifica anti-bot. Vedi .env.example."
+            )
+
+        # Circuit breaker: dopo un bot-check non ha senso ritentare subito
+        self._youtube_blocked_until: float = 0.0
+        # Bot-check consecutivi: al secondo si passa al "blocco duro" (nessun tentativo)
+        self._youtube_bot_hits: int = 0
+        # Cache metadati Spotify (query → metadati) per non ripetere la ricerca
+        self._spotify_meta: Dict[str, Dict[str, Any]] = {}
 
         # Opzioni yt-dlp per estrazione ultra-rapida flussi audio (prioritizza Opus 251 e AAC 140 nativi Discord)
         self.ydl_opts_stream = {
@@ -286,11 +327,17 @@ class SourceManager:
         """Restituisce opzioni pulite con client alternativi ('android', 'visionos', 'android_vr', 'web_creator', 'mweb', 'ios', 'tv') senza cookie."""
         clean = dict(base_opts)
         clean.pop("cookiefile", None)
-        clean["extractor_args"] = {
+        extractor_args: Dict[str, Any] = {
             "youtube": {
                 "player_client": ["android", "visionos", "android_vr", "web_creator", "mweb", "ios", "tv"],
             }
         }
+        # Il PO token provider deve sopravvivere al cambio di client: è l'unica
+        # contromisura efficace al bot-check, indipendentemente dal client usato.
+        if POT_PROVIDER_URL:
+            base_pot = POT_PROVIDER_URL if POT_PROVIDER_URL.endswith("/") else POT_PROVIDER_URL + "/"
+            extractor_args["youtubepot-bgutilhttp"] = {"base_url": [base_pot]}
+        clean["extractor_args"] = extractor_args
         return clean
 
     async def resolve_url_or_query(self, query: str, requester: Optional[Union[discord.Member, discord.User]] = None) -> List[SongInfo]:
@@ -514,10 +561,84 @@ class SourceManager:
             song = await asyncio.to_thread(self._extract_youtube_single, query, requester)
             return [song]
         else:
-            # Ricerca testuale con prefisso ytsearch1:
+            # Ricerca testuale: Spotify lavora in PARALLELO (solo metadati ufficiali:
+            # titolo, artista, copertina). Così non aggiunge latenza alla ricerca.
             search_target = f"ytsearch1:{query}"
-            song = await asyncio.to_thread(self._extract_youtube_single, search_target, requester)
+            spotify_task: Optional[asyncio.Task] = None
+            if self.sp:
+                spotify_task = asyncio.create_task(self._spotify_lookup(query))
+
+            try:
+                song = await asyncio.to_thread(self._extract_youtube_single, search_target, requester)
+            except Exception:
+                if spotify_task is not None:
+                    spotify_task.cancel()
+                raise
+
+            if spotify_task is not None:
+                try:
+                    meta = await spotify_task
+                except (asyncio.CancelledError, Exception):
+                    meta = None
+                if meta:
+                    self._enrich_with_spotify(song, meta)
             return [song]
+
+    async def _spotify_lookup(self, query: str) -> Optional[Dict[str, Any]]:
+        """Cerca il brano su Spotify per arricchire i metadati (Spotify non dà audio).
+
+        Serve a mostrare titolo/artista/copertina ufficiali e a dare al motore
+        audio una query più precisa di quella dettata a voce.
+        """
+        if not self.sp:
+            return None
+
+        cache_key = query.strip().lower()
+        cached = self._spotify_meta.get(cache_key)
+        if cached:
+            return cached
+
+        try:
+            res = await asyncio.to_thread(self.sp.search, q=query, limit=1, type="track")
+            items = ((res or {}).get("tracks") or {}).get("items") or []
+            if not items:
+                return None
+            track = items[0]
+            artists = ", ".join(a.get("name", "") for a in track.get("artists") or [] if a.get("name"))
+            images = (track.get("album") or {}).get("images") or []
+            meta = {
+                "title": track.get("name") or "",
+                "artist": artists,
+                "url": (track.get("external_urls") or {}).get("spotify") or "",
+                "thumbnail": images[0].get("url") if images else None,
+                "duration": int((track.get("duration_ms") or 0) / 1000),
+                "search_query": f"{artists} {track.get('name') or ''}".strip(),
+            }
+            self._spotify_meta[cache_key] = meta
+            logger.info(f"🟢 Spotify: '{query}' → {meta['artist']} - {meta['title']}")
+            return meta
+        except Exception as e:
+            logger.debug(f"Spotify lookup non riuscito per '{query}': {e}")
+            return None
+
+    @staticmethod
+    def _enrich_with_spotify(song: SongInfo, meta: Dict[str, Any]) -> SongInfo:
+        """Applica i metadati ufficiali Spotify al brano estratto dal motore audio."""
+        if not meta:
+            return song
+        titolo = meta.get("title")
+        artista = meta.get("artist")
+        if titolo:
+            song.title = f"{artista} - {titolo}" if artista else titolo
+        if meta.get("thumbnail") and not song.thumbnail:
+            song.thumbnail = meta["thumbnail"]
+        if meta.get("url"):
+            song.spotify_url = meta["url"]
+        if artista and not song.uploader:
+            song.uploader = artista
+        if meta.get("search_query"):
+            song.search_query = meta["search_query"]
+        return song
 
     def _extract_youtube_playlist(self, url: str, requester: Optional[Union[discord.Member, discord.User]]) -> List[SongInfo]:
         """Estrae tutti i brani di una playlist YouTube rapidamente in modalità flat."""
@@ -593,64 +714,100 @@ class SourceManager:
         if "cookiefile" not in self.ydl_opts_stream and not getattr(self, "_cookies_explicitly_disabled", False):
             self._configure_cookies()
 
-        # Stadio 1: Estrazione streaming con le opzioni correnti (include cookie se disponibili)
-        try:
-            song = self._do_extract_single(target, requester, self.ydl_opts_stream, download=False)
-            if song and song.stream_url:
-                self._cache_song(target.strip().lower(), song)
-                return song
-        except Exception as first_err:
-            if is_youtube_bot_or_cookie_error(first_err):
-                self.disable_cookies(f"Rilevato blocco bot/cookie nel primo tentativo: {first_err}")
-            logger.warning(f"Primo tentativo estrazione streaming per '{target}': {first_err}. Riprovo con client alternativi...")
+        # Tentativi in ordine di costo crescente.
+        # Se YouTube ci ha appena bloccati facciamo UN solo tentativo rapido:
+        # insistere con tutti i client costa decine di secondi inutili.
+        # Dopo due bot-check consecutivi si passa al "blocco duro": nessun
+        # tentativo, si va diretti al fallback finché la finestra non scade.
+        in_blocco = time.time() < self._youtube_blocked_until
+        blocco_duro = in_blocco and self._youtube_bot_hits >= 2
+        if blocco_duro:
+            tentativi: List[Tuple[str, Dict[str, Any], bool]] = []
+            logger.info(
+                "🛡️ YouTube in blocco anti-bot: salto l'estrazione e uso il fallback "
+                f"(riprovo tra {max(0, int(self._youtube_blocked_until - time.time()))}s)."
+            )
+        elif in_blocco:
+            tentativi = [("client", self._get_mobile_extractor_opts(self.ydl_opts_stream), False)]
+        else:
+            tentativi = [
+                ("cookie", self.ydl_opts_stream, False),
+                ("client", self._get_mobile_extractor_opts(self.ydl_opts_stream), False),
+                ("download", self._get_mobile_extractor_opts(self.ydl_opts_stream), True),
+            ]
 
-        # Stadio 2: Estrazione streaming con client alternativi ('web_creator', 'mweb', 'ios', 'tv')
-        mobile_opts = self._get_mobile_extractor_opts(self.ydl_opts_stream)
-        try:
-            song = self._do_extract_single(target, requester, mobile_opts, download=False)
-            if song and song.stream_url:
-                self._cache_song(target.strip().lower(), song)
-                return song
-        except Exception as second_err:
-            logger.warning(f"Secondo tentativo streaming per '{target}': {second_err}. Riprovo con download temporaneo locale...")
-
-        # Stadio 3: Download audio temporaneo su disco (elimina blocchi di decipher/streaming da datacenter)
-        try:
-            song = self._do_extract_single(target, requester, mobile_opts, download=True)
-            if song and song.stream_url:
-                self._cache_song(target.strip().lower(), song)
-                return song
-        except Exception as third_err:
-            logger.warning(f"Terzo tentativo (download locale) per '{target}': {third_err}.")
-
-        # Stadio 4: Se target era una query di ricerca (ytsearch1:...) che non è riuscita ad estrarre il formato,
-        # risolviamo prima l'ID con flat search e poi estraiamo il video diretto
-        if target.startswith("ytsearch1:") or target.startswith("ytsearch:"):
+        ultimo_errore: Optional[Exception] = None
+        blocco_rilevato = False
+        for nome, opts, scarica in tentativi:
             try:
-                flat_mobile = self._get_mobile_extractor_opts(self.ydl_opts_flat)
-                with yt_dlp.YoutubeDL(flat_mobile) as ydl:
+                song = self._do_extract_single(target, requester, opts, download=scarica)
+                if song and song.stream_url:
+                    self._cache_song(target.strip().lower(), song)
+                    if in_blocco:
+                        logger.info(f"✅ YouTube di nuovo raggiungibile (tentativo '{nome}'): azzero il blocco.")
+                        self._youtube_blocked_until = 0.0
+                    self._youtube_bot_hits = 0
+                    return song
+            except Exception as err:
+                ultimo_errore = err
+                if is_youtube_bot_or_cookie_error(err):
+                    if nome == "cookie":
+                        # Il blocco può dipendere dal client web + cookie: i client
+                        # mobili sono un tentativo legittimo (auto-heal), quindi si
+                        # disattivano i cookie e si prosegue UNA volta.
+                        self.disable_cookies("Blocco bot/cookie YouTube")
+                        logger.warning(
+                            "🛡️ Blocco bot/cookie YouTube: disattivo i cookie e provo i client mobili..."
+                        )
+                        continue
+                    # Anche i client mobili sono bloccati: insistere con download e
+                    # ricerca diretta produce lo stesso errore (erano ~19s buttati
+                    # su 22.5s totali). Si passa subito al fallback.
+                    self._youtube_bot_hits += 1
+                    self._youtube_blocked_until = time.time() + YOUTUBE_BLOCK_COOLDOWN
+                    blocco_rilevato = True
+                    logger.warning(
+                        "🛡️ YouTube chiede la verifica anti-bot anche ai client mobili: "
+                        f"fallback immediato (nessun nuovo tentativo per {int(YOUTUBE_BLOCK_COOLDOWN)}s). "
+                        "Per risolvere in modo stabile configura POT_PROVIDER_URL (vedi .env.example)."
+                    )
+                    break
+                logger.warning(f"Tentativo '{nome}' non riuscito per '{target}': {err}")
+
+        # Stadio finale: se era una ricerca testuale, risolvi l'ID e prova il video diretto.
+        # Utile quando l'estrazione della search fallisce ma il singolo video funziona.
+        # Va saltato se abbiamo appena preso un bot-check: è lo stesso blocco.
+        if not (in_blocco or blocco_rilevato) and (
+            target.startswith("ytsearch1:") or target.startswith("ytsearch:")
+        ):
+            try:
+                flat_opts = self._get_mobile_extractor_opts(self.ydl_opts_flat)
+                with yt_dlp.YoutubeDL(flat_opts) as ydl:
                     search_res = ydl.extract_info(target, download=False)
-                    if search_res and "entries" in search_res and search_res["entries"]:
-                        first_entry = search_res["entries"][0]
-                        v_id = first_entry.get("id")
-                        if v_id:
-                            direct_v_url = f"https://www.youtube.com/watch?v={v_id}"
-                            return self._extract_youtube_single(direct_v_url, requester)
-            except Exception as fourth_err:
-                logger.error(f"Tutti i tentativi di estrazione falliti per '{target}': {fourth_err}")
+                if search_res and search_res.get("entries"):
+                    v_id = search_res["entries"][0].get("id")
+                    if v_id:
+                        return self._extract_youtube_single(
+                            f"https://www.youtube.com/watch?v={v_id}", requester
+                        )
+            except Exception as err:
+                logger.debug(f"Risoluzione ID diretta non riuscita per '{target}': {err}")
 
-        # Stadio 5: Fallback definitivo su SoundCloud (Bypass totale bot-detection YouTube)
-        logger.info(f"🔄 Tentativo finale fallback SoundCloud per '{target}'...")
-        try:
-            fallback_song = self._extract_soundcloud_fallback(target, requester)
-            if fallback_song and fallback_song.stream_url:
-                self._cache_song(target.strip().lower(), fallback_song)
-                return fallback_song
-        except Exception as sc_err:
-            logger.error(f"Fallback finale SoundCloud fallito per '{target}': {sc_err}")
+        # Ultima spiaggia: SoundCloud (disattivabile con MUSIC_ALLOW_SOUNDCLOUD=0)
+        if ALLOW_SOUNDCLOUD_FALLBACK:
+            logger.info(f"🔄 Fallback su SoundCloud per '{target}'...")
+            try:
+                fallback_song = self._extract_soundcloud_fallback(target, requester)
+                if fallback_song and fallback_song.stream_url:
+                    self._cache_song(target.strip().lower(), fallback_song)
+                    return fallback_song
+            except Exception as sc_err:
+                logger.error(f"Fallback SoundCloud fallito per '{target}': {sc_err}")
+        else:
+            logger.warning("Fallback SoundCloud disabilitato (MUSIC_ALLOW_SOUNDCLOUD=0).")
 
-        # Se tutti gli stadi falliscono, solleva l'eccezione descrittiva
-        raise RuntimeError(f"Impossibile estrarre flusso audio per '{target}' dopo tutti i tentativi di bypass.")
+        dettaglio = f" Ultimo errore: {ultimo_errore}" if ultimo_errore else ""
+        raise RuntimeError(f"Impossibile estrarre un flusso audio per '{target}'.{dettaglio}")
 
     def _extract_soundcloud_fallback(
         self,
@@ -851,7 +1008,32 @@ class SourceManager:
         if song.stream_url and os.path.isfile(song.stream_url) and os.path.getsize(song.stream_url) > 0:
             return song.stream_url
 
-        # 2. Se c'è già un flusso HTTP diretto estratto in precedenza, usalo subito (0 ms)!
+        # 2. Radio in diretta: il flusso è già un URL live, si riusa tal quale.
+        #    Se è caduto (o manca), lo si risolve di nuovo dal catalogo/API.
+        if getattr(song, "source_type", "") == "radio":
+            if song.stream_url and (song.stream_url.startswith("http://") or song.stream_url.startswith("https://")):
+                return song.stream_url
+            try:
+                from radio import CATALOG_BY_KEY, resolve_stream
+                station = CATALOG_BY_KEY.get(song.search_query or "")
+                stream = await resolve_stream(
+                    station=station,
+                    name=None if station else (song.search_query or song.title),
+                    force_refresh=True,
+                )
+                if stream and stream.url:
+                    song.stream_url = stream.url
+                    song.is_direct_stream = True
+                    song.duration = 0
+                    if not song.thumbnail and stream.favicon:
+                        song.thumbnail = stream.favicon
+                    logger.info(f"📻 Flusso radio risolto per '{song.title}': {stream.url}")
+                    return stream.url
+            except Exception as e:
+                logger.warning(f"Risoluzione flusso radio fallita per '{song.title}': {e}")
+            raise RuntimeError(f"Flusso live non disponibile per la radio '{song.title}'")
+
+        # 3. Se c'è già un flusso HTTP diretto estratto in precedenza, usalo subito (0 ms)!
         if song.stream_url and (song.stream_url.startswith("http://") or song.stream_url.startswith("https://")):
             if not (song.source_type == "sports_stream" and song.stream_url.endswith(".html")):
                 return song.stream_url

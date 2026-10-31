@@ -1480,11 +1480,23 @@ class GuildPlayer:
             except Exception:
                 pass
 
+    def _invalidate_radio_cache(self, song: Optional[SongInfo]) -> None:
+        """Se una radio cade, il suo URL non è più valido: lo risolverà di nuovo al prossimo uso."""
+        if song is None or getattr(song, "source_type", "") != "radio":
+            return
+        try:
+            from radio import invalidate as _radio_invalidate
+            _radio_invalidate(station_key=getattr(song, "search_query", None) or None)
+        except Exception as e:
+            logger.debug(f"Invalidazione cache radio non riuscita: {e}")
+        song.stream_url = None
+
     async def _handle_after_playback_error(self, song: Optional[SongInfo], error: Exception):
         """Gestisce in modo difensivo gli errori di riproduzione asincroni nel thread audio."""
         self._consecutive_play_errors += 1
         title = getattr(song, "title", "Sconosciuto")
         logger.error(f"Errore durante la riproduzione del brano '{title}': {error}")
+        self._invalidate_radio_cache(song)
         self.current = None
         if self.loop_mode == "song":
             self.loop_mode = "off"
@@ -1604,8 +1616,9 @@ class GuildPlayer:
                     asyncio.create_task(self._prefetch_next_song())
 
             except Exception as e:
-                # Se lo streaming diretto fallisce, tenta un download audio locale come fallback prima di arrendersi (solo brani multimediali, non telecronache live)
-                if getattr(next_song, "is_direct_stream", False) and getattr(next_song, "source_type", "") != "sports_stream":
+                # Se lo streaming diretto fallisce, tenta un download audio locale come fallback prima di arrendersi
+                # (solo brani multimediali: MAI per telecronache live o radio, che non hanno un file da scaricare)
+                if getattr(next_song, "is_direct_stream", False) and getattr(next_song, "source_type", "") not in ("sports_stream", "radio"):
                     try:
                         logger.warning(f"Flusso diretto non riuscito per '{getattr(next_song, 'title', '')}', tento fallback download locale...")
                         target = next_song.webpage_url or next_song.title
