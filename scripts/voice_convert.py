@@ -45,6 +45,8 @@ nello stesso processo costano ~0.15x il tempo reale (misurato su Apple Silicon).
 
 import argparse
 import os
+import shutil
+import subprocess
 import sys
 import tempfile
 import time
@@ -88,7 +90,10 @@ def prepara_16k(paths: List[str], destinazione: Path, torchaudio) -> List[str]:
         if sr != SR_MODEL:
             wav = torchaudio.functional.resample(wav, sr, SR_MODEL)
         uscita = destinazione / f"{i:03d}.wav"
-        torchaudio.save(str(uscita), wav, SR_MODEL)
+        # 16 bit: il float32 di default non è leggibile dalla libreria `wave`
+        # usata dagli strumenti di analisi (era il motivo per cui la misura di
+        # F0 restituiva None e la correzione di pitch non partiva).
+        torchaudio.save(str(uscita), wav, SR_MODEL, encoding="PCM_S", bits_per_sample=16)
         pronti.append(str(uscita))
     return pronti
 
@@ -99,6 +104,40 @@ def durata_totale(paths: List[str], torchaudio) -> float:
         info = torchaudio.info(path)
         totale += info.num_frames / info.sample_rate
     return totale
+
+
+def f0_mediana(path: str) -> Optional[float]:
+    """F0 mediana (Hz) via scripts/analyze_voice.py. None se numpy non c'è."""
+    try:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import analyze_voice  # type: ignore
+
+        return analyze_voice.analizza(path)["f0_mediana"]
+    except Exception:
+        return None
+
+
+def fattore_pitch(f0_riferimento: float, f0_output: float) -> float:
+    """Quanto va moltiplicata la frequenza dell'output per coincidere col riferimento."""
+    if not f0_riferimento or not f0_output or f0_output <= 0:
+        return 1.0
+    return round(f0_riferimento / f0_output, 4)
+
+
+def applica_ffmpeg(path: str, catena: str) -> None:
+    """Applica una catena di filtri al file WAV, in place (pitch e post-produzione)."""
+    eseguibile = shutil.which("ffmpeg")
+    if not eseguibile:
+        raise RuntimeError("ffmpeg non trovato: serve per correzione di pitch e post-processing")
+    temp = path + ".tmp.wav"
+    proc = subprocess.run(
+        [eseguibile, "-hide_banner", "-nostdin", "-y", "-i", path,
+         "-af", catena, "-ac", "1", "-acodec", "pcm_s16le", temp],
+        capture_output=True, text=True,
+    )
+    if proc.returncode != 0:
+        raise RuntimeError("ffmpeg è fallito:\n" + "\n".join(proc.stderr.strip().splitlines()[-4:]))
+    os.replace(temp, path)
 
 
 # =============================================================================
@@ -176,6 +215,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--topk", type=int, default=4, help="vicini usati nel matching (default 4)")
     ap.add_argument("--upsample", type=int, default=0,
                     help="ricampiona l'output a questo rate (es. 44100)")
+    ap.add_argument("--match-pitch", action="store_true",
+                    help="corregge il pitch dell'output sulla F0 mediana del riferimento "
+                         "(kNN-VC trasferisce il timbro, non l'altezza: senza questo "
+                         "l'output eredita il pitch della voce sorgente)")
+    ap.add_argument("--post", default="",
+                    help="catena ffmpeg da applicare dopo la conversione "
+                         "(es. \"equalizer=f=1000:t=q:w=1.2:g=3.5,equalizer=f=2000:t=q:w=1.2:g=-3\")")
     ap.add_argument("--device", default="cpu", help="cpu o cuda")
     ap.add_argument("--repo", default=str(DEFAULT_REPO), help="percorso del repo kNN-VC")
     args = ap.parse_args(argv)
@@ -230,6 +276,33 @@ def main(argv: Optional[List[str]] = None) -> int:
         # né da buona parte degli strumenti audio che si usano a valle.
         torchaudio.save(str(uscita), audio.cpu(), rate_uscita,
                         encoding="PCM_S", bits_per_sample=16)
+
+        # Correzione di altezza: kNN-VC trasferisce il timbro, NON il pitch.
+        # Senza questo l'output eredita l'altezza della voce sorgente (misurato:
+        # sorgente 155 Hz -> output 170 Hz; con sorgente a 193 Hz -> 182 Hz).
+        if args.match_pitch:
+            misure = [v for v in (f0_mediana(p) for p in rif_16k[:15]) if v]
+            f0_rif = sorted(misure)[len(misure) // 2] if misure else None
+            f0_out = f0_mediana(str(uscita))
+            if f0_rif and f0_out:
+                fattore = fattore_pitch(f0_rif, f0_out)
+                print(f"🎚️  Pitch misurato: riferimento {f0_rif:.1f} Hz, "
+                      f"output {f0_out:.1f} Hz (fattore {fattore})", flush=True)
+                if abs(fattore - 1.0) > 0.005:
+                    applica_ffmpeg(
+                        str(uscita),
+                        f"asetrate={rate_uscita}*{fattore},aresample={rate_uscita},"
+                        f"atempo={1.0 / fattore:.6f}",
+                    )
+                    corretto = f0_mediana(str(uscita))
+                    if corretto:
+                        print(f"   ✅ corretto a {corretto:.1f} Hz", flush=True)
+
+        # Post-produzione: qui si compensa lo spettro e si ammorbidisce la
+        # tessitura del vocoder (la banda 2 kHz è quella che suona "robotica").
+        if args.post:
+            applica_ffmpeg(str(uscita), args.post)
+            print(f"🎛️  Post-processing: {args.post[:70]}", flush=True)
 
         durata = audio.shape[-1] / rate_uscita
         print(f"✅ Salvato: {uscita} ({durata:.1f}s a {rate_uscita} Hz)", flush=True)

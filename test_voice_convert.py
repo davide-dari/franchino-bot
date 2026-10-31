@@ -147,3 +147,40 @@ class TestPrerequisiti:
 
         finto = object()
         assert vc.carica_modello("/percorso/qualsiasi", "cpu", knn_vc_module=finto) is finto
+
+
+# ===========================================================================
+# Correzione di altezza (kNN-VC trasferisce il timbro, non il pitch)
+# ===========================================================================
+class TestFattorePitch:
+    def test_calcola_il_fattore_per_allinearsi(self):
+        import scripts.voice_convert as vc
+
+        # Output a 170 Hz da portare al riferimento di 157 Hz
+        assert vc.fattore_pitch(157.0, 170.0) == pytest.approx(0.9235, abs=1e-4)
+
+    def test_reference_gia_allineato_non_cambia_nulla(self):
+        import scripts.voice_convert as vc
+
+        assert vc.fattore_pitch(157.0, 157.0) == 1.0
+
+    @pytest.mark.parametrize("rif,out", [(None, 170.0), (157.0, None), (157.0, 0), (0, 0)])
+    def test_valori_mancanti_non_toccano_l_audio(self, rif, out):
+        import scripts.voice_convert as vc
+
+        assert vc.fattore_pitch(rif, out) == 1.0
+
+    def test_f0_di_un_file_inesistente_restituisce_none(self):
+        import scripts.voice_convert as vc
+
+        assert vc.f0_mediana("/percorso/che/non/esiste.wav") is None
+
+
+class TestApplicaFfmpeg:
+    def test_catena_invalida_solleva_errore_esplicito(self, tmp_path):
+        import scripts.voice_convert as vc
+
+        finto = tmp_path / "a.wav"
+        finto.write_bytes(b"non e' audio")
+        with pytest.raises(RuntimeError):
+            vc.applica_ffmpeg(str(finto), "equalizer=f=1000:g=-3")
