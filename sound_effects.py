@@ -77,6 +77,72 @@ SOUNDBOARD_EFFECTS: Dict[str, Dict[str, str]] = {
 }
 
 
+# =============================================================================
+# VOCE VERA DI FRANCHINO (registrazioni originali, non sintesi)
+# -----------------------------------------------------------------------------
+# Le frasi simbolo — "Magia!", "una favola" — suonano infinitamente meglio se
+# sono le registrazioni originali invece del TTS: per i contenuti fissi il TTS
+# è solo un ripiego. I file NON stanno nel repository (è la voce di una persona
+# reale e il repo è pubblico): si mettono in sounds/franchino/ e vengono
+# scoperti a runtime. Senza quella cartella tutto continua a funzionare, la
+# categoria semplicemente non compare.
+#
+# File attesi: <categoria>_<indice>.mp3 (o .wav) — es. magia_01.mp3
+# Si generano con:  python scripts/mine_phrases.py
+# =============================================================================
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+FRANCHINO_VOICE_DIR = os.path.join(BASE_DIR, "sounds", "franchino")
+FRANCHINO_AUDIO_EXT = (".mp3", ".wav", ".ogg", ".m4a", ".flac")
+
+FRANCHINO_VOICE_CATEGORIES: Dict[str, Dict[str, str]] = {
+    "franchino_magia": {
+        "label": "Franchino: Magia! (voce vera)",
+        "emoji": "✨",
+        "description": "L'iconico «Magia!» dalla registrazione originale, in più tonalità",
+    },
+    "franchino_favola": {
+        "label": "Franchino: una favola (voce vera)",
+        "emoji": "🌙",
+        "description": "«Vivere una favola...» con la voce originale",
+    },
+    "franchino_grazie": {
+        "label": "Franchino: grazie (voce vera)",
+        "emoji": "🙏",
+        "description": "Il ringraziamento del vocalist, voce originale",
+    },
+}
+
+
+def franchino_voice_files(chiave: str) -> list:
+    """File di una categoria (lista vuota se le registrazioni non ci sono)."""
+    categoria = chiave.replace("franchino_", "")
+    if not os.path.isdir(FRANCHINO_VOICE_DIR):
+        return []
+    trovati = []
+    for nome in sorted(os.listdir(FRANCHINO_VOICE_DIR)):
+        base, ext = os.path.splitext(nome)
+        if ext.lower() not in FRANCHINO_AUDIO_EXT:
+            continue
+        if base == categoria or base.startswith(categoria + "_"):
+            trovati.append(os.path.join(FRANCHINO_VOICE_DIR, nome))
+    return trovati
+
+
+def franchino_voice_file(chiave: str):
+    """Un file a caso della categoria (None se non ci sono registrazioni)."""
+    files = franchino_voice_files(chiave)
+    return random.choice(files) if files else None
+
+
+def soundboard_effects() -> Dict[str, Dict[str, str]]:
+    """Effetti disponibili: quelli sintetizzati più le voci vere, se presenti."""
+    effetti = dict(SOUNDBOARD_EFFECTS)
+    for chiave, meta in FRANCHINO_VOICE_CATEGORIES.items():
+        if franchino_voice_files(chiave):
+            effetti[chiave] = meta
+    return effetti
+
+
 def _clamp16(val: float) -> int:
     return max(-32767, min(32767, int(val * 32767.0)))
 
@@ -96,7 +162,12 @@ def _write_stereo_wav(filepath: str, left_samples: list[float], right_samples: l
 
 
 def ensure_sfx_file(sfx_key: str) -> str:
-    """Genera (se non esiste già in cache) e restituisce il file WAV a 48kHz stereo per l'effetto sonoro richiesto."""
+    """Genera (se non esiste già in cache) e restituisce il file audio dell'effetto richiesto."""
+    # 0. Voce registrata di Franchino: se c'è, si usa quella (qualità imbattibile)
+    file_voce = franchino_voice_file(sfx_key)
+    if file_voce:
+        return file_voce
+
     if sfx_key not in SOUNDBOARD_EFFECTS:
         sfx_key = "airhorn"
 

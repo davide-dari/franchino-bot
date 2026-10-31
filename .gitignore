@@ -39,6 +39,7 @@ dataset/
 voice_dataset/
 models/
 vendor/
+sounds/franchino/
 *.onnx
 *.onnx.json
 

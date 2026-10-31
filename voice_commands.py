@@ -2610,6 +2610,27 @@ class FranchinoVoiceSink(voice_recv.AudioSink):
                     )
                 return
 
+        # 0F-bis. FRASI SIMBOLO DI FRANCHINO: per i contenuti fissi si usa la
+        # REGISTRAZIONE ORIGINALE, non il TTS — qualità imbattibile e latenza zero.
+        # Match esatto e solo su frasi brevissime, così non ruba il turno a
+        # "raccontami una favola" (che genera una favola nuova) né ai comandi.
+        if cmd_lower in (
+            "magia", "magiaaa", "magiaa", "fai magia", "di magia", "dai magia",
+            "una favola", "favola", "vivere una favola",
+            "grazie mille franchino", "grande franchino",
+        ):
+            from sound_effects import franchino_voice_files
+            for chiave in ("franchino_magia", "franchino_favola", "franchino_grazie"):
+                if not franchino_voice_files(chiave):
+                    continue
+                parola = chiave.replace("franchino_", "")
+                if parola in cmd_lower:
+                    await self._notify_channel(
+                        f"✨ **{user.display_name}** — ecco la voce originale di Franchino!"
+                    )
+                    await self.player.play_sound_effect(chiave)
+                    return
+
         # 0G. Comando 12 EFFETTI SONORI SOUNDBOARD ISTANTANEI ("trombetta", "sirena", "applausi", "rullo di tamburi", ecc.)
         sfx_map = [
             (("trombetta", "tromba", "airhorn", "air horn", "corno", " da stadio"), "airhorn"),

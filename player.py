@@ -862,11 +862,12 @@ class GuildPlayer:
         Se una canzone sta suonando, la mette un istante in pausa al secondo esatto, spara l'effetto sonoro
         e riprende subito la canzone da dove si era fermata (se resume=True)!
         """
-        from sound_effects import SOUNDBOARD_EFFECTS, ensure_sfx_file
+        from sound_effects import soundboard_effects, ensure_sfx_file
 
-        if sfx_key not in SOUNDBOARD_EFFECTS:
+        effetti = soundboard_effects()
+        if sfx_key not in effetti:
             sfx_key = "airhorn"
-        meta = SOUNDBOARD_EFFECTS[sfx_key]
+        meta = effetti[sfx_key]
         label = f"{meta['emoji']} {meta['label']}"
 
         if (not self.voice_client or not self.voice_client.is_connected()) and self.guild.voice_client:
