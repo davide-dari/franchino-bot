@@ -9,6 +9,7 @@ import sqlite3
 import time
 import urllib.parse
 import urllib.request
+from collections import OrderedDict
 from typing import Dict, List, Optional, Tuple
 
 import discord
@@ -36,10 +37,66 @@ def get_db_connection() -> Optional[sqlite3.Connection]:
     try:
         conn = sqlite3.connect(DB_PATH)
         conn.row_factory = sqlite3.Row
+        _ensure_fts_integrity(conn)
         return conn
     except Exception as e:
         logger.warning(f"Errore connessione DB outlands_knowledge: {e}")
         return None
+
+
+# Indici FTS e colonne con cui ripopolarli dalla tabella sorgente.
+# None = tabella FTS "external content": si usa il comando nativo 'rebuild'.
+_FTS_SPECS = (
+    ("pages", "pages_fts", None),
+    ("creatures", "creatures_fts",
+     ("name", "slayer", "location", "abilities", "creature_class", "combat_type")),
+    ("razor_scripts", "razor_scripts_fts",
+     ("script_id", "title", "skill", "description", "tags")),
+)
+_FTS_CHECKED = False
+
+
+def _ensure_fts_integrity(conn: sqlite3.Connection) -> None:
+    """Riallinea gli indici FTS5 se non coprono tutte le righe della tabella.
+
+    Un indice FTS disallineato rende il contenuto **invisibile alla ricerca**:
+    in questo database razor_scripts aveva 618 righe contro 617 nell'indice,
+    quindi uno script non era trovabile in nessun modo. Il controllo gira una
+    sola volta per processo e costa pochi millisecondi.
+    """
+    global _FTS_CHECKED
+    if _FTS_CHECKED:
+        return
+    _FTS_CHECKED = True
+    try:
+        cur = conn.cursor()
+        for table, fts, cols in _FTS_SPECS:
+            try:
+                n_tab = cur.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+                n_fts = cur.execute(f"SELECT COUNT(*) FROM {fts}").fetchone()[0]
+            except Exception:
+                continue
+            if n_tab == n_fts:
+                continue
+            logger.warning(
+                f"🔧 Indice {fts} disallineato ({n_fts} righe su {n_tab} di {table}): ricostruisco..."
+            )
+            try:
+                if cols is None:
+                    cur.execute(f"INSERT INTO {fts}({fts}) VALUES('rebuild')")
+                else:
+                    cur.execute(f"DELETE FROM {fts}")
+                    lista = ", ".join(cols)
+                    cur.execute(
+                        f"INSERT INTO {fts}({lista}) SELECT {lista} FROM {table}"
+                    )
+                conn.commit()
+                nuovo = cur.execute(f"SELECT COUNT(*) FROM {fts}").fetchone()[0]
+                logger.info(f"✅ Indice {fts} riallineato: {nuovo} righe.")
+            except Exception as e:
+                logger.warning(f"Ricostruzione indice {fts} non riuscita: {e}")
+    except Exception as e:
+        logger.debug(f"Controllo integrità FTS non riuscito: {e}")
 
 # Catalogo in memoria di tutte le ~2.212 pagine di wiki.uooutlands.com
 _ALL_WIKI_TITLES: List[str] = []
@@ -967,11 +1024,30 @@ def _extract_topic_and_keywords(question: str) -> Tuple[str, List[str]]:
         q_low,
         flags=re.IGNORECASE,
     )
+    # "metti la wiki di outlands su magery" / "la guida del magery" -> "magery"
+    topic = re.sub(
+        r"^(?:(?:metti|mettimi|apri|leggi|cerca|cercami|mostra|dimmi|voglio|dammi|"
+        r"fammi\s+vedere|fammi\s+sentire)\s+)?(?:la\s+|una\s+)?"
+        r"(?:wiki|guida|pagina|scheda|enciclopedia)\s+"
+        r"(?:di\s+|d'|su\s+)?(?:uo\s+)?(?:outlands\s+)?(?:su\s+|di\s+|per\s+|del\s+|della\s+|dei\s+|delle\s+)?",
+        "",
+        topic,
+        flags=re.IGNORECASE,
+    ).strip()
     topic = re.sub(
         r"^(?:mi\s+dici|puoi\s+dirmi|dimmi\s+tutto\s+su|dimmi\s+di|dimmi|spiegami\s+bene|spiegami|"
         r"parlami\s+di|parlami\s+dei|parlami\s+delle|parlami\s+del|parla\s+dei|parla\s+delle|parla\s+del|parla\s+di|"
         r"raccontami\s+di|guida\s+(?:a|ai|al|su|per|agli)|consigli\s+(?:su|per)|"
         r"consigliami\s+(?:su\s+|per\s+|un\s+|una\s+|uno\s+)?|cosa\s+mi\s+consigli\s+(?:su\s+|per\s+)?)\s*",
+        "",
+        topic,
+        flags=re.IGNORECASE,
+    )
+    # "cosa serve per X" / "quanto vale X" -> X
+    topic = re.sub(
+        r"^(?:cosa\s+serve\s+(?:per|a)\s+|a\s+cosa\s+serve\s+|cosa\s+serve\s+|"
+        r"quanto\s+(?:vale|costa|rende|droppa)\s+|quanto\s+gold\s+(?:vale|da|droppa)\s+|"
+        r"chi\s+droppa\s+|cosa\s+droppa\s+)",
         "",
         topic,
         flags=re.IGNORECASE,
@@ -1008,6 +1084,10 @@ def _extract_topic_and_keywords(question: str) -> Tuple[str, List[str]]:
         flags=re.IGNORECASE,
     )
     topic = re.sub(r"^(?:il|lo|la|i|gli|le|un|uno|una|dei|degli|delle|del|della)\s+|^l['’]\s*", "", topic.strip()).strip(" ?!.,;:")
+
+    # "boss"/"mob" indicano un ruolo, non un argomento: "il boss aegis" -> "aegis"
+    topic = re.sub(r"\b(?:boss|mob|mostro|mostri|nemico|nemici)\b", " ", topic)
+    topic = re.sub(r"\s+", " ", topic).strip(" ?!.,;:")
 
     return (topic or q_low), section_keywords
 
@@ -1635,7 +1715,6 @@ def _resolve_dungeon_query(question: str, conn: sqlite3.Connection) -> Optional[
 def _resolve_local_knowledge_page(question: str, conn: sqlite3.Connection) -> Optional[dict]:
     """Cerca e risolve istantaneamente qualsiasi argomento sulle ~2.212 pagine ufficiali di Outlands."""
     raw_topic, section_keywords = _extract_topic_and_keywords(question)
-    en_topic = translate_text(raw_topic, "it", "en")
 
     c = conn.cursor()
     mapped_term = None
@@ -1644,13 +1723,13 @@ def _resolve_local_knowledge_page(question: str, conn: sqlite3.Connection) -> Op
             mapped_term = uo_term
             break
 
+    # I termini locali si provano SEMPRE prima: la traduzione è una chiamata di
+    # rete (~1.4s) e non va pagata quando la pagina è già nel database.
     candidates = []
     if mapped_term:
         candidates.append(mapped_term)
     if raw_topic and raw_topic not in candidates:
         candidates.append(raw_topic)
-    if en_topic and en_topic.lower() not in [c.lower() for c in candidates]:
-        candidates.append(en_topic)
 
     page_row = None
     for cand in candidates:
@@ -1677,29 +1756,51 @@ def _resolve_local_knowledge_page(question: str, conn: sqlite3.Connection) -> Op
         if page_row:
             break
 
-    # 4. Ricerca Full-Text con FTS5
-    if not page_row:
-        search_str = f"{en_topic} {raw_topic}"
+    # 4. Ricerca Full-Text (FTS5) con il testo italiano: nessuna rete
+    def _fts_search(*topics: str):
+        search_str = " ".join(t for t in topics if t)
         words = [
             w for w in re.findall(r'[a-zA-Z0-9]+', search_str)
             if len(w) > 2 and w.lower() not in (
                 'come', 'cosa', 'dove', 'perche', 'della', 'delle', 'degli', 'nella', 'nelle',
+                'quanto', 'vale', 'costa', 'rende', 'serve', 'sono', 'boss', 'mob', 'gold',
                 'how', 'what', 'where', 'the', 'and', 'for', 'with', 'outlands', 'wiki'
             )
         ]
-        if words:
-            fts_query = ' '.join(words[:4])
-            try:
-                c.execute("""
-                    SELECT p.* FROM pages_fts fts
-                    JOIN pages p ON fts.rowid = p.page_id
-                    WHERE pages_fts MATCH ?
-                    ORDER BY bm25(pages_fts, 10.0, 5.0, 2.0, 1.0, 0.5)
-                    LIMIT 1
-                """, (fts_query,))
+        if not words:
+            return None
+        try:
+            c.execute("""
+                SELECT p.* FROM pages_fts fts
+                JOIN pages p ON fts.rowid = p.page_id
+                WHERE pages_fts MATCH ?
+                ORDER BY bm25(pages_fts, 10.0, 5.0, 2.0, 1.0, 0.5)
+                LIMIT 1
+            """, (' '.join(words[:4]),))
+            return c.fetchone()
+        except Exception as e:
+            logger.debug(f"FTS search error: {e}")
+            return None
+
+    if not page_row:
+        page_row = _fts_search(raw_topic)
+
+    # 5. Solo se in locale non c'è davvero nulla: traduci l'argomento e riprova.
+    #    La chiamata di rete (~1.4s) si paga solo quando serve davvero.
+    if not page_row:
+        en_topic = translate_text(raw_topic, "it", "en")
+        if en_topic and en_topic.lower() not in [x.lower() for x in candidates]:
+            clean_en = en_topic.lower().strip()
+            c.execute("SELECT * FROM pages WHERE clean_title = ? OR title = ?", (clean_en, en_topic))
+            page_row = c.fetchone()
+            if not page_row:
+                c.execute(
+                    "SELECT * FROM pages WHERE clean_title LIKE ? ORDER BY length(clean_title) LIMIT 1",
+                    (f"{clean_en}%",),
+                )
                 page_row = c.fetchone()
-            except Exception as e:
-                logger.debug(f"FTS search error: {e}")
+            if not page_row:
+                page_row = _fts_search(en_topic, raw_topic)
 
     if not page_row:
         return None
@@ -1931,58 +2032,144 @@ def get_outlands_rag_context(query: str, max_chars: int = 1200) -> str:
     return ""
 
 
+# =============================================================================
+# Cache delle risposte: in un server le stesse domande tornano di continuo e il
+# fallback online costa secondi. Si ricordano anche i "non trovato" (TTL breve)
+# così un buco di conoscenza non viene ripagato a ogni richiesta.
+# =============================================================================
+_QUERY_CACHE: "OrderedDict[str, Tuple[float, Optional[dict]]]" = OrderedDict()
+_QUERY_CACHE_MAX = 256
+_QUERY_CACHE_TTL = 1800.0       # risposta trovata: 30 minuti
+_QUERY_CACHE_NEG_TTL = 300.0    # "non trovato": 5 minuti
+_MISS = object()
+
+
+def _cache_key(question: str) -> str:
+    return re.sub(r"\s+", " ", (question or "").strip().lower())
+
+
+def clear_query_cache() -> None:
+    """Svuota la cache delle risposte (usato dai test e dopo un re-sync della wiki)."""
+    _QUERY_CACHE.clear()
+
+
+def _copy_result(value: Optional[dict]) -> Optional[dict]:
+    """Copia il risultato: l'embed in cache non deve essere riusato per riferimento."""
+    if not value:
+        return value
+    out = dict(value)
+    embed = out.get("embed")
+    if embed is not None and hasattr(embed, "copy"):
+        try:
+            out["embed"] = embed.copy()
+        except Exception:
+            pass
+    return out
+
+
+def _cache_get(key: str):
+    entry = _QUERY_CACHE.get(key)
+    if not entry:
+        return _MISS
+    ts, value = entry
+    ttl = _QUERY_CACHE_TTL if value else _QUERY_CACHE_NEG_TTL
+    if time.time() - ts > ttl:
+        _QUERY_CACHE.pop(key, None)
+        return _MISS
+    _QUERY_CACHE.move_to_end(key)
+    return _copy_result(value)
+
+
+def _cache_put(key: str, value: Optional[dict]) -> None:
+    _QUERY_CACHE[key] = (time.time(), value)
+    _QUERY_CACHE.move_to_end(key)
+    while len(_QUERY_CACHE) > _QUERY_CACHE_MAX:
+        _QUERY_CACHE.popitem(last=False)
+
+
 async def query_outlands_wiki(question: str) -> Optional[dict]:
+    """Interroga la conoscenza ufficiale di UO Outlands (con cache).
+
+    Ordine di risoluzione, dal più specifico al più generico:
+    1. Pet & Animal Taming
+    2. Creatura specifica (nome proprio presente nel database)
+    3. Dungeon / luogo specifico
+    4. Oggetti speciali & meccaniche note (Mastery Chain, Aspect, Codex...)
+    5. Build e template (tema generico: solo se la domanda parla davvero di build)
+    6. Articoli e guide delle ~2.212 pagine locali
+    7. Fallback online su wiki.uooutlands.com
     """
-    Interroga la conoscenza ufficiale di UO Outlands:
-    1. Risponde all'istante alle domande sui Migliori Pet da farmare e Animal Taming.
-    2. Risponde all'istante alle domande sulle Build e Template da 700 punti.
-    3. Risponde all'istante alle domande su come usare gli oggetti speciali (Mastery Chain, Aspect, Codex, ecc.).
-    4. Consulta il Database SQLite locale data/outlands_knowledge.db (1.301 creature, 2.212 pagine, sub-millisecond).
-    5. Solo come fallback contatta online wiki.uooutlands.com.
+    key = _cache_key(question)
+    if not key:
+        return None
+    cached = _cache_get(key)
+    if cached is not _MISS:
+        logger.debug(f"⚡ Wiki Outlands (cache): '{question[:45]}'")
+        return cached
+
+    result = await _query_outlands_wiki_uncached(question)
+    _cache_put(key, result)
+    return result
+
+
+def _resolve_local_sync(question: str) -> Optional[dict]:
+    """Risoluzione locale completa (bloccante: va chiamata da un thread).
+
+    Ordine dal più specifico al più generico:
+    creatura → dungeon → oggetto/meccanica → build → pagine della wiki.
     """
-    # 1. Controllo Pet & Animal Taming
+    conn = get_db_connection()
+    if not conn:
+        # Senza database si può ancora rispondere con le schede statiche
+        return _resolve_special_item_query(question) or _resolve_build_query(question)
+    try:
+        # Creatura specifica: il nome proprio ha la precedenza su tutto
+        cr_info = _resolve_creature_query(question, conn)
+        if cr_info:
+            return cr_info
+
+        # Dungeon / luogo specifico ("aegis", "nusero", "ossuary")
+        dg_info = _resolve_dungeon_query(question, conn)
+        if dg_info:
+            return dg_info
+
+        # Oggetti speciali & meccaniche note (Mastery Chain, Aspect, Codex...)
+        item_info = _resolve_special_item_query(question)
+        if item_info:
+            return item_info
+
+        # Build / template DOPO creatura e dungeon: prima venivano interrogate per
+        # prime e una domanda come "quanto vale il gold del boss aegis" finiva
+        # sulla build starter per via della parola "gold".
+        build_info = _resolve_build_query(question)
+        if build_info:
+            return build_info
+
+        # Articoli & guide delle ~2.212 pagine ufficiali
+        return _resolve_local_knowledge_page(question, conn)
+    except Exception as e:
+        logger.warning(f"Errore query DB locale Outlands: {e}")
+        return None
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+async def _query_outlands_wiki_uncached(question: str) -> Optional[dict]:
+    """Risoluzione vera e propria, senza cache."""
+    # 1. Controllo Pet & Animal Taming (puro Python, istantaneo)
     pets_info = _resolve_pets_query(question)
     if pets_info:
         return pets_info
 
-    # 2. Controllo Build / Template
-    build_info = _resolve_build_query(question)
-    if build_info:
-        return build_info
-
-    # 3. Controllo Oggetti Speciali & Meccaniche
-    item_info = _resolve_special_item_query(question)
-    if item_info:
-        return item_info
-
-    # 4. Ricerca Database Locale SQLite ad altissime prestazioni (sub-millisecond!)
-    conn = get_db_connection()
-    if conn:
-        try:
-            # 4a. Controllo Creature & Mostri
-            cr_info = _resolve_creature_query(question, conn)
-            if cr_info:
-                conn.close()
-                return cr_info
-
-            # 4b. Controllo Dungeon & Luoghi
-            dg_info = _resolve_dungeon_query(question, conn)
-            if dg_info:
-                conn.close()
-                return dg_info
-
-            # 4c. Controllo Articoli & Guide delle ~2.212 Pagine
-            pg_info = _resolve_local_knowledge_page(question, conn)
-            if pg_info:
-                conn.close()
-                return pg_info
-        except Exception as e:
-            logger.warning(f"Errore query DB locale Outlands: {e}")
-        finally:
-            try:
-                conn.close()
-            except Exception:
-                pass
+    # 2-6. La risoluzione locale fa I/O su SQLite e può chiamare il traduttore
+    # (rete, fino a ~1.5s): va eseguita in un thread separato, altrimenti blocca
+    # il loop degli eventi e con esso il sink vocale, il TTS e ogni altro comando.
+    local = await asyncio.to_thread(_resolve_local_sync, question)
+    if local:
+        return local
 
     # 5. Fallback Online MediaWiki API su tutto il sito wiki.uooutlands.com
     try:

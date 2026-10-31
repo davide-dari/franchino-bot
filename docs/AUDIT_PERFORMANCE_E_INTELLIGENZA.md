@@ -205,3 +205,28 @@ Con 200 righe si risponde a tutto: intent dominante, timeout LLM, peso dell'STT 
 | Ondata 3 | 1 sett. | -0.3/-0.5 s (cache semantica) | apprendimento dal gergo del server |
 
 Se si può fare una cosa sola: l'intervento #3 dell'ondata 1. Oggi l'AI non parla — tutto il resto è secondario.
+
+---
+
+# Appendice — Audit conoscenza UO Outlands (Ondata 3)
+
+Il database locale (17 MB: 1.301 creature, 2.212 pagine, 618 script Razor) è già
+indicizzato con FTS5 e il percorso locale risponde in **0,1-0,7 ms**. I problemi
+non erano nel database ma in *come* veniva interrogato.
+
+| Problema | Misura | Fix |
+|---|---|---|
+| La traduzione (rete) veniva chiamata **prima** di guardare nel DB | 1,4 s per lookup, su ogni domanda | prima i termini locali, traduzione solo se non c'è nulla |
+| Il resolver delle build si mangiava creature e dungeon (parola "gold") | "quanto vale il gold del boss aegis" → *build starter* | ordine: creatura → dungeon → meccanica → build → pagine |
+| L'argomento estratto era l'intera frase | "cosa serve per l'aspect armor" → nessun risultato | pulizia di "cosa serve per", "quanto vale", "boss/mob" |
+| La risoluzione girava sul loop degli eventi | blocco fino a 1,8 s di audio/TTS | `asyncio.to_thread` sulla risoluzione locale |
+| Indice FTS disallineato | 1 script Razor invisibile alla ricerca | controllo e rebuild automatico all'apertura del DB |
+| Nessuna cache | il fallback online (3,7 s) si ripagava ogni volta | cache LRU con TTL 30 min e **negative cache** 5 min |
+
+Risultati misurati: "aspect armor" da *3,7 s + nessun risultato* a *risposta
+corretta*; "aegis" da *pagina sbagliata* a *Dungeon: Aegis Keep* in 4,5 ms;
+domande ripetute da decine di ms a **0,01 ms**.
+
+Costo residuo noto: la traduzione della *risposta* (en→it) costa ~300 ms la
+prima volta per pagina ed è in cache dopo. Per il RAG del cervello AI non viene
+usata: il modello legge l'inglese, quindi si risparmia del tutto.
