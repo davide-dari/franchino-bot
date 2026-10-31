@@ -130,19 +130,36 @@ class TestVoicePresenceAndVocalist(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(mock_player.disconnect.call_count, 1)
 
     def test_vocalist_dsp_chain(self):
-        """Verifica che i filtri DSP da vocalist contengano l'equalizzatore console, compressore ed eco."""
+        """Verifica la catena DSP da vocalist: equalizzatore tarato, compressore, eco.
+
+        Le frequenze non sono più quelle scelte a orecchio: sono tarate sulla
+        LTAS della voce reale (vedi scripts/analyze_voice.py), dove il picco sta
+        a 500 Hz e i 250 Hz sono 9 dB sotto.
+        """
         import inspect
         from player import GuildPlayer
         import player as player_module
         src = inspect.getsource(GuildPlayer.speak_tts)
 
-        self.assertIn("equalizer=f=140", src)
-        self.assertIn("equalizer=f=3200", src)
+        self.assertIn("equalizer=f=250", src)
+        self.assertIn("equalizer=f=500", src)
+        self.assertIn("equalizer=f=4000", src)
         self.assertIn("acompressor=threshold=-16dB", src)
         self.assertIn("aecho=", src)
         # La voce neurale è generata dall'helper condiviso generate_tts_file (usato anche
         # per preriscaldare la cache TTS all'avvio): la si cerca nel modulo player.
-        self.assertIn("GiuseppeMultilingualNeural", inspect.getsource(player_module))
+        modulo = inspect.getsource(player_module)
+        self.assertIn("it-IT-DiegoNeural", modulo)
+        # Giuseppe resta disponibile come fallback
+        self.assertIn("it-IT-GiuseppeMultilingualNeural", modulo)
+        # La voce primaria è Diego: la sua F0 (193 Hz) è a 0,4 semitoni dal
+        # riferimento reale (197 Hz), Giuseppe a -6 Hz stava a -4,8 semitoni.
+        sorgente_tts = inspect.getsource(player_module.generate_tts_file)
+        self.assertLess(
+            sorgente_tts.index("it-IT-DiegoNeural"),
+            sorgente_tts.index("it-IT-GiuseppeMultilingualNeural"),
+            "DiegoNeural deve essere la voce primaria, Giuseppe il fallback",
+        )
 
     async def test_voice_stop_command_silence(self):
         """Verifica che i comandi vocali STOP fermino la musica in silenzio assoluto senza risposte verbali o testuali."""

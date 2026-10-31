@@ -149,3 +149,42 @@ sono a orecchio).
 - Test del builder (senza rete): `test_voice_dataset.py`
 - TTS attuale + cache: `player.py` (`generate_tts_file`, `WARM_TTS_PHRASES`)
 - Catena DSP: `player.py`, sezione "Catena DSP Franchino il Vocalist"
+
+---
+
+## 6. Taratura DSP misurata (fatta)
+
+La catena di effetti di `player.py` era tarata a orecchio. Ora è tarata sui dati:
+`scripts/analyze_voice.py` misura **F0** (autocorrelazione) e **LTAS** (energia
+per banda d'ottava) di due file e ne calcola la distanza.
+
+Riferimento: 10,3 secondi di voce reale, ottenuti separando 90 s di una traccia
+con demucs (le 6 clip con la base 18-29 dB sotto la voce).
+
+| | Prima | Dopo | Voce reale |
+|---|---|---|---|
+| Voce TTS | Giuseppe, −6 Hz | **Diego, 0 Hz** | — |
+| Pitch (F0 mediana) | 150 Hz (−4,8 semitoni) | **193 Hz (−0,4 semitoni)** | 197 Hz |
+| Banda più forte | **125 Hz** (voce cupa) | **500 Hz** | 500 Hz |
+| Distanza spettrale 250-4000 Hz | 3,32 dB | **1,82 dB** | — |
+
+Catena nuova (sostituisce le quattro equalizzazioni precedenti):
+
+```
+equalizer=f=250:t=q:w=1.0:g=-5     # la sintesi aveva troppa energia a 250 Hz
+equalizer=f=500:t=q:w=1.2:g=2      # corpo della voce, dov'è il picco reale
+equalizer=f=4000:t=q:w=1.5:g=-2.5  # controllo delle sibilanti
+```
+
+Restano invariati compressore, eco e volume (sono firma della persona, non timbro).
+Le bande **63/125 Hz** e **8 kHz** sono escluse dal confronto: demucs svuota i
+bassi e l'mp3 della sorgente taglia gli alti, quindi non sarebbero misure oneste.
+
+Per rifare la misura quando cambierà la voce:
+
+```bash
+pip install numpy        # unica dipendenza dello script
+python scripts/analyze_voice.py riferimento.wav voce_bot.wav --compare
+```
+
+Per un ascolto A/B delle due versioni: `dataset/_voce_dsp/` (cartella ignorata da git).

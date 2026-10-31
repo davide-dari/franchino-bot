@@ -92,23 +92,29 @@ async def generate_tts_file(text: str, dramatic_fable: bool = False) -> Tuple[Op
     # 1. Microsoft Edge Neural TTS (voce maschile italiana espressiva)
     try:
         import edge_tts
-        pitch_val = "-10Hz" if dramatic_fable else "-6Hz"
+        # Voce scelta sui dati, non a orecchio: dalla voce reale di Franchino
+        # (90 s separati con demucs) la F0 mediana è 197 Hz. Misurato:
+        #   DiegoNeural a 0 Hz  -> 193 Hz  (-0,4 semitoni)  <- più vicino
+        #   GiuseppeNeural a -6 -> 155 Hz  (-4,8 semitoni)  <- troppo basso
+        # Inoltre lo shift in Hz di edge-tts muove anche le formanti: tenerlo a 0
+        # evita l'artefatto. Per le favole si abbassa appena.
+        pitch_val = "-2Hz" if dramatic_fable else "+0Hz"
         rate_val = "-4%" if dramatic_fable else "+0%"
         target = tts_cache_path(text, dramatic_fable, gtts=False)
         try:
             communicate = edge_tts.Communicate(
                 text=text,
-                voice="it-IT-GiuseppeMultilingualNeural",
+                voice="it-IT-DiegoNeural",
                 pitch=pitch_val,
                 rate=rate_val,
             )
             await asyncio.wait_for(communicate.save(target), timeout=12.0)
         except Exception as ve:
-            logger.warning(f"⚠️ GiuseppeMultilingualNeural non disponibile ({ve}), fallback su DiegoNeural...")
+            logger.warning(f"⚠️ DiegoNeural non disponibile ({ve}), fallback su GiuseppeMultilingualNeural...")
             communicate = edge_tts.Communicate(
                 text=text,
-                voice="it-IT-DiegoNeural",
-                pitch="-12Hz" if dramatic_fable else "-8Hz",
+                voice="it-IT-GiuseppeMultilingualNeural",
+                pitch="-4Hz" if dramatic_fable else "-2Hz",
                 rate=rate_val,
             )
             await asyncio.wait_for(communicate.save(target), timeout=12.0)
@@ -677,11 +683,13 @@ class GuildPlayer:
                 if used_gtts_fallback:
                     filters.append("asetrate=24000*0.78,aresample=48000,atempo=1.22")
 
-                # Equalizzatore da console vocalist
-                filters.append("equalizer=f=140:t=q:w=1.2:g=5")
-                filters.append("equalizer=f=450:t=q:w=1.5:g=-2.5")
-                filters.append("equalizer=f=3200:t=q:w=1.3:g=4")
-                filters.append("equalizer=f=9500:t=q:w=1.0:g=2")
+                # Equalizzatore da console vocalist, tarato sullo spettro reale:
+                # la sintesi aveva la banda 250 Hz come la più forte, mentre
+                # nella voce di Franchino il picco è a 500 Hz e i 250 Hz sono
+                # 9 dB sotto. Il vecchio +5 dB a 140 Hz rendeva la voce "cupa".
+                filters.append("equalizer=f=250:t=q:w=1.0:g=-5")
+                filters.append("equalizer=f=500:t=q:w=1.2:g=2")
+                filters.append("equalizer=f=4000:t=q:w=1.5:g=-2.5")
 
                 # Compressore analogico broadcast live
                 filters.append("acompressor=threshold=-16dB:ratio=4:attack=5:release=50:makeup=3")
