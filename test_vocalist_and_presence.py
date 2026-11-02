@@ -1,11 +1,44 @@
 import asyncio
 import os
+import time
 import unittest
+from types import SimpleNamespace
 from unittest.mock import MagicMock, AsyncMock, patch, PropertyMock
 
 import config
 from main import _get_human_ids_in_channel, _get_all_humans_in_voice
 from player import GuildPlayer
+
+
+class FakeVoiceClient:
+    """Voice client finto con la macchina a stati di discord.py 2.7 (`_connection.state`)."""
+
+    def __init__(self, connected=False, state_name="disconnected", channel=None, wait_result=None):
+        self._connected = connected
+        self._connection = SimpleNamespace(state=SimpleNamespace(name=state_name))
+        self.channel = channel
+        self._wait_result = connected if wait_result is None else wait_result
+        self.disconnect_calls = 0
+
+    def is_connected(self):
+        return self._connected
+
+    def wait_until_connected(self, timeout=30.0):
+        return self._wait_result
+
+    def stop(self):
+        pass
+
+    def stop_listening(self):
+        pass
+
+    async def disconnect(self, *, force=False):
+        self.disconnect_calls += 1
+        self._connected = False
+        self._connection.state = SimpleNamespace(name="disconnected")
+
+    async def move_to(self, channel, timeout=30.0):
+        self.channel = channel
 
 
 class TestVoicePresenceAndVocalist(unittest.IsolatedAsyncioTestCase):
@@ -517,8 +550,37 @@ class TestVoicePresenceAndVocalist(unittest.IsolatedAsyncioTestCase):
         except asyncio.CancelledError:
             pass
 
-    async def test_bot_disconnect_event_sets_cooldown_and_disconnects(self):
-        """Verifica che l'espulsione o disconnessione forzata del bot da Discord imposti il cooldown e chiami disconnect()."""
+    async def test_bot_disconnect_event_defers_verification_without_blackout(self):
+        """Un drop vocale del bot NON deve più produrre disconnect immediato né 60s di blackout."""
+        from main import on_voice_state_update, player_manager, bot
+
+        mock_guild = MagicMock()
+        mock_channel = MagicMock(guild=mock_guild, name="Generale")
+        bot_member = MagicMock(id=999, bot=True, guild=mock_guild)
+        mock_guild.me = bot_member
+        mock_guild.voice_client = None
+
+        mock_player = MagicMock()
+        mock_player._is_disconnecting = False
+        mock_player._restarting = False
+        mock_player.voice_client = None
+        mock_player.set_manual_leave_cooldown = MagicMock()
+        mock_player.disconnect = AsyncMock()
+
+        with patch.object(type(bot), "user", new_callable=PropertyMock, return_value=MagicMock(id=999)):
+            with patch.object(player_manager, "get_player", return_value=mock_player):
+                with patch("main._schedule_voice_loss_verification") as schedule:
+                    before_state = MagicMock(channel=mock_channel)
+                    after_state = MagicMock(channel=None)
+                    await on_voice_state_update(bot_member, before_state, after_state)
+
+        # Niente uscita immediata, niente cooldown: solo la verifica differita
+        mock_player.disconnect.assert_not_called()
+        mock_player.set_manual_leave_cooldown.assert_not_called()
+        schedule.assert_called_once()
+
+    async def test_bot_disconnect_event_ignored_while_discord_reconnects(self):
+        """Se discord.py sta già ricucendo la sessione, il bot non deve fare nulla."""
         from main import on_voice_state_update, player_manager, bot
 
         mock_guild = MagicMock()
@@ -526,18 +588,193 @@ class TestVoicePresenceAndVocalist(unittest.IsolatedAsyncioTestCase):
         bot_member = MagicMock(id=999, bot=True, guild=mock_guild)
         mock_guild.me = bot_member
 
+        reconnecting = FakeVoiceClient(connected=False, state_name="got_voice_server_update", channel=mock_channel)
+        mock_guild.voice_client = reconnecting
+
         mock_player = MagicMock()
+        mock_player._is_disconnecting = False
+        mock_player._restarting = False
+        mock_player.voice_client = reconnecting
         mock_player.set_manual_leave_cooldown = MagicMock()
         mock_player.disconnect = AsyncMock()
 
         with patch.object(type(bot), "user", new_callable=PropertyMock, return_value=MagicMock(id=999)):
             with patch.object(player_manager, "get_player", return_value=mock_player):
-                before_state = MagicMock(channel=mock_channel)
-                after_state = MagicMock(channel=None)
-                await on_voice_state_update(bot_member, before_state, after_state)
+                with patch("main._schedule_voice_loss_verification") as schedule:
+                    await on_voice_state_update(bot_member, MagicMock(channel=mock_channel), MagicMock(channel=None))
 
-                mock_player.set_manual_leave_cooldown.assert_called_with(60.0)
-                mock_player.disconnect.assert_called_once()
+        schedule.assert_not_called()
+        mock_player.disconnect.assert_not_called()
+        mock_player.set_manual_leave_cooldown.assert_not_called()
+
+    def test_is_voice_link_reconnecting_classification(self):
+        """is_connected() è False anche durante la riconnessione: va distinta da una sessione morta."""
+        from player import is_voice_link_reconnecting
+
+        self.assertFalse(is_voice_link_reconnecting(None))
+        self.assertFalse(is_voice_link_reconnecting(FakeVoiceClient(connected=True, state_name="connected")))
+        self.assertTrue(is_voice_link_reconnecting(FakeVoiceClient(connected=False, state_name="websocket_connected")))
+        self.assertTrue(is_voice_link_reconnecting(FakeVoiceClient(connected=False, state_name="got_voice_server_update")))
+        self.assertFalse(is_voice_link_reconnecting(FakeVoiceClient(connected=False, state_name="disconnected")))
+
+    async def test_await_voice_reconnect_adopts_resumed_client_without_cleanup(self):
+        """connect() deve aspettare la riconnessione, non distruggere il client."""
+        mock_bot = MagicMock()
+        mock_bot.loop = MagicMock()
+
+        mock_guild = MagicMock()
+        resumed = FakeVoiceClient(connected=False, state_name="websocket_connected", wait_result=True)
+        mock_guild.voice_client = resumed
+
+        player = GuildPlayer(mock_bot, mock_guild, MagicMock())
+        player._cleanup_stale_voice_client = AsyncMock()
+
+        self.assertTrue(await player._await_voice_reconnect(timeout=0.05))
+        self.assertIs(player.voice_client, resumed)
+        player._cleanup_stale_voice_client.assert_not_called()
+
+    async def test_presence_sync_leaves_reconnecting_client_alone(self):
+        """Il guardiano di presenza non deve toccare una sessione vocale in riconnessione."""
+        from main import _check_and_sync_voice_presence, player_manager, bot
+
+        mock_guild = MagicMock(name="TestGuild")
+        populated_vc = MagicMock(id=222, guild=mock_guild, name="Popolata")
+        populated_vc.members = [MagicMock(id=555, bot=False)]
+        populated_vc.voice_states = {555: MagicMock()}
+
+        mock_guild.afk_channel = None
+        mock_guild.voice_channels = [populated_vc]
+
+        reconnecting = FakeVoiceClient(connected=False, state_name="set_guild_voice_state", channel=populated_vc)
+        mock_guild.voice_client = reconnecting
+
+        mock_player = MagicMock()
+        mock_player.voice_client = reconnecting
+        mock_player._reconnecting_since = 0.0
+        mock_player.disconnect = AsyncMock()
+        mock_player.connect = AsyncMock()
+
+        with patch.object(type(bot), "guilds", new_callable=PropertyMock, return_value=[mock_guild]):
+            with patch.object(player_manager, "get_player", return_value=mock_player):
+                await _check_and_sync_voice_presence()
+
+        mock_player.connect.assert_not_called()
+        mock_player.disconnect.assert_not_called()
+
+    async def test_presence_sync_forces_reconnect_when_reconnect_gets_stuck(self):
+        """Se la riconnessione resta appesa oltre la grazia massima, si forza il rientro."""
+        from main import _check_and_sync_voice_presence, player_manager, bot
+
+        mock_guild = MagicMock(name="TestGuild")
+        populated_vc = MagicMock(id=222, guild=mock_guild, name="Popolata")
+        populated_vc.members = [MagicMock(id=555, bot=False)]
+        populated_vc.voice_states = {555: MagicMock()}
+
+        mock_guild.afk_channel = None
+        mock_guild.voice_channels = [populated_vc]
+
+        stuck = FakeVoiceClient(connected=False, state_name="websocket_connected", channel=populated_vc)
+        mock_guild.voice_client = stuck
+
+        mock_player = MagicMock()
+        mock_player.voice_client = stuck
+        mock_player._reconnecting_since = time.monotonic() - 300.0
+        mock_player.disconnect = AsyncMock()
+        mock_player.connect = AsyncMock()
+
+        with patch.object(type(bot), "guilds", new_callable=PropertyMock, return_value=[mock_guild]):
+            with patch.object(player_manager, "get_player", return_value=mock_player):
+                with patch("main._find_default_text_channel", return_value=MagicMock()):
+                    await _check_and_sync_voice_presence()
+
+        mock_player.disconnect.assert_awaited_once()
+        mock_player.connect.assert_awaited_once()
+
+    def _populated_guild(self):
+        mock_guild = MagicMock(name="TestGuild")
+        populated_vc = MagicMock(id=222, guild=mock_guild, name="Popolata")
+        populated_vc.members = [MagicMock(id=555, bot=False)]
+        populated_vc.voice_states = {555: MagicMock()}
+        mock_guild.afk_channel = None
+        mock_guild.voice_channels = [populated_vc]
+        mock_guild.voice_client = None
+        return mock_guild, populated_vc
+
+    async def test_voice_loss_verification_reconnects_when_room_populated(self):
+        """Dopo la grazia, se ci sono utenti in vocale Franchino deve rientrare da solo."""
+        from main import _verify_voice_loss
+
+        mock_guild, populated_vc = self._populated_guild()
+
+        mock_player = MagicMock()
+        mock_player._is_disconnecting = False
+        mock_player._restarting = False
+        mock_player.has_manual_leave_cooldown = MagicMock(return_value=False)
+        mock_player.voice_client = None
+        mock_player._voice_kick_history = []
+        mock_player.disconnect = AsyncMock()
+        mock_player.connect = AsyncMock()
+        mock_player.set_manual_leave_cooldown = MagicMock()
+
+        with patch("main.VOICE_RECONNECT_GRACE", 0.01):
+            with patch("main._find_default_text_channel", return_value=MagicMock()):
+                await _verify_voice_loss(mock_guild, mock_player, populated_vc, "test")
+
+        mock_player.connect.assert_awaited_once()
+        mock_player.set_manual_leave_cooldown.assert_not_called()
+
+    async def test_voice_loss_verification_exits_cleanly_when_room_empty(self):
+        """Se in vocale non c'è più nessuno, esce pulito e senza cooldown che blocchi i rientri futuri."""
+        from main import _verify_voice_loss
+
+        empty_vc = MagicMock(id=111, guild=MagicMock(name="TestGuild"), name="Vuota")
+        empty_vc.members = []
+        empty_vc.voice_states = {}
+        mock_guild = empty_vc.guild
+        mock_guild.afk_channel = None
+        mock_guild.voice_channels = [empty_vc]
+        mock_guild.voice_client = None
+
+        mock_player = MagicMock()
+        mock_player._is_disconnecting = False
+        mock_player._restarting = False
+        mock_player.has_manual_leave_cooldown = MagicMock(return_value=False)
+        mock_player.voice_client = None
+        mock_player._voice_kick_history = []
+        mock_player.disconnect = AsyncMock()
+        mock_player.connect = AsyncMock()
+        mock_player.set_manual_leave_cooldown = MagicMock()
+
+        with patch("main.VOICE_RECONNECT_GRACE", 0.01):
+            await _verify_voice_loss(mock_guild, mock_player, empty_vc, "test")
+
+        mock_player.disconnect.assert_awaited_once()
+        mock_player.connect.assert_not_called()
+        mock_player.set_manual_leave_cooldown.assert_not_called()
+
+    async def test_voice_loss_verification_backs_off_after_repeated_kicks(self):
+        """Troppe disconnessioni esterne ravvicinate: rallenta i rientri invece di martellare il gateway."""
+        from main import _verify_voice_loss
+
+        mock_guild, populated_vc = self._populated_guild()
+        now = time.monotonic()
+
+        mock_player = MagicMock()
+        mock_player._is_disconnecting = False
+        mock_player._restarting = False
+        mock_player.has_manual_leave_cooldown = MagicMock(return_value=False)
+        mock_player.voice_client = None
+        mock_player._voice_kick_history = [now, now, now, now]
+        mock_player.disconnect = AsyncMock()
+        mock_player.connect = AsyncMock()
+        mock_player.set_manual_leave_cooldown = MagicMock()
+
+        with patch("main.VOICE_RECONNECT_GRACE", 0.01):
+            with patch("main._find_default_text_channel", return_value=MagicMock()):
+                await _verify_voice_loss(mock_guild, mock_player, populated_vc, "test")
+
+        mock_player.connect.assert_not_called()
+        mock_player.set_manual_leave_cooldown.assert_called_once()
 
     async def test_empty_room_disconnects_even_with_cooldown_in_presence_sync(self):
         """Verifica che se Franchino si trova in una stanza vuota, si disconnetta anche se il cooldown è attivo."""

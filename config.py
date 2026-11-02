@@ -27,6 +27,22 @@ try:
 except ValueError:
     INACTIVITY_TIMEOUT = 180
 
+# Finestra di grazia (secondi) concessa a discord.py per ricucire da solo la
+# connessione vocale (close 4014/4015, cambio voice server, micro-drop di rete)
+# prima che Franchino consideri la sessione persa e rientri nella stanza.
+try:
+    VOICE_RECONNECT_GRACE = float(os.getenv("VOICE_RECONNECT_GRACE", "10"))
+except ValueError:
+    VOICE_RECONNECT_GRACE = 10.0
+
+# Ogni quanti secondi il guardiano di presenza vocale ricontrolla le stanze.
+# Non è il percorso di ingresso normale (quello è event-driven): è solo la rete
+# di sicurezza, quindi basta un intervallo breve e leggero.
+try:
+    VOICE_PRESENCE_INTERVAL = float(os.getenv("VOICE_PRESENCE_INTERVAL", "10"))
+except ValueError:
+    VOICE_PRESENCE_INTERVAL = 10.0
+
 # Percorso per Node.js (usato da yt-dlp per risolvere le sfide JS di YouTube)
 NODE_PATH = shutil.which("node") or shutil.which("nodejs")
 

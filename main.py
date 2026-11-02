@@ -3,6 +3,7 @@ import logging
 import random
 import re
 import sys
+import time
 from datetime import datetime, time as dtime, timedelta
 from typing import Optional, Literal
 import discord
@@ -16,10 +17,12 @@ from config import (
     COLOR_ERROR,
     COLOR_INFO,
     DEFAULT_VOLUME,
+    VOICE_RECONNECT_GRACE,
+    VOICE_PRESENCE_INTERVAL,
     FRANCHINO_LIVENESS_QUOTES
 )
 from sources import SourceManager, SongInfo
-from player import PlayerManager, resolve_preferred_text_channel, build_commands_embed
+from player import PlayerManager, resolve_preferred_text_channel, build_commands_embed, is_voice_link_reconnecting
 from views import FranchinoControlsView, QueuePaginationView
 
 # ==========================================
@@ -192,6 +195,7 @@ async def _check_and_sync_voice_presence():
     Controlla tutti i server:
     - Se ci sono persone in una stanza vocale e Franchino non è dentro (o è in una stanza vuota), ENTRA!
     - Se non c'è più nessuna persona in nessuna stanza vocale, Franchino SI DISCONNETTE.
+    - Se discord.py sta ricucendo da solo la sessione vocale, NON la tocca: aspetta.
     """
     for guild in bot.guilds:
         try:
@@ -204,12 +208,48 @@ async def _check_and_sync_voice_presence():
                 if len(_get_human_ids_in_channel(vc)) > 0
             ]
             bot_vc = guild.voice_client or player.voice_client
+            reconnecting = is_voice_link_reconnecting(bot_vc)
 
             if not active_channels:
-                if bot_vc and (bot_vc.is_connected() or bot_vc.channel):
+                if bot_vc and (bot_vc.is_connected() or bot_vc.channel or reconnecting):
                     logger.info(f"👋 Nessun utente nelle stanze vocali su '{guild.name}': Franchino esce subito dalla console.")
                     await player.disconnect()
                 continue
+
+            # Sessione vocale in riconnessione automatica: è viva, sta solo ricucendo
+            # (kick 4014/4015, cambio voice server, micro-drop). Non riconnettere e non
+            # disconnettere: qualunque intervento qui provoca uscite "fantasma" e 4021.
+            # La grazia però è limitata: se la riconnessione si blocca, si forza il rientro.
+            if reconnecting:
+                player.voice_client = bot_vc
+                now = time.monotonic()
+                try:
+                    stuck_since = float(getattr(player, "_reconnecting_since", 0.0) or 0.0)
+                except (TypeError, ValueError):
+                    stuck_since = 0.0
+                limit = max(30.0, 3.0 * float(VOICE_RECONNECT_GRACE or 10.0))
+
+                if stuck_since <= 0.0:
+                    player._reconnecting_since = now
+                    logger.debug(f"🔌 Riconnessione vocale in corso su '{guild.name}': attendo discord.py.")
+                    continue
+
+                if now - stuck_since <= limit:
+                    logger.debug(f"🔌 Riconnessione vocale ancora in corso su '{guild.name}' ({int(now - stuck_since)}s).")
+                    continue
+
+                logger.warning(
+                    f"⚠️ Sessione vocale bloccata in riconnessione da {int(now - stuck_since)}s su "
+                    f"'{guild.name}': riconnessione forzata."
+                )
+                player._reconnecting_since = 0.0
+                player._voice_kick_history = []
+                await player.disconnect()
+                text_ch = _find_default_text_channel(guild, active_channels[0])
+                await player.connect(active_channels[0], text_ch, is_auto=True)
+                continue
+
+            player._reconnecting_since = 0.0
 
             # Se ci sono canali con umani, verifichiamo il cooldown di disconnessione manuale
             has_cooldown = False
@@ -247,11 +287,12 @@ async def _check_and_sync_voice_presence():
 
 
 async def _voice_room_presence_loop():
-    """Loop continuo di sicurezza che verifica ogni 60 secondi la presenza vocale nei server."""
+    """Loop continuo di sicurezza che verifica la presenza vocale nei server (intervallo leggero)."""
+    interval = float(VOICE_PRESENCE_INTERVAL or 10.0)
     try:
         while True:
+            await asyncio.sleep(interval)
             await _check_and_sync_voice_presence()
-            await asyncio.sleep(60.0)
     except asyncio.CancelledError:
         pass
 
@@ -425,6 +466,107 @@ def _find_default_text_channel(guild: discord.Guild, voice_channel: discord.Voic
     return resolve_preferred_text_channel(guild, voice_channel)
 
 
+# Verifiche in corso sulla perdita di connessione vocale, una per server (guild id)
+_voice_loss_tasks: dict[int, asyncio.Task] = {}
+
+
+def _schedule_voice_loss_verification(guild: discord.Guild, player, lost_channel, reason: str = "kick esterno"):
+    """Programma la verifica di una perdita di connessione vocale DOPO la finestra di grazia.
+
+    Non disconnette nulla subito: se discord.py riesce a ricucire la sessione
+    (kick 4014/4015, cambio voice server, micro-drop di rete) l'utente non vede
+    né un'uscita né un rientro. Solo se la sessione è davvero morta Franchino
+    rientra (stanza popolata) oppure esce pulito (stanza vuota).
+    """
+    if guild is None:
+        return
+    running = _voice_loss_tasks.get(guild.id)
+    if running is not None and not running.done():
+        return
+    _voice_loss_tasks[guild.id] = asyncio.create_task(
+        _verify_voice_loss(guild, player, lost_channel, reason)
+    )
+
+
+async def _verify_voice_loss(guild: discord.Guild, player, lost_channel, reason: str = "kick esterno"):
+    """Dopo la finestra di grazia decide se ignorare il drop, rientrare o uscire pulito."""
+    try:
+        await asyncio.sleep(max(1.0, float(VOICE_RECONNECT_GRACE)))
+
+        if getattr(player, "_is_disconnecting", False) or getattr(player, "_restarting", False):
+            return
+
+        # Uscita chiesta da un utente ("esci", "vattene", ...): non rientrare
+        try:
+            if hasattr(player, "has_manual_leave_cooldown") and player.has_manual_leave_cooldown():
+                logger.debug(f"🛑 Verifica vocale annullata su '{guild.name}': uscita richiesta da un utente.")
+                return
+        except Exception:
+            pass
+
+        vc = getattr(guild, "voice_client", None) or player.voice_client
+        if vc is not None and (vc.is_connected() or is_voice_link_reconnecting(vc)):
+            player.voice_client = vc
+            player._ensure_voice_listening()
+            logger.info(f"🔌 Connessione vocale ricucita su '{guild.name}': nessuna uscita dalla stanza.")
+            return
+
+        # Connessione davvero persa: se non c'è nessuno in vocale, esce pulito senza cooldown
+        humans = _get_all_humans_in_voice(guild)
+        if not humans:
+            logger.info(f"👋 Nessun utente rimasto in vocale su '{guild.name}': Franchino esce dalla console.")
+            await player.disconnect()
+            return
+
+        # Nessuno ha chiesto di uscire e ci sono utenti in attesa: valuta il rientro
+        now = time.monotonic()
+        history = [t for t in getattr(player, "_voice_kick_history", []) if now - t < 180.0]
+        history.append(now)
+        player._voice_kick_history = history
+        if len(history) > 3:
+            # Troppe disconnessioni esterne ravvicinate (mod che kikka, rete instabile):
+            # rallenta i rientri invece di martellare il gateway vocale (rate limit 4021).
+            backoff = min(60.0, 10.0 * (len(history) - 3))
+            try:
+                if hasattr(player, "set_manual_leave_cooldown"):
+                    player.set_manual_leave_cooldown(backoff)
+            except Exception:
+                pass
+            logger.warning(
+                f"🛑 {len(history)} disconnessioni esterne in 3 minuti su '{guild.name}': "
+                f"rientro automatico rinviato di {int(backoff)}s."
+            )
+            return
+
+        target_vc = lost_channel
+        try:
+            if not target_vc or len(_get_human_ids_in_channel(target_vc)) == 0:
+                target_vc = None
+                for vc_ch in getattr(guild, "voice_channels", []):
+                    if len(_get_human_ids_in_channel(vc_ch)) > 0:
+                        target_vc = vc_ch
+                        break
+        except Exception:
+            target_vc = None
+
+        if target_vc is None:
+            return
+
+        logger.warning(
+            f"⚠️ Connessione vocale persa su '{guild.name}' ({reason}) con utenti in stanza: "
+            f"rientro automatico in '{getattr(target_vc, 'name', '?')}'."
+        )
+        await player.disconnect()
+        text_ch = _find_default_text_channel(guild, target_vc)
+        await player.connect(target_vc, text_ch, is_auto=True)
+    except asyncio.CancelledError:
+        pass
+    except Exception as e:
+        logger.warning(f"Verifica della connessione vocale fallita su '{guild.name}': {e}")
+    finally:
+        _voice_loss_tasks.pop(guild.id, None)
+
+
 @bot.event
 async def on_voice_state_update(member: discord.Member, before: discord.VoiceState, after: discord.VoiceState):
     """Gestisce l'ingresso automatico istantaneo quando un utente entra in vocale e l'uscita quando si svuota."""
@@ -437,10 +579,16 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
             is_self_disconnect = getattr(player, "_is_disconnecting", False)
             if is_self_disconnect is True:
                 return
-            if hasattr(player, "set_manual_leave_cooldown"):
-                player.set_manual_leave_cooldown(60.0)
-            await player.disconnect()
+            # Riconnessione automatica già in corso: non toccare nulla, si ricuce da sola
+            if is_voice_link_reconnecting(getattr(member.guild, "voice_client", None) or player.voice_client):
+                logger.debug(f"🔌 Drop vocale su '{member.guild.name}': discord.py sta ricucendo, nessun intervento.")
+                return
+            # Kick di Discord / drop di rete: verifica dopo la grazia, senza blackout di 60s
+            _schedule_voice_loss_verification(member.guild, player, before.channel)
         elif after.channel:
+            vc = getattr(member.guild, "voice_client", None)
+            if vc is not None and vc.is_connected():
+                player.voice_client = vc
             player.text_channel = _find_default_text_channel(member.guild, after.channel)
             player._ensure_voice_listening()
         return

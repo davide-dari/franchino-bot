@@ -13,6 +13,7 @@ from config import (
     COMMAND_PREFIX,
     DEFAULT_VOLUME,
     INACTIVITY_TIMEOUT,
+    VOICE_RECONNECT_GRACE,
     COLOR_FRANCHINO,
     COLOR_INFO,
     FRANCHINO_QUOTES,
@@ -28,6 +29,35 @@ FFMPEG_OPTIONS = {
     "before_options": "-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5",
     "options": "-vn"
 }
+
+
+def is_voice_link_reconnecting(vc) -> bool:
+    """True se il voice client NON è connesso ma non è nemmeno morto.
+
+    discord.py 2.7 tiene la sessione vocale in una macchina a stati
+    (`VoiceConnectionState`) e `is_connected()` risponde True solo nello stato
+    finale `connected`: durante un kick di Discord (close 4014/4022), un cambio
+    di voice server (4015) o un micro-drop di rete lo stato è intermedio
+    (`set_guild_voice_state`, `websocket_connected`, `got_ip_discovery`, ...) e
+    il client sta già ricucendo da solo. In quella finestra NON va distrutto:
+    force-disconnectarlo è ciò che trasformava un drop di 2 secondi in
+    un'uscita dalla stanza con blackout di 60 secondi (e in rate limit 4021).
+    """
+    if vc is None:
+        return False
+    try:
+        if vc.is_connected():
+            return False
+    except Exception:
+        return False
+
+    conn = getattr(vc, "_connection", None)
+    state = getattr(conn, "state", None)
+    if state is None:
+        return False
+    name = str(getattr(state, "name", state)).strip().lower()
+    return name not in ("disconnected", "none", "")
+
 
 # ==============================================================================
 # TTS: cache su disco e preriscaldamento delle frasi canoniche
@@ -482,6 +512,11 @@ class GuildPlayer:
         self._last_connect_time: float = 0.0
         self._connect_cooldown_seconds: float = 5.0
         self._is_disconnecting: bool = False
+        # Timestamp delle disconnessioni vocale subite (kick di Discord / drop di rete):
+        # serve a distinguere un drop isolato da un martellamento che va rallentato.
+        self._voice_kick_history: List[float] = []
+        # Da quando la sessione vocale risulta in riconnessione (per non aspettare all'infinito)
+        self._reconnecting_since: float = 0.0
 
     def is_connected(self) -> bool:
         """Verifica se il voice client è attivo e connesso a Discord."""
@@ -1004,6 +1039,42 @@ class GuildPlayer:
             pass
         self.voice_client = None
 
+    def _voice_link_reconnecting(self, vc: Optional[discord.VoiceClient] = None) -> bool:
+        """True se la sessione vocale è in riconnessione automatica (client vivo, non ancora `connected`)."""
+        return is_voice_link_reconnecting(vc if vc is not None else (self.voice_client or self.guild.voice_client))
+
+    async def _await_voice_reconnect(self, timeout: Optional[float] = None) -> bool:
+        """Aspetta che discord.py finisca di ricucire la sessione vocale invece di distruggerla.
+
+        Ritorna True se la connessione è tornata attiva entro la finestra di grazia.
+        """
+        vc = self.guild.voice_client or self.voice_client
+        if vc is None or not is_voice_link_reconnecting(vc):
+            return False
+
+        budget = VOICE_RECONNECT_GRACE if timeout is None else timeout
+        wait_until_connected = getattr(vc, "wait_until_connected", None)
+        connected = False
+        try:
+            if wait_until_connected is not None:
+                # wait_until_connected attende su un threading.Event: mai sul loop asyncio
+                connected = bool(await asyncio.to_thread(wait_until_connected, budget))
+            else:
+                deadline = time.monotonic() + budget
+                while time.monotonic() < deadline:
+                    await asyncio.sleep(0.25)
+                    if vc.is_connected():
+                        connected = True
+                        break
+        except Exception as e:
+            logger.debug(f"Attesa di riconnessione vocale fallita per '{self.guild.name}': {e}")
+            connected = False
+
+        if connected:
+            self.voice_client = vc
+            logger.info(f"🔌 Sessione vocale ricucita da discord.py su '{self.guild.name}': nessuna uscita dalla stanza.")
+        return connected
+
     async def connect(
         self,
         channel: discord.VoiceChannel,
@@ -1042,8 +1113,19 @@ class GuildPlayer:
             if (not self.voice_client or not self.voice_client.is_connected()) and self.guild.voice_client:
                 if self.guild.voice_client.is_connected():
                     self.voice_client = self.guild.voice_client
-                else:
-                    await self._cleanup_stale_voice_client()
+
+            # Se discord.py sta già ricucendo la sessione vocale, lasciamolo lavorare:
+            # distruggere il client in riconnessione era ciò che trasformava un
+            # micro-drop di rete in un'uscita dalla stanza + rate limit 4021.
+            if await self._await_voice_reconnect():
+                if getattr(self.voice_client, "channel", None) != channel:
+                    try:
+                        await self.voice_client.move_to(channel)
+                    except Exception as e:
+                        logger.debug(f"Spostamento dopo riconnessione vocale non riuscito: {e}")
+                self._ensure_voice_listening()
+                self._reset_inactivity_timer()
+                return self.voice_client
 
             if not self.voice_client or not self.voice_client.is_connected():
                 if self.guild.voice_client is not None:
@@ -1115,6 +1197,13 @@ class GuildPlayer:
                     if self.guild.voice_client.is_connected():
                         self.voice_client = self.guild.voice_client
                         consecutive_disconnected_checks = 0
+
+                # Riconnessione automatica in corso (kick 4014/4015, cambio voice server):
+                # il client è vivo e sta ricucendo da solo. Non contarlo come disconnessione,
+                # altrimenti il watchdog muore proprio durante il recupero.
+                if self._voice_link_reconnecting():
+                    consecutive_disconnected_checks = 0
+                    continue
 
                 # Se non è connesso, non tentare di riconnetterti:
                 # la riconnessione è gestita esclusivamente da on_voice_state_update o comandi utente.
